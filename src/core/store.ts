@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ContextArtifact, ContextConnector, ContextPackRequest, ContextQuery, ContextRecord, ContextSchema, ContextView, RuntimeState, StoredContextConnector, StoredContextRecord, StoredContextView, StoredWorkThread, WorkThread } from "./types.js";
+import type { ContextArtifact, ContextConnector, ContextPackRequest, ContextQuery, ContextRecord, ContextSchema, ContextView, RuntimeEvent, RuntimeState, StoredContextConnector, StoredContextRecord, StoredContextView, StoredRuntimeEvent, StoredWorkThread, WorkThread } from "./types.js";
 
 function json(value: unknown): string {
   return JSON.stringify(value ?? {});
@@ -153,6 +153,25 @@ export class ContextStore {
         value_json text not null,
         updated_at text not null
       );
+
+      create table if not exists runtime_events (
+        id text primary key,
+        event_type text not null,
+        actor text not null,
+        status text,
+        subject_type text,
+        subject_id text,
+        plugin_id text,
+        related_records_json text,
+        related_views_json text,
+        related_threads_json text,
+        payload_json text,
+        created_at text not null
+      );
+
+      create index if not exists idx_runtime_events_created_at on runtime_events(created_at);
+      create index if not exists idx_runtime_events_type on runtime_events(event_type);
+      create index if not exists idx_runtime_events_plugin on runtime_events(plugin_id);
     `);
     this.ensureColumn("context_records", "relations_json", "text");
     this.ensureColumn("context_records", "validity_json", "text");
@@ -387,6 +406,17 @@ export class ContextStore {
       created_at,
       now,
     );
+    this.appendRuntimeEvent({
+      event_type: "view_upserted",
+      actor: "system",
+      status: "completed",
+      subject_type: "view",
+      subject_id: stored.id,
+      related_records: stored.source_records,
+      related_views: stored.source_views,
+      plugin_id: stored.scope?.plugin_id,
+      payload: { view_type: stored.view_type, title: stored.title, confidence: stored.confidence },
+    });
     return stored;
   }
 
@@ -477,6 +507,59 @@ export class ContextStore {
     const thread = this.getWorkThread(id);
     if (!thread) return undefined;
     return this.upsertWorkThread({ ...thread, status, title: title ?? thread.title });
+  }
+
+
+  appendRuntimeEvent(event: RuntimeEvent): StoredRuntimeEvent {
+    const created_at = new Date().toISOString();
+    const id = event.id ?? randomUUID();
+    const stored: StoredRuntimeEvent = { ...event, id, payload: event.payload ?? {}, created_at };
+    this.db.prepare(`
+      insert into runtime_events (
+        id, event_type, actor, status, subject_type, subject_id, plugin_id,
+        related_records_json, related_views_json, related_threads_json, payload_json, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      stored.event_type,
+      stored.actor,
+      stored.status ?? null,
+      stored.subject_type ?? null,
+      stored.subject_id ?? null,
+      stored.plugin_id ?? null,
+      JSON.stringify(stored.related_records ?? []),
+      JSON.stringify(stored.related_views ?? []),
+      JSON.stringify(stored.related_threads ?? []),
+      json(stored.payload),
+      created_at,
+    );
+    return stored;
+  }
+
+  listRuntimeEvents(options: { limit?: number; event_type?: string; plugin_id?: string; subject_type?: string; subject_id?: string } = {}): StoredRuntimeEvent[] {
+    const limit = options.limit ?? 50;
+    const clauses: string[] = [];
+    const args: Array<string | number> = [];
+    if (options.event_type) {
+      clauses.push("event_type = ?");
+      args.push(options.event_type);
+    }
+    if (options.plugin_id) {
+      clauses.push("plugin_id = ?");
+      args.push(options.plugin_id);
+    }
+    if (options.subject_type) {
+      clauses.push("subject_type = ?");
+      args.push(options.subject_type);
+    }
+    if (options.subject_id) {
+      clauses.push("subject_id = ?");
+      args.push(options.subject_id);
+    }
+    args.push(limit);
+    const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
+    const rows = this.db.prepare(`select * from runtime_events ${where} order by created_at desc limit ?`).all(...args) as any[];
+    return rows.map(rowToRuntimeEvent);
   }
 
   setRuntimeState(key: string, value: Record<string, unknown>): RuntimeState {
@@ -692,6 +775,24 @@ function viewTimeMatches(view: StoredContextView, timeWindow?: ContextPackReques
   if (normalized.start_time && t < Date.parse(normalized.start_time)) return false;
   if (normalized.end_time && t > Date.parse(normalized.end_time)) return false;
   return true;
+}
+
+
+function rowToRuntimeEvent(row: any): StoredRuntimeEvent {
+  return {
+    id: row.id,
+    event_type: row.event_type,
+    actor: row.actor,
+    status: row.status ?? undefined,
+    subject_type: row.subject_type ?? undefined,
+    subject_id: row.subject_id ?? undefined,
+    plugin_id: row.plugin_id ?? undefined,
+    related_records: parseJson(row.related_records_json, []),
+    related_views: parseJson(row.related_views_json, []),
+    related_threads: parseJson(row.related_threads_json, []),
+    payload: parseJson(row.payload_json, {}),
+    created_at: row.created_at,
+  };
 }
 
 function rowToRuntimeState(row: any): RuntimeState {

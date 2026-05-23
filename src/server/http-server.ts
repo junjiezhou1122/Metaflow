@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
 import { ContextStore } from "../core/store.js";
-import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema } from "../core/schema.js";
+import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema, RuntimeEventSchema } from "../core/schema.js";
 import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "../connectors/enrichment.js";
 import { fetchScreenpipeRecords } from "../connectors/screenpipe.js";
 import { aiSessionRefToRecord, locateAiSessions } from "../connectors/ai-sessions.js";
 import { runtimeStatus, runtimeTick } from "../runtime/runtime.js";
+import { compileObservationTimeline } from "../runtime/timeline.js";
 import { activeThreadId, interpretThread } from "../threads/thread-interpreter.js";
 import { persistThreadEvidenceMap } from "../threads/thread-evidence.js";
 import { mergeThreads, splitThread } from "../threads/thread-ops.js";
@@ -46,6 +47,14 @@ createServer(async (req, res) => {
       if (!parsed.success) return send(res, 400, { ok: false, error: parsed.error.flatten() });
       if (parsed.data.privacy?.retention === "do_not_store") return send(res, 202, { ok: true, stored: false });
       const record = store.insertRecord(parsed.data);
+      store.appendRuntimeEvent({
+        event_type: "record_ingested",
+        actor: parsed.data.source.type === "browser" || parsed.data.source.type === "screenpipe" ? "connector" : "user",
+        status: "completed",
+        subject_type: "record",
+        subject_id: record.id,
+        payload: { schema: record.schema.name, source: record.source, title: record.content?.title },
+      });
       if (shouldAutoEnrichBrowserRecord(parsed.data)) {
         enrichWithJinaReader(store, record).catch((error) => {
           console.error("[reader-enrichment] failed", error);
@@ -117,7 +126,8 @@ createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/context/query") {
       const parsed = ContextQuerySchema.safeParse(await readJson(req));
       if (!parsed.success) return send(res, 400, { ok: false, error: parsed.error.flatten() });
-      return send(res, 200, { ok: true, pack: buildContextPack(parsed.data, store) });
+      const pack = buildContextPack(parsed.data, store);
+      return send(res, 200, { ok: true, pack });
     }
 
     if (req.method === "POST" && url.pathname === "/context/artifacts") {
@@ -163,6 +173,31 @@ createServer(async (req, res) => {
       return send(res, 200, result);
     }
 
+
+
+    if (req.method === "POST" && url.pathname === "/timeline/observations/compile") {
+      const body = await readJson(req);
+      const result = compileObservationTimeline({ minutes: body.minutes, limit: body.limit, write: body.write }, store);
+      return send(res, 200, result);
+    }
+
+    if (req.method === "GET" && url.pathname === "/runtime/events") {
+      return send(res, 200, { ok: true, events: store.listRuntimeEvents({
+        limit: Number(url.searchParams.get("limit") ?? 50),
+        event_type: url.searchParams.get("type") ?? undefined,
+        plugin_id: url.searchParams.get("plugin") ?? undefined,
+        subject_type: url.searchParams.get("subject_type") ?? undefined,
+        subject_id: url.searchParams.get("subject_id") ?? undefined,
+      }) });
+    }
+
+    if (req.method === "POST" && url.pathname === "/runtime/events") {
+      const parsed = RuntimeEventSchema.safeParse(await readJson(req));
+      if (!parsed.success) return send(res, 400, { ok: false, error: parsed.error.flatten() });
+      const event = store.appendRuntimeEvent(parsed.data);
+      return send(res, 201, { ok: true, event });
+    }
+
     if (req.method === "POST" && url.pathname === "/runtime/tick") {
       const body = await readJson(req);
       const result = await runtimeTick({
@@ -180,6 +215,7 @@ createServer(async (req, res) => {
         project_snapshot_interval_seconds: body.project_snapshot_interval_seconds,
         ai_session_interval_seconds: body.ai_session_interval_seconds,
       }, store);
+      store.appendRuntimeEvent({ event_type: "runtime_tick_completed", actor: "system", status: "completed", subject_type: "runtime", subject_id: "runtime_tick", related_threads: result.written_threads, related_records: result.evidence.written_records, payload: { active_workspace: result.active_workspace, evidence: result.evidence, candidate_count: result.candidate_threads.length } });
       return send(res, 200, result);
     }
 
@@ -205,6 +241,7 @@ createServer(async (req, res) => {
           allow_external: body.llm?.allow_external,
         },
       }, store);
+      store.appendRuntimeEvent({ event_type: result.ok ? "thread_interpreted" : "thread_interpret_failed", actor: "system", status: result.ok ? "completed" : "failed", subject_type: "thread", subject_id: threadId, related_records: result.prompt_evidence_ids, related_views: result.updated_thread?.metadata?.display_title ? [`view:thread-display:${threadId}`] : [], payload: { error: result.error, interpretation: result.interpretation } });
       return send(res, result.ok ? 200 : 500, result);
     }
 

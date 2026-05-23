@@ -34,6 +34,7 @@ const STOPWORDS = new Set([
 
 export function runLanguageLearningPlugin(options: LanguageLearningRunOptions = {}, store = new ContextStore()): LanguageLearningRunResult {
   const generatedAt = new Date().toISOString();
+  store.appendRuntimeEvent({ event_type: "plugin_run_started", actor: "plugin", status: "started", subject_type: "plugin", subject_id: "language-learning", plugin_id: "language-learning", payload: { options } });
   const days = options.days ?? 7;
   const minCount = options.min_count ?? 2;
   const query: ContextQuery = {
@@ -93,7 +94,7 @@ export function runLanguageLearningPlugin(options: LanguageLearningRunOptions = 
     ? [store.upsertView(vocabularyView), store.upsertView(learningPackView)]
     : [vocabularyView, learningPackView];
 
-  return {
+  const result: LanguageLearningRunResult = {
     ok: true,
     generated_at: generatedAt,
     records_used: textRecords.length,
@@ -108,6 +109,18 @@ export function runLanguageLearningPlugin(options: LanguageLearningRunOptions = 
       external_llm_used: false,
     },
   };
+  store.appendRuntimeEvent({
+    event_type: "plugin_run_completed",
+    actor: "plugin",
+    status: "completed",
+    subject_type: "plugin",
+    subject_id: "language-learning",
+    plugin_id: "language-learning",
+    related_records: [...new Set(vocabulary.flatMap(v => v.source_records))],
+    related_views: result.views.map(view => view.id!).filter(Boolean),
+    payload: { records_used: result.records_used, vocabulary_count: result.vocabulary.length, views_written: result.views.length, external_llm_used: false },
+  });
+  return result;
 }
 
 function extractVocabulary(records: StoredContextRecord[], minCount: number): VocabularyCandidate[] {

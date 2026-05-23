@@ -24,7 +24,9 @@
     "runtime:status": "node --experimental-sqlite --import tsx scripts/runtime-status.ts",
     "thread:interpret": "node --experimental-sqlite --import tsx scripts/thread-interpret.ts",
     "context:query": "node --experimental-sqlite --import tsx scripts/context-query.ts",
-    "plugin:language": "node --experimental-sqlite --import tsx scripts/plugin-language.ts"
+    "plugin:language": "node --experimental-sqlite --import tsx scripts/plugin-language.ts",
+    "runtime:events": "node --experimental-sqlite --import tsx scripts/runtime-events.ts",
+    "timeline": "node --experimental-sqlite --import tsx scripts/timeline.ts"
   },
   "dependencies": {
     "iii-sdk": "latest",

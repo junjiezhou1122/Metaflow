@@ -1279,3 +1279,115 @@ text_quality = corpus quality filter/ranking signal
 用户为什么保存
 这段文本是否适合做语料
 ```
+
+## 13. Runtime Event Log 与 Observation Timeline View
+
+现在系统里有两条不同但互补的时间线：
+
+```text
+ContextRecord timeline     = 用户/环境发生了什么
+RuntimeEvent log           = 系统对这些 context 做了什么
+```
+
+### 13.1 Runtime Event Log
+
+`RuntimeEvent` 是 append-only provenance log，不是用户记忆本身。
+
+它记录系统动作，例如：
+
+```text
+record_ingested
+context_query_completed
+view_upserted
+timeline_view_compiled
+plugin_run_started
+plugin_run_completed
+runtime_tick_completed
+thread_interpreted
+```
+
+用途：
+
+- debug：为什么某个 memory/view 出现了？
+- provenance：某个 plugin 用了哪些 records / views？
+- replay：之后可以重跑某个 compiler 或 plugin。
+- permission/audit：外部 LLM、外部 reader、插件动作都应该有事件痕迹。
+
+但它不替代 raw observation：
+
+```text
+ContextRecord = source of truth about user/world.
+RuntimeEvent  = source of truth about system behavior.
+```
+
+当前入口：
+
+```bash
+pnpm run runtime:events -- --limit 50
+pnpm run runtime:events -- --type view_upserted
+pnpm run runtime:events -- --plugin language-learning
+```
+
+HTTP：
+
+```text
+GET  /runtime/events
+POST /runtime/events
+```
+
+iii worker：
+
+```text
+runtime::event_append
+runtime::events
+POST /runtime/events
+POST /runtime/events/query
+```
+
+### 13.2 Observation Timeline View
+
+`timeline.observations` 是基于 raw `ContextRecord` 编译出来的 `ContextView`。
+
+它不是新的 raw data，而是一个导航视图：
+
+```text
+raw records in time window
+  -> bucket by time
+  -> summarize sources/schemas/sample titles
+  -> preserve source_records back-links
+```
+
+用途：
+
+- 快速看最近一段时间发生了什么。
+- 给 daily summary / research / language plugin 提供候选上下文。
+- 给 WorkThread split/merge 提供时间邻近证据。
+- 给用户或 agent 定位“某个时间段我在干嘛”。
+
+当前入口：
+
+```bash
+pnpm run timeline -- --minutes 1440 --limit 100 --dry-run
+pnpm run timeline -- --minutes 1440 --limit 100
+```
+
+HTTP：
+
+```text
+POST /timeline/observations/compile
+```
+
+iii worker：
+
+```text
+timeline::observations_compile
+POST /timeline/observations/compile
+```
+
+设计边界：
+
+```text
+Observation timeline is a view.
+Runtime event log is provenance.
+Neither replaces raw ContextRecord.
+```

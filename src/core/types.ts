@@ -138,6 +138,26 @@ export type StoredWorkThread = WorkThread & {
   updated_at: string;
 };
 
+
+export type RuntimeEvent = {
+  id?: string;
+  event_type: string;
+  actor: "user" | "system" | "connector" | "plugin" | "agent";
+  status?: "started" | "completed" | "failed" | "denied";
+  subject_type?: "record" | "view" | "thread" | "plugin" | "query" | "runtime" | "action";
+  subject_id?: string;
+  plugin_id?: string;
+  related_records?: string[];
+  related_views?: string[];
+  related_threads?: string[];
+  payload?: Record<string, unknown>;
+};
+
+export type StoredRuntimeEvent = RuntimeEvent & {
+  id: string;
+  created_at: string;
+};
+
 export type RuntimeState = {
   key: string;
   value: Record<string, unknown>;

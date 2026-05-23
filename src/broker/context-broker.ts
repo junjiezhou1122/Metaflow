@@ -16,7 +16,7 @@ export function buildContextPack(query: ContextQuery, store = new ContextStore()
   const clippedRecords = records.slice(0, limit);
   const clippedViews = views.slice(0, Math.max(0, limit - clippedRecords.length));
 
-  return {
+  const pack: ContextBrokerPack = {
     version: 1,
     mode,
     goal: effectiveQuery.goal,
@@ -54,6 +54,19 @@ export function buildContextPack(query: ContextQuery, store = new ContextStore()
       })),
     ],
   };
+  if (effectiveQuery.plugin_id) {
+    store.appendRuntimeEvent({
+      event_type: "context_query_completed",
+      actor: "plugin",
+      status: "completed",
+      subject_type: "query",
+      plugin_id: effectiveQuery.plugin_id,
+      related_records: clippedRecords.map(r => r.id),
+      related_views: clippedViews.map(v => v.id),
+      payload: pack.diagnostics,
+    });
+  }
+  return pack;
 }
 
 

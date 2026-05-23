@@ -1,12 +1,13 @@
 import { registerWorker } from "iii-sdk";
 import { ContextStore } from "../core/store.js";
-import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema } from "../core/schema.js";
+import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema, RuntimeEventSchema } from "../core/schema.js";
 import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "../connectors/enrichment.js";
 import { fetchScreenpipeRecords } from "../connectors/screenpipe.js";
 import { aiSessionRefToRecord, locateAiSessions } from "../connectors/ai-sessions.js";
 import { buildContextPack } from "../broker/context-broker.js";
 import { listPluginManifests } from "../plugins/registry.js";
 import { runLanguageLearningPlugin } from "../plugins/language-learning.js";
+import { compileObservationTimeline } from "../runtime/timeline.js";
 
 const engineUrl = process.env.III_ENGINE_URL ?? "ws://localhost:49134";
 const store = new ContextStore();
@@ -33,6 +34,14 @@ async function main() {
       return api(202, { ok: true, stored: false, reason: "retention=do_not_store" });
     }
     const record = store.insertRecord(parsed.data);
+    store.appendRuntimeEvent({
+      event_type: "record_ingested",
+      actor: parsed.data.source.type === "browser" || parsed.data.source.type === "screenpipe" ? "connector" : "user",
+      status: "completed",
+      subject_type: "record",
+      subject_id: record.id,
+      payload: { schema: record.schema.name, source: record.source, title: record.content?.title },
+    });
     if (shouldAutoEnrichBrowserRecord(parsed.data)) {
       enrichWithJinaReader(store, record).catch((error) => {
         console.error("[reader-enrichment] failed", error);
@@ -132,6 +141,31 @@ async function main() {
   });
 
 
+
+
+  await iii.registerFunction("timeline::observations_compile", async (input: any) => {
+    const body = getBody(input) ?? {};
+    return api(200, compileObservationTimeline({ minutes: body.minutes, limit: body.limit, write: body.write }, store));
+  });
+
+  await iii.registerFunction("runtime::event_append", async (input: any) => {
+    const parsed = RuntimeEventSchema.safeParse(getBody(input));
+    if (!parsed.success) return api(400, { ok: false, error: parsed.error.flatten() });
+    const event = store.appendRuntimeEvent(parsed.data);
+    return api(201, { ok: true, event });
+  });
+
+  await iii.registerFunction("runtime::events", async (input: any) => {
+    const body = getBody(input) ?? {};
+    return api(200, { ok: true, events: store.listRuntimeEvents({
+      limit: Number(body.limit ?? 50),
+      event_type: body.event_type,
+      plugin_id: body.plugin_id,
+      subject_type: body.subject_type,
+      subject_id: body.subject_id,
+    }) });
+  });
+
   await iii.registerFunction("plugins::list", async () => {
     return api(200, { ok: true, plugins: listPluginManifests() });
   });
@@ -142,6 +176,23 @@ async function main() {
   });
 
 
+
+
+  await iii.registerTrigger({
+    type: "http",
+    function_id: "timeline::observations_compile",
+    config: { api_path: "/timeline/observations/compile", http_method: "POST" },
+  });
+  await iii.registerTrigger({
+    type: "http",
+    function_id: "runtime::event_append",
+    config: { api_path: "/runtime/events", http_method: "POST" },
+  });
+  await iii.registerTrigger({
+    type: "http",
+    function_id: "runtime::events",
+    config: { api_path: "/runtime/events/query", http_method: "POST" },
+  });
   await iii.registerTrigger({
     type: "http",
     function_id: "plugins::list",

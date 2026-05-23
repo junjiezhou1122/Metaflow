@@ -134,6 +134,21 @@ export const WorkThreadSchema = z.object({
 });
 
 
+
+export const RuntimeEventSchema = z.object({
+  id: z.string().optional(),
+  event_type: z.string().min(1),
+  actor: z.enum(["user", "system", "connector", "plugin", "agent"]),
+  status: z.enum(["started", "completed", "failed", "denied"]).optional(),
+  subject_type: z.enum(["record", "view", "thread", "plugin", "query", "runtime", "action"]).optional(),
+  subject_id: z.string().optional(),
+  plugin_id: z.string().optional(),
+  related_records: z.array(z.string()).optional(),
+  related_views: z.array(z.string()).optional(),
+  related_threads: z.array(z.string()).optional(),
+  payload: z.record(z.unknown()).optional(),
+});
+
 export const ContextViewSchema = z.object({
   id: z.string().optional(),
   view_type: z.string().min(1),
