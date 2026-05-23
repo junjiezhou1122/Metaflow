@@ -192,6 +192,9 @@ export const ContextQuerySchema = z.object({
   view_types: z.array(z.string()).optional(),
   include_views: z.boolean().optional(),
   include_records: z.boolean().optional(),
+  include_events: z.boolean().optional(),
+  event_types: z.array(z.string()).optional(),
+  actor_types: z.array(z.enum(["user", "system", "connector", "plugin", "agent"])).optional(),
   time_window: z.object({
     start_time: z.string().optional(),
     end_time: z.string().optional(),

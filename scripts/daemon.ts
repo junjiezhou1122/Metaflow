@@ -1,9 +1,10 @@
 import { ContextStore } from "../src/core/store.js";
 import { runtimeStatus, runtimeTick, type RuntimeTickRequest } from "../src/runtime/runtime.js";
+import { compileObservationTimeline } from "../src/runtime/timeline.js";
 import { interpretThread, shouldInterpretThread } from "../src/threads/thread-interpreter.js";
 
-function parseArgs(argv: string[]): RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number } {
-  const req: RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number } = {};
+function parseArgs(argv: string[]): RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number; timeline?: boolean; timeline_interval_seconds?: number; timeline_minutes?: number; timeline_limit?: number } {
+  const req: RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number; timeline?: boolean; timeline_interval_seconds?: number; timeline_minutes?: number; timeline_limit?: number } = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--interval") req.interval_seconds = Number(argv[++i]);
@@ -18,6 +19,11 @@ function parseArgs(argv: string[]): RuntimeTickRequest & { interval_seconds?: nu
     else if (arg === "--interpret") req.interpret = true;
     else if (arg === "--interpret-force") req.interpret_force = true;
     else if (arg === "--interpret-interval") req.interpret_interval_seconds = Number(argv[++i]);
+    else if (arg === "--timeline") req.timeline = true;
+    else if (arg === "--no-timeline") req.timeline = false;
+    else if (arg === "--timeline-interval") req.timeline_interval_seconds = Number(argv[++i]);
+    else if (arg === "--timeline-minutes") req.timeline_minutes = Number(argv[++i]);
+    else if (arg === "--timeline-limit") req.timeline_limit = Number(argv[++i]);
     else if (arg === "--project-snapshot-interval") req.project_snapshot_interval_seconds = Number(argv[++i]);
     else if (arg === "--ai-session-interval") req.ai_session_interval_seconds = Number(argv[++i]);
   }
@@ -27,10 +33,15 @@ function parseArgs(argv: string[]): RuntimeTickRequest & { interval_seconds?: nu
   if (process.env.RUNTIME_INTERPRET === "1") req.interpret = true;
   if (process.env.RUNTIME_INTERPRET_FORCE === "1") req.interpret_force = true;
   if (process.env.RUNTIME_INTERPRET_INTERVAL_SECONDS) req.interpret_interval_seconds = Number(process.env.RUNTIME_INTERPRET_INTERVAL_SECONDS);
+  if (process.env.RUNTIME_TIMELINE === "1") req.timeline = true;
+  if (process.env.RUNTIME_TIMELINE === "0") req.timeline = false;
+  if (process.env.RUNTIME_TIMELINE_INTERVAL_SECONDS) req.timeline_interval_seconds = Number(process.env.RUNTIME_TIMELINE_INTERVAL_SECONDS);
+  if (process.env.RUNTIME_TIMELINE_MINUTES) req.timeline_minutes = Number(process.env.RUNTIME_TIMELINE_MINUTES);
+  if (process.env.RUNTIME_TIMELINE_LIMIT) req.timeline_limit = Number(process.env.RUNTIME_TIMELINE_LIMIT);
   return req;
 }
 
-const { interval_seconds = 30, once, interpret, interpret_force, interpret_interval_seconds = 300, ...tickReq } = parseArgs(process.argv.slice(2));
+const { interval_seconds = 30, once, interpret, interpret_force, interpret_interval_seconds = 300, timeline, timeline_interval_seconds = 300, timeline_minutes = 24 * 60, timeline_limit = 200, ...tickReq } = parseArgs(process.argv.slice(2));
 const store = new ContextStore();
 
 async function runOnce() {
@@ -60,6 +71,7 @@ async function runOnce() {
       interpretation = { attempted: false, reason: `thread not persisted: ${topId}` };
     }
   }
+  const timelineState = maybeCompileTimeline();
   console.log(JSON.stringify({
     ok: result.ok,
     at: result.generated_at,
@@ -69,7 +81,31 @@ async function runOnce() {
     screenpipe: (result.diagnostics.screenpipe as any)?.ok ?? "skipped",
     throttle: result.diagnostics.throttle,
     interpretation,
+    timeline: timelineState,
   }, null, 2));
+}
+
+function maybeCompileTimeline(): Record<string, unknown> | undefined {
+  if (!timeline) return undefined;
+  const last = store.getRuntimeState("last_timeline_compile")?.value ?? {};
+  const lastAt = typeof last.generated_at === "string" ? last.generated_at : undefined;
+  if (lastAt && (Date.now() - Date.parse(lastAt)) / 1000 < timeline_interval_seconds) {
+    return { attempted: false, reason: "throttled", last_generated_at: lastAt, interval_seconds: timeline_interval_seconds };
+  }
+  const compiled = compileObservationTimeline({
+    minutes: timeline_minutes,
+    limit: timeline_limit,
+    write: tickReq.write !== false,
+  }, store);
+  if (tickReq.write !== false) {
+    store.setRuntimeState("last_timeline_compile", {
+      generated_at: new Date().toISOString(),
+      view_id: compiled.view.id,
+      records_used: compiled.records_used,
+      bucket_count: compiled.buckets.length,
+    });
+  }
+  return { attempted: true, ok: compiled.ok, view_id: compiled.view.id, records_used: compiled.records_used, buckets: compiled.buckets.length };
 }
 
 if (once) {
@@ -77,7 +113,7 @@ if (once) {
   process.exit(0);
 }
 
-console.log(`[runtime-daemon] starting interval=${interval_seconds}s interpret=${Boolean(interpret)} status=${JSON.stringify(runtimeStatus(store).active_thread ?? {})}`);
+console.log(`[runtime-daemon] starting interval=${interval_seconds}s interpret=${Boolean(interpret)} timeline=${Boolean(timeline)} status=${JSON.stringify(runtimeStatus(store).active_thread ?? {})}`);
 await runOnce();
 setInterval(() => {
   runOnce().catch(error => {

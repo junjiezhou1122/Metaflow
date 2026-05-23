@@ -24,3 +24,15 @@ pnpm run runtime:events -- --limit 50
 pnpm run timeline -- --minutes 1440 --limit 100 --dry-run
 pnpm run timeline -- --minutes 1440 --limit 100
 ```
+
+Broker can also include provenance events when needed:
+
+```bash
+pnpm run context:query -- --events --no-records --no-views --event-types timeline_view_compiled,plugin_run_completed --limit 10
+```
+
+Daemon can maintain the timeline automatically:
+
+```bash
+pnpm run daemon -- --timeline --timeline-interval 300 --timeline-minutes 1440 --timeline-limit 200
+```

@@ -237,6 +237,9 @@ export type ContextQuery = {
   view_types?: string[];
   include_views?: boolean;
   include_records?: boolean;
+  include_events?: boolean;
+  event_types?: string[];
+  actor_types?: RuntimeEvent["actor"][];
   time_window?: ContextPackRequest["time_window"];
   limit?: number;
   token_budget?: number;
@@ -260,6 +263,7 @@ export type PluginManifest = {
     allowed_sources?: string[];
     allowed_schemas?: string[];
     allowed_view_types?: string[];
+    allowed_event_types?: string[];
     max_privacy_level?: "public" | "workspace" | "private" | "secret";
     allow_external_llm?: boolean;
     allow_write_views?: boolean;
@@ -276,9 +280,10 @@ export type ContextBrokerPack = {
   generated_at: string;
   records: StoredContextRecord[];
   views: StoredContextView[];
+  events: StoredRuntimeEvent[];
   markdown: string;
   diagnostics: Record<string, unknown>;
-  sources: Array<{ id: string; kind: "record" | "view"; title?: string; uri: string; observed_at?: string; created_at: string }>;
+  sources: Array<{ id: string; kind: "record" | "view" | "event"; title?: string; uri: string; observed_at?: string; created_at: string }>;
 };
 
 export type ContextPackRequest = {

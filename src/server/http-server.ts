@@ -185,7 +185,11 @@ createServer(async (req, res) => {
       return send(res, 200, { ok: true, events: store.listRuntimeEvents({
         limit: Number(url.searchParams.get("limit") ?? 50),
         event_type: url.searchParams.get("type") ?? undefined,
+        event_types: url.searchParams.get("types")?.split(",").map(x => x.trim()).filter(Boolean),
         plugin_id: url.searchParams.get("plugin") ?? undefined,
+        actor: url.searchParams.get("actor") as any || undefined,
+        actor_types: url.searchParams.get("actors")?.split(",").map(x => x.trim()).filter(Boolean) as any,
+        timeWindow: url.searchParams.get("minutes") ? { minutes: Number(url.searchParams.get("minutes")) } : undefined,
         subject_type: url.searchParams.get("subject_type") ?? undefined,
         subject_id: url.searchParams.get("subject_id") ?? undefined,
       }) });

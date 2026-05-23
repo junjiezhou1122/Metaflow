@@ -17,8 +17,12 @@ function parseArgs(argv: string[]): ContextQuery {
     else if (arg === "--view-types") query.view_types = argv[++i].split(",").map(s => s.trim()).filter(Boolean);
     else if (arg === "--minutes") query.time_window = { ...(query.time_window ?? {}), minutes: Number(argv[++i]) };
     else if (arg === "--limit") query.limit = Number(argv[++i]);
+    else if (arg === "--event-types") query.event_types = argv[++i].split(",").map(s => s.trim()).filter(Boolean);
+    else if (arg === "--actors") query.actor_types = argv[++i].split(",").map(s => s.trim()).filter(Boolean) as any;
     else if (arg === "--no-records") query.include_records = false;
     else if (arg === "--no-views") query.include_views = false;
+    else if (arg === "--events") query.include_events = true;
+    else if (arg === "--no-events") query.include_events = false;
   }
   return query;
 }

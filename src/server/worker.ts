@@ -160,7 +160,11 @@ async function main() {
     return api(200, { ok: true, events: store.listRuntimeEvents({
       limit: Number(body.limit ?? 50),
       event_type: body.event_type,
+      event_types: body.event_types,
       plugin_id: body.plugin_id,
+      actor: body.actor,
+      actor_types: body.actor_types,
+      timeWindow: body.minutes ? { minutes: Number(body.minutes) } : body.time_window,
       subject_type: body.subject_type,
       subject_id: body.subject_id,
     }) });

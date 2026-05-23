@@ -1391,3 +1391,57 @@ Observation timeline is a view.
 Runtime event log is provenance.
 Neither replaces raw ContextRecord.
 ```
+
+### 13.3 Broker can include provenance events
+
+`ContextBroker` 现在不仅可以返回 records/views，也可以按需返回 runtime events：
+
+```bash
+pnpm run context:query -- --events --no-records --no-views --event-types timeline_view_compiled,plugin_run_completed --limit 10
+```
+
+这让 plugin/agent 能用同一个 broker API 查询：
+
+```text
+What raw evidence exists?       -> records
+What derived views exist?       -> views
+What did the system do with it? -> events
+```
+
+默认仍然不返回 events，因为 runtime event 是 provenance，不是大多数 plugin 的主语料。需要时显式开启：
+
+```text
+include_events: true
+```
+
+Plugin manifest 也可以限制能看的事件类型：
+
+```text
+permissions.allowed_event_types
+```
+
+### 13.4 Daemon-maintained timeline
+
+Runtime daemon 现在可以周期性维护 observation timeline view：
+
+```bash
+pnpm run daemon -- --timeline --timeline-interval 300 --timeline-minutes 1440 --timeline-limit 200
+```
+
+这样 timeline 不需要用户手动编译。后台 tick 会：
+
+```text
+runtimeTick
+  -> update active workspace/thread
+  -> optional interpret active thread
+  -> optional compile timeline.observations
+  -> write runtime event provenance
+```
+
+这更符合当前产品方向：
+
+```text
+capture happens continuously
+views are compiled continuously
+plugins consume broker packs when needed
+```

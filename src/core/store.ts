@@ -536,13 +536,25 @@ export class ContextStore {
     return stored;
   }
 
-  listRuntimeEvents(options: { limit?: number; event_type?: string; plugin_id?: string; subject_type?: string; subject_id?: string } = {}): StoredRuntimeEvent[] {
+  listRuntimeEvents(options: {
+    limit?: number;
+    event_type?: string;
+    event_types?: string[];
+    plugin_id?: string;
+    subject_type?: string;
+    subject_id?: string;
+    actor?: RuntimeEvent["actor"];
+    actor_types?: RuntimeEvent["actor"][];
+    timeWindow?: ContextPackRequest["time_window"];
+  } = {}): StoredRuntimeEvent[] {
     const limit = options.limit ?? 50;
+    const normalizedWindow = normalizeTimeWindow(options.timeWindow);
     const clauses: string[] = [];
     const args: Array<string | number> = [];
-    if (options.event_type) {
-      clauses.push("event_type = ?");
-      args.push(options.event_type);
+    const eventTypes = options.event_types?.length ? options.event_types : options.event_type ? [options.event_type] : [];
+    if (eventTypes.length) {
+      clauses.push(`event_type in (${eventTypes.map(() => "?").join(",")})`);
+      args.push(...eventTypes);
     }
     if (options.plugin_id) {
       clauses.push("plugin_id = ?");
@@ -555,6 +567,19 @@ export class ContextStore {
     if (options.subject_id) {
       clauses.push("subject_id = ?");
       args.push(options.subject_id);
+    }
+    const actorTypes = options.actor_types?.length ? options.actor_types : options.actor ? [options.actor] : [];
+    if (actorTypes.length) {
+      clauses.push(`actor in (${actorTypes.map(() => "?").join(",")})`);
+      args.push(...actorTypes);
+    }
+    if (normalizedWindow?.start_time) {
+      clauses.push("created_at >= ?");
+      args.push(normalizedWindow.start_time);
+    }
+    if (normalizedWindow?.end_time) {
+      clauses.push("created_at <= ?");
+      args.push(normalizedWindow.end_time);
     }
     args.push(limit);
     const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
