@@ -1,5 +1,5 @@
-import type { ContextRecord, StoredContextRecord } from "./types.js";
-import type { ContextStore } from "./store.js";
+import type { ContextRecord, StoredContextRecord } from "../core/types.js";
+import type { ContextStore } from "../core/store.js";
 
 const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_READER_TEXT = 250_000;

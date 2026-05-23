@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import type { ContextRecord } from "./types.js";
+import type { ContextRecord } from "../core/types.js";
 
 export type LocalProjectSnapshotOptions = {
   cwd?: string;

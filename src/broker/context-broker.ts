@@ -1,6 +1,6 @@
-import { ContextStore } from "./store.js";
-import { mergePluginQuery, readPluginManifest } from "./plugins.js";
-import type { ContextBrokerPack, ContextQuery, PluginManifest, StoredContextRecord, StoredContextView } from "./types.js";
+import { ContextStore } from "../core/store.js";
+import { mergePluginQuery, readPluginManifest } from "../plugins/registry.js";
+import type { ContextBrokerPack, ContextQuery, PluginManifest, StoredContextRecord, StoredContextView } from "../core/types.js";
 
 export function buildContextPack(query: ContextQuery, store = new ContextStore()): ContextBrokerPack {
   const plugin = query.plugin_id ? readPluginManifest(query.plugin_id) : undefined;

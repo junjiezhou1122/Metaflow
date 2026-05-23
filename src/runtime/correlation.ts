@@ -1,4 +1,4 @@
-import type { ContextRecord, StoredContextRecord } from "./types.js";
+import type { ContextRecord, StoredContextRecord } from "../core/types.js";
 
 export type RecordFeatures = {
   id: string;

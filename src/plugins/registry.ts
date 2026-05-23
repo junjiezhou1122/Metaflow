@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ContextQuery, PluginManifest } from "./types.js";
+import type { ContextQuery, PluginManifest } from "../core/types.js";
 
 const PLUGIN_DIR = "plugins";
 
@@ -69,7 +69,10 @@ function defaultLanguageLearningPlugin(): PluginManifest {
         "observation.browser_page_snapshot",
         "observation.browser_page_saved",
         "observation.browser_text_selected",
+        "observation.browser_text_copied",
+        "observation.browser_search_query",
         "observation.screenpipe_activity",
+        "observation.screenpipe_input_event",
         "observation.ai_chat",
         "derived.reader_snapshot"
       ],
@@ -92,7 +95,10 @@ function defaultLanguageLearningPlugin(): PluginManifest {
         "observation.browser_page_snapshot",
         "observation.browser_page_saved",
         "observation.browser_text_selected",
+        "observation.browser_text_copied",
+        "observation.browser_search_query",
         "observation.screenpipe_activity",
+        "observation.screenpipe_input_event",
         "observation.ai_chat",
         "derived.reader_snapshot"
       ],

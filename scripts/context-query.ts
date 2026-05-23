@@ -1,5 +1,5 @@
-import { buildContextPack } from "../src/context-broker.js";
-import type { ContextQuery } from "../src/types.js";
+import { buildContextPack } from "../src/broker/context-broker.js";
+import type { ContextQuery } from "../src/core/types.js";
 
 function parseArgs(argv: string[]): ContextQuery {
   const query: ContextQuery = {};

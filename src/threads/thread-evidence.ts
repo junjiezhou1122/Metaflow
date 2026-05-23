@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { ContextStore } from "./store.js";
-import type { StoredContextRecord, StoredWorkThread, ThreadEvidenceMap, ThreadEvidenceRef } from "./types.js";
+import { ContextStore } from "../core/store.js";
+import type { StoredContextRecord, StoredWorkThread, ThreadEvidenceMap, ThreadEvidenceRef } from "../core/types.js";
 
 export function buildThreadEvidenceMap(thread: StoredWorkThread, records: StoredContextRecord[]): ThreadEvidenceMap {
   const refs: ThreadEvidenceRef[] = [];

@@ -43,9 +43,16 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+
+    if (message?.type === "context.capture.browser_attention") {
+      const tab = sender.tab ?? await getActiveTab();
+      const result = await sendBrowserAttention(message.payload, message.kind, tab);
+      sendResponse(result);
+      return;
+    }
     if (message?.type === "save-current-page") {
       const tab = await getActiveTab();
-      const result = await captureSnapshot(tab, "manual_save", true);
+      const result = await captureSnapshot(tab, "manual_save", true, message.reason);
       sendResponse(result);
       return;
     }
@@ -86,6 +93,7 @@ async function ensureVisit(tab, reason) {
     state.visitRecorded = true;
     const page = await collectFromTab(tab.id).catch(() => basicPageFromTab(tab));
     await sendVisit(page, state, reason);
+    if (page.search) await sendSearchQuery(page, state).catch(() => undefined);
     if (settings.snapshotOnVisit) {
       await sendSnapshot(page, state, "initial_visit_snapshot", false).catch(() => undefined);
     }
@@ -122,14 +130,14 @@ async function captureHeartbeat(tab) {
   return postRecord(record);
 }
 
-async function captureSnapshot(tab, reason, manual) {
+async function captureSnapshot(tab, reason, manual, manualSaveReason) {
   if (!tab?.id || !tab.url) return { ok: false, error: "no active tab" };
   await ensureVisit(tab, "snapshot_requested");
   const state = getTabState(tab.id, tab.url);
   state.windowId = tab.windowId;
   state.settings = await getSettings();
   const page = await collectFromTab(tab.id);
-  return sendSnapshot(page, state, reason, manual);
+  return sendSnapshot(page, state, reason, manual, manualSaveReason);
 }
 
 async function sendVisit(page, state, reason) {
@@ -153,7 +161,30 @@ async function sendVisit(page, state, reason) {
   return postRecord(record);
 }
 
-async function sendSnapshot(page, state, reason, manual) {
+
+async function sendSearchQuery(page, state) {
+  if (!page.search?.query) return { ok: false, error: "no search query" };
+  const record = baseRecord({
+    schemaName: "observation.browser_search_query",
+    page,
+    state,
+    contentText: page.search.query,
+    acquisitionMode: "passive",
+    reason: `search query on ${page.search.engine}`,
+    importance: 0.65,
+    payload: {
+      visit_id: state.visitId,
+      engine: page.search.engine,
+      query: page.search.query,
+      searched_at: page.search.searched_at,
+      canonical_url: page.metadata?.canonical_url,
+      metadata: page.metadata,
+    },
+  });
+  return postRecord(record);
+}
+
+async function sendSnapshot(page, state, reason, manual, manualSaveReason) {
   const dwell_seconds = Math.round((Date.now() - state.startedAt) / 1000);
   const schemaName = manual ? "observation.browser_page_saved" : "observation.browser_page_snapshot";
   const record = baseRecord({
@@ -175,6 +206,9 @@ async function sendSnapshot(page, state, reason, manual) {
       dwell_seconds,
       snapshot_reason: reason,
       metadata: page.metadata,
+      text_quality: page.text_quality,
+      search: page.search,
+      manual_save_reason: manualSaveReason,
       reader_enrichment: manual,
     },
   });
@@ -184,6 +218,33 @@ async function sendSnapshot(page, state, reason, manual) {
     state.lastSnapshotAt = Date.now();
   }
   return result;
+}
+
+
+async function sendBrowserAttention(payload, kind, tab) {
+  if (!payload?.selected_text) return { ok: false, error: "missing selected_text" };
+  const settings = await getSettings();
+  const privacy = privacyForUrl(payload.url, settings);
+  const schemaName = kind === "copied" ? "observation.browser_text_copied" : "observation.browser_text_selected";
+  const record = {
+    schema: { name: schemaName, version: 1 },
+    source: { type: "browser", connector: "chrome-extension" },
+    scope: { domain: payload.domain, app: "chrome" },
+    time: { observed_at: payload.selected_at ?? new Date().toISOString(), captured_at: new Date().toISOString() },
+    content: { title: payload.title, url: payload.url, text: payload.selected_text },
+    acquisition: { mode: "passive", actor: "user", reason: kind === "copied" ? "browser text copied" : "browser text selected" },
+    signal: { importance: kind === "copied" ? 0.9 : 0.75, confidence: 0.95, status: "inbox" },
+    privacy,
+    payload: {
+      ...payload,
+      copied: kind === "copied",
+      tab_id: tab?.id,
+      window_id: tab?.windowId,
+      attention_signal: kind,
+      attention_weight: kind === "copied" ? 1.0 : 0.85,
+    },
+  };
+  return postRecord(record);
 }
 
 async function sendLifecycleEvent(state, event) {

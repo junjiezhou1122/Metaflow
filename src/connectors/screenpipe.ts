@@ -1,4 +1,4 @@
-import type { ContextRecord, StoredContextRecord } from "./types.js";
+import type { ContextRecord, StoredContextRecord } from "../core/types.js";
 
 export type ScreenpipePackOptions = {
   enabled?: boolean;
@@ -146,9 +146,10 @@ export function normalizeScreenpipeResult(item: any, index: number, screenpipeUr
     try { domain = new URL(url).hostname; } catch { domain = undefined; }
   }
 
+  const schemaName = String(content_type ?? "").toLowerCase() === "input" ? "observation.screenpipe_input_event" : "observation.screenpipe_activity";
   const record: ContextRecord = {
     id: stableRecordId(sourceId, timestamp),
-    schema: { name: "observation.screenpipe_activity", version: 1 },
+    schema: { name: schemaName, version: 1 },
     source: { type: "screenpipe", id: sourceId, connector: "screenpipe-local-api" },
     scope: { app, domain },
     time: { observed_at: timestamp, captured_at: now },
@@ -230,6 +231,11 @@ export async function fetchScreenpipeRecords(options: ScreenpipePackOptions = {}
   } catch (error: any) {
     return { ok: false, url: screenpipeUrl, query: queryParams, records: [], error: error?.message ?? String(error) };
   }
+}
+
+
+export async function fetchScreenpipeInputEvents(options: Omit<ScreenpipePackOptions, "content_type"> = {}): Promise<ScreenpipeFetchResult> {
+  return fetchScreenpipeRecords({ ...options, content_type: "input" });
 }
 
 export async function fetchScreenpipeActivitySummary(options: { url?: string; api_key?: string; start_time?: string; end_time?: string } = {}): Promise<ScreenpipeActivitySummaryResult> {

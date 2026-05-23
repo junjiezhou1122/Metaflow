@@ -23,7 +23,7 @@ async function refresh() {
 
 $("save").addEventListener("click", async () => {
   $("result").textContent = "Saving full snapshot…";
-  const res = await send({ type: "save-current-page" });
+  const res = await send({ type: "save-current-page", reason: $("saveReason").value.trim() || undefined });
   $("result").textContent = JSON.stringify(res, null, 2);
   await refresh();
 });

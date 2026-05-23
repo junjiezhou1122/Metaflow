@@ -1,6 +1,6 @@
-import { ContextStore } from "./store.js";
-import { buildContextPack } from "./context-broker.js";
-import type { ContextQuery, ContextView, StoredContextRecord, StoredContextView } from "./types.js";
+import { ContextStore } from "../core/store.js";
+import { buildContextPack } from "../broker/context-broker.js";
+import type { ContextQuery, ContextView, StoredContextRecord, StoredContextView } from "../core/types.js";
 
 export type LanguageLearningRunOptions = {
   days?: number;
@@ -45,7 +45,7 @@ export function runLanguageLearningPlugin(options: LanguageLearningRunOptions = 
     include_views: false,
   };
   const pack = buildContextPack(query, store);
-  const textRecords = pack.records.filter(record => extractText(record).length >= 40);
+  const textRecords = pack.records.filter(record => extractText(record).length >= 20);
   const vocabulary = extractVocabulary(textRecords, minCount).slice(0, 30);
   const examples = vocabulary.slice(0, 12).flatMap(candidate => candidate.examples.slice(0, 1).map(sentence => ({
     word: candidate.word,
@@ -119,7 +119,7 @@ function extractVocabulary(records: StoredContextRecord[], minCount: number): Vo
       const word = raw.toLowerCase().replace(/^-+|-+$/g, "");
       if (word.length < 4 || STOPWORDS.has(word) || /^[0-9]+$/.test(word)) continue;
       const item = byWord.get(word) ?? { count: 0, examples: [], source_records: new Set<string>() };
-      item.count += 1;
+      item.count += recordWeight(record);
       item.source_records.add(record.id);
       if (item.examples.length < 3) {
         const sentence = sentences.find(s => s.toLowerCase().includes(word));
@@ -132,12 +132,34 @@ function extractVocabulary(records: StoredContextRecord[], minCount: number): Vo
     .filter(([, item]) => item.count >= minCount)
     .map(([word, item]) => ({
       word,
-      count: item.count,
+      count: Number(item.count.toFixed(2)),
       score: Number((Math.log2(item.count + 1) + Math.min(2, item.source_records.size * 0.25)).toFixed(3)),
       examples: [...new Set(item.examples)],
       source_records: [...item.source_records],
     }))
     .sort((a, b) => b.score - a.score || b.count - a.count || a.word.localeCompare(b.word));
+}
+
+
+function recordWeight(record: StoredContextRecord): number {
+  let weight = 1.0;
+  if (record.schema.name === "observation.browser_text_copied") weight = 3.0;
+  else if (record.schema.name === "observation.browser_text_selected") weight = 2.4;
+  else if (record.schema.name === "observation.browser_search_query") weight = 2.0;
+  else if (record.schema.name === "observation.browser_page_saved") weight = 1.8;
+  else if (record.schema.name === "derived.reader_snapshot") weight = 1.2;
+  else if (record.schema.name === "observation.browser_page_snapshot") weight = 1.0;
+  else if (record.schema.name === "observation.screenpipe_input_event") weight = 1.4;
+  else if (record.schema.name === "observation.screenpipe_activity") weight = 0.65;
+  const quality = record.payload?.text_quality as any;
+  if (quality && typeof quality === "object") {
+    const qualityScore = typeof quality.quality_score === "number" ? quality.quality_score : 0.5;
+    const englishRatio = typeof quality.english_ratio === "number" ? quality.english_ratio : 0.5;
+    weight *= 0.65 + Math.max(0, Math.min(1, qualityScore)) * 0.5;
+    if (englishRatio < 0.25) weight *= 0.55;
+  }
+  if (typeof record.payload?.manual_save_reason === "string" && record.payload.manual_save_reason.trim()) weight *= 1.25;
+  return Number(weight.toFixed(3));
 }
 
 function extractText(record: StoredContextRecord): string {

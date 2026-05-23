@@ -1,6 +1,6 @@
-import { ContextStore } from "../src/store.js";
-import { fetchScreenpipeRecords } from "../src/screenpipe.js";
-import type { ContextPackRequest } from "../src/types.js";
+import { ContextStore } from "../src/core/store.js";
+import { fetchScreenpipeRecords } from "../src/connectors/screenpipe.js";
+import type { ContextPackRequest } from "../src/core/types.js";
 
 const store = new ContextStore();
 const req: ContextPackRequest = {
@@ -36,7 +36,7 @@ if (req.include_screenpipe) {
 }
 
 if (req.include_ai_sessions) {
-  const { aiSessionRefToRecord, locateAiSessions } = await import("../src/ai-sessions.js");
+  const { aiSessionRefToRecord, locateAiSessions } = await import("../src/connectors/ai-sessions.js");
   const located = locateAiSessions({
     project_path: process.env.AI_SESSION_PROJECT ?? process.cwd(),
     start_time: req.time_window?.start_time,

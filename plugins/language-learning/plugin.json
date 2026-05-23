@@ -5,18 +5,29 @@
   "description": "Compiles recent text exposure into language-learning ContextViews without requiring WorkThread.",
   "attention_policy": {
     "mode": "source",
-    "sources": ["browser", "screenpipe", "ai_chat", "reader", "local_project"],
+    "sources": [
+      "browser",
+      "screenpipe",
+      "ai_chat",
+      "reader",
+      "local_project"
+    ],
     "schemas": [
       "observation.browser_page_snapshot",
       "observation.browser_page_saved",
       "observation.browser_text_selected",
       "observation.screenpipe_activity",
       "observation.ai_chat",
-      "derived.reader_snapshot"
+      "derived.reader_snapshot",
+      "observation.browser_text_copied",
+      "observation.screenpipe_input_event",
+      "observation.browser_search_query"
     ],
     "include_records": true,
     "include_views": false,
-    "time_window": { "minutes": 10080 },
+    "time_window": {
+      "minutes": 10080
+    },
     "limit": 80
   },
   "view_types_produced": [
@@ -24,18 +35,35 @@
     "memory.language.learning_pack"
   ],
   "actions": [
-    { "id": "suggest_words", "title": "Suggest words", "permission_level": "L2_suggest" },
-    { "id": "compile_memory", "title": "Compile memory views", "permission_level": "L1_derive" }
+    {
+      "id": "suggest_words",
+      "title": "Suggest words",
+      "permission_level": "L2_suggest"
+    },
+    {
+      "id": "compile_memory",
+      "title": "Compile memory views",
+      "permission_level": "L1_derive"
+    }
   ],
   "permissions": {
-    "allowed_sources": ["browser", "screenpipe", "ai_chat", "reader", "local_project"],
+    "allowed_sources": [
+      "browser",
+      "screenpipe",
+      "ai_chat",
+      "reader",
+      "local_project"
+    ],
     "allowed_schemas": [
       "observation.browser_page_snapshot",
       "observation.browser_page_saved",
       "observation.browser_text_selected",
       "observation.screenpipe_activity",
       "observation.ai_chat",
-      "derived.reader_snapshot"
+      "derived.reader_snapshot",
+      "observation.browser_text_copied",
+      "observation.screenpipe_input_event",
+      "observation.browser_search_query"
     ],
     "max_privacy_level": "private",
     "allow_external_llm": false,

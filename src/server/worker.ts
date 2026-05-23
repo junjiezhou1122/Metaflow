@@ -1,12 +1,12 @@
 import { registerWorker } from "iii-sdk";
-import { ContextStore } from "./store.js";
-import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema } from "./schema.js";
-import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "./enrichment.js";
-import { fetchScreenpipeRecords } from "./screenpipe.js";
-import { aiSessionRefToRecord, locateAiSessions } from "./ai-sessions.js";
-import { buildContextPack } from "./context-broker.js";
-import { listPluginManifests } from "./plugins.js";
-import { runLanguageLearningPlugin } from "./language-learning.js";
+import { ContextStore } from "../core/store.js";
+import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema } from "../core/schema.js";
+import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "../connectors/enrichment.js";
+import { fetchScreenpipeRecords } from "../connectors/screenpipe.js";
+import { aiSessionRefToRecord, locateAiSessions } from "../connectors/ai-sessions.js";
+import { buildContextPack } from "../broker/context-broker.js";
+import { listPluginManifests } from "../plugins/registry.js";
+import { runLanguageLearningPlugin } from "../plugins/language-learning.js";
 
 const engineUrl = process.env.III_ENGINE_URL ?? "ws://localhost:49134";
 const store = new ContextStore();

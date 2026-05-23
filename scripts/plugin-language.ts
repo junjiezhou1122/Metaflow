@@ -1,4 +1,4 @@
-import { runLanguageLearningPlugin } from "../src/language-learning.js";
+import { runLanguageLearningPlugin } from "../src/plugins/language-learning.js";
 
 const argv = process.argv.slice(2);
 const options: any = {};

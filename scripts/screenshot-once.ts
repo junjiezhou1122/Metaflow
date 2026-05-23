@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { ContextStore } from "../src/store.js";
+import { ContextStore } from "../src/core/store.js";
 
 function sh(cmd: string, args: string[]) {
   try {

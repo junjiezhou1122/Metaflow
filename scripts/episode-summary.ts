@@ -1,5 +1,5 @@
-import { ContextStore } from "../src/store.js";
-import type { ContextRecord, StoredContextRecord } from "../src/types.js";
+import { ContextStore } from "../src/core/store.js";
+import type { ContextRecord, StoredContextRecord } from "../src/core/types.js";
 
 const store = new ContextStore();
 const argv = process.argv.slice(2).filter(arg => arg !== "--");

@@ -1,6 +1,6 @@
-import { ContextStore } from "./store.js";
-import type { ContextRecord, StoredContextRecord, StoredWorkThread, ThreadEvidenceMap } from "./types.js";
-import { chatCompletion, parseJsonObject, type LlmOptions } from "./llm.js";
+import { ContextStore } from "../core/store.js";
+import type { ContextRecord, StoredContextRecord, StoredWorkThread, ThreadEvidenceMap } from "../core/types.js";
+import { chatCompletion, parseJsonObject, type LlmOptions } from "../core/llm.js";
 import { buildThreadEvidenceMap } from "./thread-evidence.js";
 
 export type ThreadInterpretRequest = {

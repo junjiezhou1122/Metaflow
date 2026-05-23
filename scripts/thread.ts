@@ -1,6 +1,6 @@
-import { ContextStore } from "../src/store.js";
-import { persistThreadEvidenceMap } from "../src/thread-evidence.js";
-import { mergeThreads, splitThread } from "../src/thread-ops.js";
+import { ContextStore } from "../src/core/store.js";
+import { persistThreadEvidenceMap } from "../src/threads/thread-evidence.js";
+import { mergeThreads, splitThread } from "../src/threads/thread-ops.js";
 
 const store = new ContextStore();
 const [cmd, id, ...rest] = process.argv.slice(2).filter(arg => arg !== "--");

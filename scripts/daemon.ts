@@ -1,6 +1,6 @@
-import { ContextStore } from "../src/store.js";
-import { runtimeStatus, runtimeTick, type RuntimeTickRequest } from "../src/runtime.js";
-import { interpretThread, shouldInterpretThread } from "../src/thread-interpreter.js";
+import { ContextStore } from "../src/core/store.js";
+import { runtimeStatus, runtimeTick, type RuntimeTickRequest } from "../src/runtime/runtime.js";
+import { interpretThread, shouldInterpretThread } from "../src/threads/thread-interpreter.js";
 
 function parseArgs(argv: string[]): RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number } {
   const req: RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number } = {};

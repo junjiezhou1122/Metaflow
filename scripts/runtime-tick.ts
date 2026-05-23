@@ -1,4 +1,4 @@
-import { runtimeTick, type RuntimeTickRequest } from "../src/runtime.js";
+import { runtimeTick, type RuntimeTickRequest } from "../src/runtime/runtime.js";
 
 function parseArgs(argv: string[]): RuntimeTickRequest {
   const req: RuntimeTickRequest = {};

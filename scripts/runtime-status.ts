@@ -1,4 +1,4 @@
-import { runtimeStatus } from "../src/runtime.js";
+import { runtimeStatus } from "../src/runtime/runtime.js";
 
 console.log(JSON.stringify(runtimeStatus(), null, 2));
 

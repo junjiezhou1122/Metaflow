@@ -2,13 +2,13 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { homedir } from "node:os";
-import { ContextStore } from "./store.js";
-import type { ContextRecord, StoredContextRecord, StoredWorkThread } from "./types.js";
-import { fetchScreenpipeActivitySummary, fetchScreenpipeRecords, fetchScreenpipeWorkspaceSignals } from "./screenpipe.js";
-import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "./ai-sessions.js";
+import { ContextStore } from "../core/store.js";
+import type { ContextRecord, StoredContextRecord, StoredWorkThread } from "../core/types.js";
+import { fetchScreenpipeActivitySummary, fetchScreenpipeInputEvents, fetchScreenpipeRecords, fetchScreenpipeWorkspaceSignals } from "../connectors/screenpipe.js";
+import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "../connectors/ai-sessions.js";
 import { buildCandidateThreads, type CandidateThread } from "./correlation.js";
-import { buildLocalProjectSnapshotRecord } from "./local-project.js";
-import { buildThreadEvidenceMap } from "./thread-evidence.js";
+import { buildLocalProjectSnapshotRecord } from "../connectors/local-project.js";
+import { buildThreadEvidenceMap } from "../threads/thread-evidence.js";
 
 export type RuntimeTickRequest = {
   window_minutes?: number;
@@ -129,6 +129,20 @@ export async function runtimeTick(req: RuntimeTickRequest = {}, store = new Cont
       error: workspaceSignals.error,
     };
     screenpipeRecords.push(...workspaceSignals.records);
+
+    const inputEvents = await fetchScreenpipeInputEvents({
+      limit: 8,
+      start_time: `${windowMinutes}m ago`,
+      end_time: "now",
+    });
+    diagnostics.screenpipe_input_events = {
+      ok: inputEvents.ok,
+      url: inputEvents.url,
+      query: inputEvents.query,
+      count: inputEvents.records.length,
+      error: inputEvents.error,
+    };
+    screenpipeRecords.push(...inputEvents.records);
 
     const screenpipe = await fetchScreenpipeRecords({
       limit: req.screenpipe_limit ?? 8,

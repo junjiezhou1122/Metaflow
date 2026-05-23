@@ -1,7 +1,7 @@
-import { ContextStore } from "../src/store.js";
-import { buildCandidateThreads } from "../src/correlation.js";
-import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "../src/ai-sessions.js";
-import type { ContextRecord, StoredContextRecord } from "../src/types.js";
+import { ContextStore } from "../src/core/store.js";
+import { buildCandidateThreads } from "../src/runtime/correlation.js";
+import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "../src/connectors/ai-sessions.js";
+import type { ContextRecord, StoredContextRecord } from "../src/core/types.js";
 
 const args = new Set(process.argv.slice(2));
 const write = args.has("--write");

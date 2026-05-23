@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --experimental-sqlite --import tsx src/worker.ts",
+    "dev": "node --experimental-sqlite --import tsx src/server/worker.ts",
     "test:ingest": "node --experimental-sqlite --import tsx scripts/ingest-example.ts",
     "test:pack": "node --experimental-sqlite --import tsx scripts/pack-example.ts",
     "test:pack:v2": "node --experimental-sqlite --import tsx scripts/pack-v2-example.ts",
@@ -18,7 +18,7 @@
     "agent-discovery:example": "node --experimental-sqlite --import tsx scripts/agent-discovery-example.ts",
     "screenpipe:recent": "node --experimental-sqlite --import tsx scripts/screenpipe-recent.ts",
     "tweet-save:example": "node --experimental-sqlite --import tsx scripts/tweet-save-example.ts",
-    "http": "node --experimental-sqlite --import tsx src/http-server.ts",
+    "http": "node --experimental-sqlite --import tsx src/server/http-server.ts",
     "runtime:tick": "node --experimental-sqlite --import tsx scripts/runtime-tick.ts",
     "daemon": "node --experimental-sqlite --import tsx scripts/daemon.ts",
     "runtime:status": "node --experimental-sqlite --import tsx scripts/runtime-status.ts",

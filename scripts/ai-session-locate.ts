@@ -1,5 +1,5 @@
-import { ContextStore } from "../src/store.js";
-import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "../src/ai-sessions.js";
+import { ContextStore } from "../src/core/store.js";
+import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "../src/connectors/ai-sessions.js";
 
 const args = process.argv.slice(2).filter(arg => arg !== "--");
 const write = args.includes("--write");

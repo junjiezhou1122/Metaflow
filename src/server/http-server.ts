@@ -1,16 +1,16 @@
 import { createServer } from "node:http";
-import { ContextStore } from "./store.js";
-import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema } from "./schema.js";
-import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "./enrichment.js";
-import { fetchScreenpipeRecords } from "./screenpipe.js";
-import { aiSessionRefToRecord, locateAiSessions } from "./ai-sessions.js";
-import { runtimeStatus, runtimeTick } from "./runtime.js";
-import { activeThreadId, interpretThread } from "./thread-interpreter.js";
-import { persistThreadEvidenceMap } from "./thread-evidence.js";
-import { mergeThreads, splitThread } from "./thread-ops.js";
-import { buildContextPack } from "./context-broker.js";
-import { listPluginManifests, readPluginManifest } from "./plugins.js";
-import { runLanguageLearningPlugin } from "./language-learning.js";
+import { ContextStore } from "../core/store.js";
+import { ContextArtifactSchema, ContextConnectorSchema, ContextPackRequestSchema, ContextQuerySchema, ContextRecordSchema, ContextSchemaSchema, ContextViewSchema } from "../core/schema.js";
+import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "../connectors/enrichment.js";
+import { fetchScreenpipeRecords } from "../connectors/screenpipe.js";
+import { aiSessionRefToRecord, locateAiSessions } from "../connectors/ai-sessions.js";
+import { runtimeStatus, runtimeTick } from "../runtime/runtime.js";
+import { activeThreadId, interpretThread } from "../threads/thread-interpreter.js";
+import { persistThreadEvidenceMap } from "../threads/thread-evidence.js";
+import { mergeThreads, splitThread } from "../threads/thread-ops.js";
+import { buildContextPack } from "../broker/context-broker.js";
+import { listPluginManifests, readPluginManifest } from "../plugins/registry.js";
+import { runLanguageLearningPlugin } from "../plugins/language-learning.js";
 
 const store = new ContextStore();
 const port = Number(process.env.CONTEXT_HTTP_PORT ?? 3111);

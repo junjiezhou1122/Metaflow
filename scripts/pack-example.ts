@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/store.js";
+import { ContextStore } from "../src/core/store.js";
 
 const store = new ContextStore();
 const pack = store.buildPack({

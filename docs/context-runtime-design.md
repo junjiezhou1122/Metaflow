@@ -1165,3 +1165,117 @@ source_records present
 thread optional
 external_llm gated by plugin permissions
 ```
+
+### 12.1 Attention signals: selection/copy
+
+Language learning 不只需要页面全文，还需要用户真实 attention signal。当前实现：
+
+Browser extension content script：
+
+```text
+selectionchange → observation.browser_text_selected
+copy            → observation.browser_text_copied
+```
+
+记录：
+
+```text
+selected_text
+surrounding_text
+url / canonical_url / title / domain
+page_language
+scroll_depth
+viewport rect
+tag
+attention_signal / attention_weight
+```
+
+Screenpipe 侧也尝试拉取：
+
+```text
+/search?content_type=input → observation.screenpipe_input_event
+```
+
+分工：
+
+```text
+Screenpipe input event = action/time/app/window evidence
+Browser extension      = precise selected/copied text + DOM context
+```
+
+Language plugin v0 对不同 schema 加权：
+
+```text
+browser_text_copied     highest
+browser_text_selected   high
+browser_page_saved      high
+reader_snapshot         medium
+screenpipe_input_event  medium
+screenpipe_activity     lower
+```
+
+这体现了：
+
+```text
+Full markdown tells what the page contains.
+Selection/copy tells what the user attended to.
+```
+
+
+### 12.2 Browser semantic signals: search, save reason, language quality
+
+Browser extension 继续增强三类高价值信号：
+
+```text
+search query        → observation.browser_search_query
+manual save reason  → payload.manual_save_reason
+page language/quality → payload.text_quality
+```
+
+`browser_search_query` 解析常见搜索 URL：
+
+```text
+google q
+bing q
+duckduckgo q
+baidu wd
+perplexity q
+github /search?q
+youtube /results?search_query
+```
+
+manual save popup 现在允许用户输入：
+
+```text
+Why is this page useful?
+```
+
+保存进 `observation.browser_page_saved.payload.manual_save_reason`。
+
+content script 也会估算文本质量：
+
+```text
+detected_language
+english_ratio
+word_count
+char_count
+sentence_count
+repeated_ratio
+quality_score
+```
+
+Language plugin 使用这些信号调权：
+
+```text
+search query = high intent
+manual save reason = explicit user intent
+text_quality = corpus quality filter/ranking signal
+```
+
+这让 language/research plugin 不只是知道“页面有什么”，也能知道：
+
+```text
+用户主动搜索了什么
+用户为什么保存
+这段文本是否适合做语料
+```
