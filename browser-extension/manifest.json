@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Personal Context Capture",
+  "version": "0.1.0",
+  "description": "Capture browser reading context into the local context layer.",
+  "permissions": ["activeTab", "scripting", "tabs", "storage"],
+  "host_permissions": ["http://localhost:3111/*", "http://127.0.0.1:3111/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Personal Context",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

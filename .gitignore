@@ -1,0 +1,7 @@
+.env
+node_modules/
+data/*.sqlite*
+.DS_Store
+.omc/
+.omx/
+ref/
