@@ -3623,6 +3623,45 @@ test("GET /context/views can return all Views for an Application list", async ()
   assert.deepEqual(new Set(body.views.map(view => view.id)), new Set(Array.from({ length: 70 }, (_, index) => `evidence:http-all-${String(index).padStart(2, "0")}`)));
 }));
 
+test("GET /context/views backfills after provenance filtering recent invalid Views", async () => withStore(async (store) => {
+  store.insertRecord({
+    id: "record:http-backfill-valid",
+    schema: { name: "observation.browser_page_snapshot", version: 1 },
+    source: { type: "browser", connector: "chrome-extension" },
+    content: { title: "Valid source" },
+    privacy: { level: "private", retention: "normal" },
+  });
+  for (let index = 0; index < 70; index += 1) {
+    store.upsertView({
+      id: `memory:http-backfill-valid-${String(index).padStart(2, "0")}`,
+      view_type: "memory",
+      status: "candidate",
+      title: `Valid memory ${index}`,
+      source_records: ["record:http-backfill-valid"],
+      content: { kind: "episode", index },
+    });
+  }
+  await new Promise(resolve => setTimeout(resolve, 2));
+  for (let index = 0; index < 180; index += 1) {
+    store.upsertView({
+      id: `memory:http-backfill-invalid-${String(index).padStart(3, "0")}`,
+      view_type: "memory",
+      status: "candidate",
+      title: `Invalid memory ${index}`,
+      source_records: [`record:missing-${index}`],
+      content: { kind: "episode", index },
+    });
+  }
+
+  const response = await request(store, "/context/views?view_types=memory&active_only=true&summary_only=true&limit=60");
+  const body = response.body as { ok: boolean; views: Array<{ id: string }> };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.views.length, 60);
+  assert.equal(body.views.every(view => view.id.startsWith("memory:http-backfill-valid-")), true);
+}));
+
 test("GET /context/views tolerates legacy malformed source_views JSON", async () => withStore(async (store) => {
   store.insertRecord({
     id: "record:http-legacy-view-source",

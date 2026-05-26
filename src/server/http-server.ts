@@ -261,7 +261,9 @@ function nextViewCursor(views: Array<{ updated_at?: string }>, fallback?: string
 function viewListCandidateLimit(input: { limit: number; query?: string; pluginScoped: boolean }): number {
   if (input.limit <= 0) return 0;
   if (input.pluginScoped) return Math.max(input.limit * 20, 200);
-  return input.query ? Math.max(input.limit * 4, input.limit) : Math.max(input.limit * 3, 20);
+  // View provenance/scope filtering can remove many recent candidates.
+  // Use a wider pre-filter window so Application lists still return a full page.
+  return input.query ? Math.max(input.limit * 8, input.limit) : Math.max(input.limit * 50, 500);
 }
 
 function latestViewCandidateLimit(input: { query?: string; pluginScoped: boolean }): number {
