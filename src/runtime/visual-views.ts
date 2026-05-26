@@ -52,6 +52,7 @@ export type CompileActivityBlockViewsOptions = {
   limit?: number;
   minutes?: number;
   visualFrameViews?: Array<ContextView | StoredContextView>;
+  audioViews?: Array<ContextView | StoredContextView>;
   activityViews?: Array<ContextView | StoredContextView>;
   analyzer?: ActivityBlockAnalyzer;
 };
@@ -172,19 +173,25 @@ export async function compileActivityBlockViews(options: CompileActivityBlockVie
     limit,
     timeWindow: { minutes },
   })).filter(view => view.view_type === "visual_frame");
+  const audioViews = (options.audioViews ?? store.listViews({
+    view_types: ["audio"],
+    active_only: true,
+    limit,
+    timeWindow: { minutes },
+  })).filter(view => view.view_type === "audio" && shouldUseAudioInActivityBlock(view));
   const activityViews = (options.activityViews ?? store.listViews({
     view_types: ["activity"],
     active_only: true,
     limit,
     timeWindow: { minutes },
   })).filter(view => view.view_type === "activity" && shouldUseActivityInVisualBlock(view));
-  const inputViews = uniqueViews([...visualFrameViews, ...activityViews]);
+  const inputViews = uniqueViews([...visualFrameViews, ...audioViews, ...activityViews]);
   const timeRange = rangeForViews(inputViews, generatedAt, minutes);
   const blockId = `activity_block:visual:${stableKey(`${timeRange.start}|${timeRange.end}|${inputViews.map(view => view.id).join("|")}`)}`;
 
   let response: ActivityBlockAnalyzerResponse | undefined;
   let view: ContextView | undefined;
-  if (visualFrameViews.length) {
+  if (visualFrameViews.length || audioViews.length) {
     const prompt = activityBlockPrompt(inputViews, timeRange);
     response = options.analyzer
       ? await options.analyzer({ prompt, input_views: inputViews })
@@ -208,6 +215,7 @@ export async function compileActivityBlockViews(options: CompileActivityBlockVie
         strategy: AI_ACTIVITY_BLOCK_VIEW_STRATEGY_ID,
         mode: "llm",
         visual_frame_views_seen: visualFrameViews.length,
+        audio_views_seen: audioViews.length,
         activity_views_seen: activityViews.length,
         views_compiled: stored.length,
         error: response?.error,
@@ -223,6 +231,7 @@ export async function compileActivityBlockViews(options: CompileActivityBlockVie
     diagnostics: {
       strategy: AI_ACTIVITY_BLOCK_VIEW_STRATEGY_ID,
       visual_frame_views_seen: visualFrameViews.length,
+      audio_views_seen: audioViews.length,
       activity_views_seen: activityViews.length,
       produced: stored.length,
       error: response?.error,
@@ -434,7 +443,7 @@ function visualFramePrompt(inputViews: Array<ContextView | StoredContextView>, f
 
 function activityBlockPrompt(inputViews: Array<ContextView | StoredContextView>, timeRange: { start: string; end: string }): string {
   return [
-    "Compile one 10-minute ActivityBlockView from these VisualFrameViews and ActivityViews.",
+    "Compile one 10-minute ActivityBlockView from these VisualFrameViews, AudioViews, and ActivityViews.",
     "This is not long-term memory. It is a candidate block for later workflow inference.",
     "Separate true work from recorder, app-focus, terminal, desktop, and window-switching noise.",
     "Return JSON with keys: title, block_summary, primary_work, secondary_context, evidence, noise, done_signal, continuation_signal, memory_worthiness, should_create_memory, view_candidates, confidence.",
@@ -456,6 +465,13 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (it
   });
   await Promise.all(workers);
   return results;
+}
+
+function shouldUseAudioInActivityBlock(view: ContextView | StoredContextView): boolean {
+  const transcript = stringValue(view.content?.transcript) ?? stringValue(view.content?.transcript_excerpt) ?? view.summary;
+  if (!transcript || transcript.replace(/\s+/g, "").length < 4) return false;
+  const confidence = view.confidence ?? 0;
+  return confidence >= 0.45;
 }
 
 function shouldUseActivityInVisualBlock(view: ContextView | StoredContextView): boolean {

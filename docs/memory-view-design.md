@@ -33,12 +33,15 @@ The important separation:
 
 ```text
 Observation = raw source of truth about what was captured
-EvidenceView = normalized evidence from one or more observations
-ActivityView = time-based compression of evidence into "what happened"
-IntentView   = hypothesis about goal or task
-WorkflowView = structured task/session composed from activities and intents
-MemoryView   = high-level memory-oriented View consumed by agents/apps
-ProposalView = control View that decides what Views should be created next
+EvidenceView     = normalized evidence from one or more observations
+VisualFrameView  = AI-compressed screen semantics from frame evidence
+AudioView        = AI-compressed speech/transcript semantics from audio evidence
+ActivityView     = time-based compression of evidence into "what happened"
+ActivityBlockView= AI-compressed short work block from visual/audio/activity views
+IntentView       = hypothesis about goal or task
+WorkflowView     = structured task/session composed from activities and intents
+MemoryView       = high-level memory-oriented View consumed by agents/apps
+ProposalView     = control View that decides what Views should be created next
 ```
 
 The system is therefore not a single summarizer. It is a View graph:

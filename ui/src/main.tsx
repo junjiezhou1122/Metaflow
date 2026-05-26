@@ -6,7 +6,7 @@ import "./styles.css";
 
 const POLL_MS = 15_000;
 const DEFAULT_MINUTES = 180;
-const VIEW_TYPE_ORDER = ["evidence", "visual_frame", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
+const VIEW_TYPE_ORDER = ["evidence", "visual_frame", "audio", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
 type SourceFilter = "screenpipe" | "browser" | "runtime" | "all";
 type DetailMode = "activity" | "debug";
 type ActiveTab = "timeline" | "views";
@@ -202,7 +202,7 @@ function App() {
 }
 
 function ViewGraph({ families }: { families: ViewFamilySummary[] }) {
-  const canonical = ["evidence", "visual_frame", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
+  const canonical = ["evidence", "visual_frame", "audio", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
   const shown = families.filter(family => family.count > 0 || canonical.includes(family.family));
   return (
     <section className="view-graph" aria-label="Memory view graph">
@@ -623,6 +623,7 @@ function viewFamilyLabel(family: string) {
   const labels: Record<string, string> = {
     evidence: "EvidenceView",
     visual_frame: "VisualFrameView",
+    audio: "AudioView",
     activity: "ActivityView",
     activity_block: "ActivityBlockView",
     proposal: "ProposalView",
@@ -639,6 +640,7 @@ function viewTypePurpose(type: string) {
   const labels: Record<string, string> = {
     evidence: "raw evidence",
     visual_frame: "screen semantics",
+    audio: "speech semantics",
     activity: "time chunk",
     activity_block: "10m block",
     proposal: "next view",
@@ -664,7 +666,7 @@ function sourceViewCount(view: ContextViewSummary) {
 }
 
 function groupViews(views: ViewFamiliesResponse["views"]) {
-  const order = ["evidence", "visual_frame", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
+  const order = ["evidence", "visual_frame", "audio", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
   const byType = new Map<string, ViewFamiliesResponse["views"]>();
   for (const view of views) {
     const group = byType.get(view.view_type) ?? [];

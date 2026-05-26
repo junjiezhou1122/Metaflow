@@ -51,7 +51,7 @@ export async function fetchActivityTimeline(options: { minutes?: number; limit?:
 }
 
 export async function fetchViewFamilies(): Promise<ViewFamiliesResponse> {
-  const familyOrder = ["evidence", "visual_frame", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
+  const familyOrder = ["evidence", "visual_frame", "audio", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory"];
   const results = await Promise.all(familyOrder.map(async family => {
     const res = await fetchWithTimeout(`${API_BASE}/context/views?view_types=${family}&limit=all&active_only=true&summary_only=true`, undefined, 20_000);
     if (!res.ok) throw new Error(`${family} view fetch failed: ${res.status}`);

@@ -117,6 +117,7 @@ export function buildEvidenceView(record: StoredContextRecord, generatedAt = new
         duration_seconds: durationSecondsOf(record),
         frame_ids: frameIds.length ? frameIds : undefined,
         metrics: metricSignalsOf(record),
+        audio: classification.kind === "audio" ? audioSignalsOf(record) : undefined,
       },
       claims: evidenceClaims(record, classification.kind),
       quality: {
@@ -185,6 +186,7 @@ function classifyEvidence(record: StoredContextRecord): { kind: string; subjectT
   if (schema === "observation.browser_text_selected") return { kind: "selection", subjectType: "text", confidence: 0.92, stability: "session", reason: "browser extension reported selected text" };
   if (schema.startsWith("observation.browser_")) return { kind: "page", subjectType: "page", confidence: 0.9, stability: "session", reason: "browser extension reported current page URL" };
   if (schema === "observation.screenpipe_activity_summary") return { kind: "focus", subjectType: "app", confidence: 0.78, stability: "ephemeral", reason: "Screenpipe reported active app/window summary" };
+  if (schema === "observation.screenpipe_audio" || contentType === "audio") return { kind: "audio", subjectType: "transcript", confidence: 0.84, stability: "session", reason: "Screenpipe audio transcription reported spoken content" };
   if (schema === "observation.screenpipe_input_event") return { kind: "input", subjectType: "ui_event", confidence: 0.82, stability: "ephemeral", reason: "Screenpipe UI event stream reported interaction" };
   if (schema === "observation.screenpipe_workspace_signal" && contentType === "element") return { kind: "input", subjectType: "ui_element", confidence: 0.72, stability: "ephemeral", reason: "Screenpipe accessibility element was visible" };
   if (schema === "observation.screenpipe_workspace_signal" || schema === "observation.screenpipe_activity") return { kind: "screen", subjectType: "screen_frame", confidence: 0.68, stability: "ephemeral", reason: "Screenpipe OCR/frame capture reported visible text" };
@@ -200,6 +202,7 @@ function evidenceTitle(record: StoredContextRecord, kind: string): string {
     return [appOf(record), normalizeWindowTitle(stringValue(record.payload?.window_name))].filter(Boolean).join(" - ") || "Focused app evidence";
   }
   if (kind === "screen") return record.content?.title ?? "Screen frame evidence";
+  if (kind === "audio") return record.content?.title ?? "Audio transcript evidence";
   if (kind === "input") return record.content?.title ?? `${appOf(record) ?? "App"} interaction`;
   if (kind === "project") return record.content?.title ?? `Local project: ${projectOf(record) ?? "unknown"}`;
   return record.content?.title ?? record.content?.url ?? record.content?.path ?? record.schema.name;
@@ -219,7 +222,7 @@ function evidenceClaims(record: StoredContextRecord, kind: string): string[] {
   const text = excerpt(record.content?.text ?? stringValue(record.payload?.text), 280);
   if (url) claims.push("url_seen", "resource_seen");
   if (app) claims.push(kind === "focus" ? "app_focused" : "app_reported");
-  if (text) claims.push(kind === "screen" ? "text_visible" : "text_observed");
+  if (text) claims.push(kind === "screen" ? "text_visible" : kind === "audio" ? "speech_transcribed" : "text_observed");
   if (record.content?.path) claims.push("path_seen");
   if (kind === "input") {
     const interaction = interactionAttribution(record);
@@ -258,6 +261,22 @@ function durationSecondsOf(record: StoredContextRecord): number | undefined {
   if (dwell !== undefined) return dwell;
   const minutes = numberValue(record.payload?.minutes);
   return minutes !== undefined ? minutes * 60 : undefined;
+}
+
+function audioSignalsOf(record: StoredContextRecord): Record<string, unknown> | undefined {
+  const transcript = excerpt(record.content?.text ?? stringValue(record.payload?.transcription) ?? stringValue(record.payload?.text), 4000);
+  if (!transcript) return undefined;
+  return {
+    transcript,
+    audio_chunk_id: stringOrNumber(record.payload?.audio_chunk_id),
+    transcription_id: stringOrNumber(record.payload?.transcription_id),
+    speaker_label: stringValue(record.payload?.speaker_label),
+    device_name: stringValue(record.payload?.device_name),
+    device_type: stringValue(record.payload?.device_type),
+    start_time: numberValue(record.payload?.start_time),
+    end_time: numberValue(record.payload?.end_time),
+    transcription_engine: stringValue(record.payload?.transcription_engine),
+  };
 }
 
 function metricSignalsOf(record: StoredContextRecord): Record<string, number> | undefined {
@@ -313,6 +332,11 @@ function stableKey(value: string): string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringOrNumber(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return stringValue(value);
 }
 
 function numberValue(value: unknown): number | undefined {

@@ -17,6 +17,7 @@ import { compileEvidenceViews } from "./evidence-view.js";
 import { compileActivityViews, compileIntentViews, compileMemoryViews, compileProposalViews, compileResourceViews, compileWorkflowViews } from "./memory-views.js";
 import { compileIntentViewsWithLlm, compileMemoryViewsWithLlm, compileWorkflowViewsWithLlm } from "./view-compression.js";
 import { compileActivityBlockViews, compileVisualFrameViews } from "./visual-views.js";
+import { compileAudioViews } from "./audio-views.js";
 
 export type RuntimeTickRequest = {
   window_minutes?: number;
@@ -435,6 +436,13 @@ async function compileRuntimeViews(input: {
     }, input.store);
     out.push({ view_type: "activity", records_used: compiled.records_used, view_count: activities.views.length, title: "Activity Views" });
 
+    const audioViews = await compileAudioViews({
+      write: input.write,
+      evidenceViews: compiled.views,
+      llm: input.llm,
+    }, input.store);
+    out.push({ view_type: "audio", view_count: audioViews.views.length, title: "AI Audio Views" });
+
     let activityBlocks: Awaited<ReturnType<typeof compileActivityBlockViews>> | undefined;
     if (input.visualViewCompression) {
       const visualFrames = await compileVisualFrameViews({
@@ -447,6 +455,7 @@ async function compileRuntimeViews(input: {
       activityBlocks = await compileActivityBlockViews({
         write: input.write,
         visualFrameViews: visualFrames.views,
+        audioViews: audioViews.views,
         activityViews: activities.views,
         llm: input.llm,
         minutes: 10,

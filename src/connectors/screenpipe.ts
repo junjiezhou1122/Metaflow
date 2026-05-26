@@ -123,6 +123,38 @@ function pickContentType(item: any): string | undefined {
   return item.type ?? c.content_type ?? c.type;
 }
 
+function isAudioContentType(value: string | undefined): boolean {
+  return String(value ?? "").toLowerCase() === "audio";
+}
+
+function pickAudioChunkId(item: any): string | number | undefined {
+  const c = item.content ?? item;
+  const value = c.audio_chunk_id ?? c.chunk_id ?? item.audio_chunk_id ?? item.chunk_id;
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function pickTranscriptionId(item: any): string | number | undefined {
+  const c = item.content ?? item;
+  const value = c.transcription_id ?? c.id ?? item.transcription_id;
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function pickSpeakerLabel(item: any): string | undefined {
+  const c = item.content ?? item;
+  const speaker = c.speaker ?? item.speaker;
+  return c.speaker_label ?? c.speaker_name ?? speaker?.name ?? (speaker?.id !== undefined ? `speaker:${speaker.id}` : undefined);
+}
+
+function pickDeviceName(item: any): string | undefined {
+  const c = item.content ?? item;
+  return c.device_name ?? c.device ?? item.device_name ?? item.device;
+}
+
+function pickDeviceType(item: any): string | undefined {
+  const c = item.content ?? item;
+  return c.device_type ?? item.device_type;
+}
+
 function pickFrameId(item: any): string | number | undefined {
   const c = item.content ?? item;
   const value = c.frame_id ?? c.frameId ?? item.frame_id ?? item.frameId;
@@ -166,7 +198,11 @@ export function normalizeScreenpipeResult(item: any, index: number, screenpipeUr
     try { domain = new URL(url).hostname; } catch { domain = undefined; }
   }
 
-  const schemaName = String(content_type ?? "").toLowerCase() === "input" ? "observation.screenpipe_input_event" : "observation.screenpipe_activity";
+  const schemaName = String(content_type ?? "").toLowerCase() === "input"
+    ? "observation.screenpipe_input_event"
+    : isAudioContentType(content_type)
+      ? "observation.screenpipe_audio"
+      : "observation.screenpipe_activity";
   const record: ContextRecord = {
     id: stableRecordId(sourceId, timestamp),
     schema: { name: schemaName, version: 1 },
@@ -197,6 +233,14 @@ export function normalizeScreenpipeResult(item: any, index: number, screenpipeUr
       app_name: app,
       window_name: pickWindow(item),
       browser_url: url,
+      audio_chunk_id: pickAudioChunkId(item),
+      transcription_id: pickTranscriptionId(item),
+      speaker_label: pickSpeakerLabel(item),
+      device_name: pickDeviceName(item),
+      device_type: pickDeviceType(item),
+      start_time: (item.content ?? item).start_time,
+      end_time: (item.content ?? item).end_time,
+      transcription_engine: (item.content ?? item).model ?? (item.content ?? item).transcription_engine,
       frame_id: frameId,
       frame_ids: frameIds,
       raw_result: item,

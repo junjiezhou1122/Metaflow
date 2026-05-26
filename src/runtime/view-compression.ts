@@ -202,7 +202,7 @@ export async function compileWorkflowViewsWithLlm(options: CompileWorkflowViewsW
 
   const intentWorkflows = await mapWithCompressor(intentViews, AI_WORKFLOW_VIEW_STRATEGY, generatedAt, options, (intent) => {
     const linkedViews = sourceViewsOf(intent, store)
-      .filter(view => ["activity_block", "visual_frame", "activity"].includes(view.view_type));
+      .filter(view => ["activity_block", "visual_frame", "audio", "activity"].includes(view.view_type));
     const activityViews = linkedViews.filter(view => view.view_type === "activity");
     const resources = relatedResourcesForActivityIds(resourceViews, activityViews.map(view => view.id).filter(isString));
     const inputViews = compactViews([intent, ...linkedViews, ...resources]);
@@ -214,7 +214,7 @@ export async function compileWorkflowViewsWithLlm(options: CompileWorkflowViewsW
   });
   const blockWorkflows = await mapWithCompressor(activityBlockViews, AI_WORKFLOW_VIEW_STRATEGY, generatedAt, options, (block) => {
     const sourceViews = sourceViewsOf(block, store)
-      .filter(view => ["visual_frame", "activity", "resource"].includes(view.view_type))
+      .filter(view => ["visual_frame", "audio", "activity", "resource"].includes(view.view_type))
       .slice(0, AI_WORKFLOW_VIEW_STRATEGY.max_input_views - 1);
     const inputViews = compactViews([block, ...sourceViews]);
     return {
@@ -491,7 +491,7 @@ function intentPrompt(inputViews: Array<ContextView | StoredContextView>): strin
 
 function intentFromActivityBlockPrompt(inputViews: Array<ContextView | StoredContextView>): string {
   return [
-    "Compile one IntentView from this ActivityBlockView and visual evidence.",
+    "Compile one IntentView from this ActivityBlockView and visual/audio evidence.",
     "The intent is a hypothesis about what the user is trying to accomplish in the block.",
     "Return JSON with keys: title, summary, kind, hypothesis, supporting_signals, counter_signals, suggested_workflow_kind, confidence.",
     "Use counter_signals for uncertainty. Do not infer durable preference or long-term memory here.",
@@ -524,8 +524,8 @@ function memoryPrompt(inputViews: Array<ContextView | StoredContextView>): strin
 
 function workflowFromActivityBlockPrompt(inputViews: Array<ContextView | StoredContextView>): string {
   return [
-    "Compile one WorkflowView from this ActivityBlockView and its supporting VisualFrameView/ActivityView evidence.",
-    "The ActivityBlockView is the primary signal; VisualFrameViews explain what was actually on screen.",
+    "Compile one WorkflowView from this ActivityBlockView and its supporting VisualFrameView/AudioView/ActivityView evidence.",
+    "The ActivityBlockView is the primary signal; VisualFrameViews explain what was on screen, and AudioViews explain spoken intent/context.",
     "Return JSON with keys: title, summary, kind, phases, decisions, outputs, blockers, open_questions, topic_candidates, confidence.",
     "Use kind coding_session, research_session, learning_session, debugging_session, design_session, or defer.",
     "Only use defer when the block is mostly noise or lacks a coherent primary_work.",
