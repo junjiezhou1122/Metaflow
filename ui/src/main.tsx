@@ -370,9 +370,8 @@ function MemoryViewsPanel({ response, loading, status, onInspect }: { response: 
             setSelectedDetail(null);
           }}>
             <span>{viewFamilyLabel(tab.type)}</span>
-            <b>{tab.count}</b>
-            {tab.loaded > 0 && <em>{tab.loaded} loaded</em>}
-            {tab.aiCount > 0 && <em>{tab.aiCount} AI</em>}
+            <b>{compactNumber(tab.count)}</b>
+            <em>{tab.loaded > 0 ? `${tab.loaded} loaded${tab.aiCount > 0 ? ` · ${tab.aiCount} AI` : ""}` : viewTypePurpose(tab.type)}</em>
           </button>
         ))}
       </section>
@@ -700,6 +699,11 @@ function viewFamilyLabel(family: string) {
     answer: "AnswerView",
   };
   return labels[family] ?? family;
+}
+
+function compactNumber(value: number) {
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`;
+  return String(value);
 }
 
 function viewPageSize(type: string) {

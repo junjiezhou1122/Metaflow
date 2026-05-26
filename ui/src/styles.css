@@ -57,13 +57,13 @@
 .view-card-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;color:var(--faint);font-size:11px}
 .view-card-meta span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .view-card code{display:block;margin-top:6px;font-family:var(--mono);font-size:10px;color:#777;background:#f8f8f7;border:1px solid #ededeb;border-radius:5px;padding:4px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.view-type-tabs{max-width:none;margin:0 0 10px;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
-.view-type-tabs button{min-width:0;height:56px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#555;padding:7px 9px;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;gap:0 8px}
+.view-type-tabs{max-width:none;margin:0 0 12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px}
+.view-type-tabs button{min-width:0;min-height:64px;border:1px solid var(--line);border-radius:10px;background:#fff;color:#555;padding:9px 10px;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;gap:5px 8px;align-content:center;overflow:hidden}
 .view-type-tabs button:hover{background:#fbfbfa}
 .view-type-tabs button.active{background:#2f2f2f;border-color:#2f2f2f;color:#fff}
-.view-type-tabs span{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.view-type-tabs b{font-family:var(--mono);font-size:14px}
-.view-type-tabs em{grid-column:1/-1;color:var(--faint);font-size:11px;font-style:normal}
+.view-type-tabs span{font-size:12px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.view-type-tabs b{font-family:var(--mono);font-size:15px;line-height:1}
+.view-type-tabs em{grid-column:1/-1;color:var(--faint);font-size:11px;line-height:1.2;font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .view-type-tabs button.active em{color:#d2d2d2}
 .view-reader{max-width:none;margin:0 0 34px;display:block}
 .view-list-panel,.view-detail{min-width:0;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden}
