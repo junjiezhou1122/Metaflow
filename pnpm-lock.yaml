@@ -20,6 +20,9 @@ importers:
       '@info/core':
         specifier: workspace:*
         version: link:packages/core
+      '@info/programs':
+        specifier: workspace:*
+        version: link:packages/programs
       '@info/sensors':
         specifier: workspace:*
         version: link:packages/sensors
@@ -82,6 +85,15 @@ importers:
       zod:
         specifier: ^3.24.4
         version: 3.25.76
+
+  packages/programs:
+    dependencies:
+      '@info/capabilities':
+        specifier: workspace:*
+        version: link:../capabilities
+      '@info/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/sensors:
     dependencies:

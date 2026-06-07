@@ -47,7 +47,8 @@
     "@info/core": "workspace:*",
     "@info/sensors": "workspace:*",
     "@info/views": "workspace:*",
-    "@info/capabilities": "workspace:*"
+    "@info/capabilities": "workspace:*",
+    "@info/programs": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

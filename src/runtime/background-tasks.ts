@@ -1,9 +1,9 @@
 import { buildContextPack } from "@info/core";
 import { ContextStore } from "@info/core";
 import type { ContextView, StoredContextView } from "@info/core";
-import { createDefaultProgramRuntime } from "../programs/registry.js";
-import { signalFromObject } from "../programs/signals.js";
-import type { AutonomyProfile } from "../programs/types.js";
+import { createDefaultProgramRuntime } from "@info/programs/registry.js";
+import { signalFromObject } from "@info/programs/signals.js";
+import type { AutonomyProfile } from "@info/programs/types.js";
 
 const BACKGROUND_TASK_TYPES = ["task.background_research", "task.toolsmith_prototype"] as const;
 

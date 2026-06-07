@@ -1,6 +1,6 @@
 import { ContextStore } from "@info/core";
-import { createDefaultProgramRuntime, listDefaultPrograms } from "../src/programs/registry.js";
-import { signalFromRecord, signalFromView } from "../src/programs/signals.js";
+import { createDefaultProgramRuntime, listDefaultPrograms } from "@info/programs/registry.js";
+import { signalFromRecord, signalFromView } from "@info/programs/signals.js";
 
 const argv = process.argv.slice(2).filter((arg, index, all) => !(arg === "--" && index === 0));
 const command = argv[0] ?? "list";

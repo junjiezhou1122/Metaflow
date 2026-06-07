@@ -4,18 +4,18 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
-import { ProgramRuntime } from "../src/programs/runner.js";
-import { browserAmbientExploreCapability, browserAmbientProgram } from "../src/programs/builtins/browser-ambient.js";
-import { projectAmbientProgram } from "../src/programs/builtins/project-ambient.js";
-import { routingLearningProgram } from "../src/programs/builtins/routing-learning.js";
-import { feedbackLearningProgram } from "../src/programs/builtins/feedback-learning.js";
-import { dailySummaryProgram } from "../src/programs/builtins/daily-summary.js";
-import { researchShadowProgram } from "../src/programs/builtins/research-shadow.js";
-import { proactiveResearchProgram, toolsmithAmbientProgram, writingAmbientProgram } from "../src/programs/builtins/proactive-ambient.js";
-import { agentTaskSubmitCapability } from "../src/programs/capabilities/agent-task-submit.js";
-import { createDefaultProgramRuntime, listDefaultCapabilities } from "../src/programs/registry.js";
+import { ProgramRuntime } from "@info/programs/runner.js";
+import { browserAmbientExploreCapability, browserAmbientProgram } from "@info/programs/builtins/browser-ambient.js";
+import { projectAmbientProgram } from "@info/programs/builtins/project-ambient.js";
+import { routingLearningProgram } from "@info/programs/builtins/routing-learning.js";
+import { feedbackLearningProgram } from "@info/programs/builtins/feedback-learning.js";
+import { dailySummaryProgram } from "@info/programs/builtins/daily-summary.js";
+import { researchShadowProgram } from "@info/programs/builtins/research-shadow.js";
+import { proactiveResearchProgram, toolsmithAmbientProgram, writingAmbientProgram } from "@info/programs/builtins/proactive-ambient.js";
+import { agentTaskSubmitCapability } from "@info/programs/capabilities/agent-task-submit.js";
+import { createDefaultProgramRuntime, listDefaultCapabilities } from "@info/programs/registry.js";
 import { agentOutputFromDiagnostics } from "../src/programs/view-kinds.js";
-import type { Capability, Program } from "../src/programs/types.js";
+import type { Capability, Program } from "@info/programs/types.js";
 import type { ContextRecord } from "@info/core";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {

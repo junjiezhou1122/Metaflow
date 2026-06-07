@@ -116,7 +116,7 @@ test("Claude Code AgentTask adapter does not disable external runtime tools", ()
 });
 
 test("Browser Ambient does not call Claude directly outside the generic AgentTask boundary", () => {
-  const text = readFileSync("src/programs/builtins/browser-ambient.ts", "utf8");
+  const text = readFileSync("packages/programs/builtins/browser-ambient.ts", "utf8");
 
   assert.match(text, /capability\.agent_task\.submit/);
   assert.doesNotMatch(text, /runClaudeBrowserAmbient/);
@@ -126,18 +126,18 @@ test("Browser Ambient does not call Claude directly outside the generic AgentTas
 test("legacy direct Claude agent adapters are not kept as alternate runtimes", () => {
   assert.equal(existsSync("src/agents/claude-code.ts"), false);
   assert.equal(existsSync("src/agents/claude-acp.ts"), false);
-  assert.equal(existsSync("src/programs/capabilities/agent-claude-acp.ts"), false);
+  assert.equal(existsSync("packages/programs/capabilities/agent-claude-acp.ts"), false);
 });
 
 test("PDF GitHub and code skills are not core capability files", () => {
-  assert.equal(existsSync("src/programs/capabilities/pdf-extract-text.ts"), false);
-  assert.equal(existsSync("src/programs/capabilities/github-inspect-repo.ts"), false);
-  assert.equal(existsSync("src/programs/capabilities/github-inspect-issue.ts"), false);
-  assert.equal(existsSync("src/programs/capabilities/code-inspect-project.ts"), false);
+  assert.equal(existsSync("packages/programs/capabilities/pdf-extract-text.ts"), false);
+  assert.equal(existsSync("packages/programs/capabilities/github-inspect-repo.ts"), false);
+  assert.equal(existsSync("packages/programs/capabilities/github-inspect-issue.ts"), false);
+  assert.equal(existsSync("packages/programs/capabilities/code-inspect-project.ts"), false);
 });
 
 test("Browser Ambient metadata and docs prefer AgentTask output with deterministic fallback", () => {
-  const source = readFileSync("src/programs/builtins/browser-ambient.ts", "utf8");
+  const source = readFileSync("packages/programs/builtins/browser-ambient.ts", "utf8");
   const docs = [
     "docs/info-runtime-implementation-plan.md",
     "docs/info-ambient-runtime-architecture.md",
@@ -156,7 +156,7 @@ test("Browser Ambient metadata and docs prefer AgentTask output with determinist
 });
 
 test("Browser Ambient AgentTask stays analysis-only in local task prompt", () => {
-  const source = readFileSync("src/programs/builtins/browser-ambient.ts", "utf8");
+  const source = readFileSync("packages/programs/builtins/browser-ambient.ts", "utf8");
   const plan = readFileSync("docs/info-runtime-implementation-plan.md", "utf8");
 
   assert.match(source, /Do not modify files\. Do not return next_actions, tasks, tool plans, or file diffs\./);
