@@ -46,7 +46,8 @@
     "zod": "^3.24.4",
     "@info/core": "workspace:*",
     "@info/sensors": "workspace:*",
-    "@info/views": "workspace:*"
+    "@info/views": "workspace:*",
+    "@info/capabilities": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

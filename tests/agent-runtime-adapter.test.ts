@@ -10,7 +10,7 @@ import {
   parseAgentTaskOutput,
   httpMcpServer,
   type AgentRuntimeEvent,
-} from "../packages/adapters/agent-runtime/index.js";
+} from "@info/capabilities";
 
 test("MockAgentRuntimeAdapter returns structured agent task output", async () => {
   const adapter = new MockAgentRuntimeAdapter();

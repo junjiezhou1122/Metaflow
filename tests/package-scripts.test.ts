@@ -106,7 +106,7 @@ test("docs mark PDF GitHub code skills as plugin or explicit capabilities, not d
 });
 
 test("Claude Code AgentTask adapter does not disable external runtime tools", () => {
-  const text = readFileSync("packages/adapters/agent-runtime/cli-json-runtime.ts", "utf8");
+  const text = readFileSync("packages/capabilities/agent-runtime/cli-json-runtime.ts", "utf8");
 
   assert.doesNotMatch(text, /--tools",\s*""/);
   assert.match(text, /tools:\s*"default"/);
@@ -168,14 +168,14 @@ test("Browser Ambient AgentTask stays analysis-only in local task prompt", () =>
 });
 
 test("Claude Code AgentTask prompt has no future action-output exception", () => {
-  const text = readFileSync("packages/adapters/agent-runtime/acp/content.ts", "utf8");
+  const text = readFileSync("packages/capabilities/agent-runtime/acp/content.ts", "utf8");
 
   assert.match(text, /This adapter produces analysis\/evidence Views only\. Do not return next_actions, tasks, tool plans, file diffs, or diffs\./);
   assert.doesNotMatch(text, /future output contract explicitly asks/);
 });
 
 test("Claude Code AgentTask has no default wall-clock timeout for local tool enrichment", () => {
-  const text = readFileSync("packages/adapters/agent-runtime/cli-json-runtime.ts", "utf8");
+  const text = readFileSync("packages/capabilities/agent-runtime/cli-json-runtime.ts", "utf8");
 
   assert.match(text, /timeoutMs:\s*Number\(process\.env\.AGENT_TASK_CLAUDE_CODE_TIMEOUT_MS \?\? 0\)/);
   assert.match(text, /AGENT_TASK_CLAUDE_CODE_TIMEOUT_MS.*0/);

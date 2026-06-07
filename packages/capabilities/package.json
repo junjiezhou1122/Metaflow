@@ -1,0 +1,13 @@
+{
+  "name": "@info/capabilities",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./*.js": "./*.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.22.1"
+  }
+}

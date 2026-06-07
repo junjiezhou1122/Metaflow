@@ -1,4 +1,4 @@
-import { createDefaultAgentRuntimeAdapter, type AgentMcpServerConfig, type AgentTaskOutput, type AgentTaskOutputView } from "../../../packages/adapters/agent-runtime/index.js";
+import { createDefaultAgentRuntimeAdapter, type AgentMcpServerConfig, type AgentTaskOutput, type AgentTaskOutputView } from "@info/capabilities";
 import type { ContextRecord, ContextView, StoredContextRecord, StoredContextView } from "@info/core";
 import type { Capability, CapabilityRunResult, ContextSignal } from "../types.js";
 

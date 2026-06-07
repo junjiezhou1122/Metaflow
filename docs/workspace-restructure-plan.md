@@ -77,11 +77,20 @@ apps  ->  server  ->  runtime  ->  programs  ->  capabilities
 
 - **broker 反向依赖**：折叠进 `@info/core`。它对 `runtime/work-thread-view`、`programs/view-kinds`
   的依赖需切断——把 `workThreadViewToMarkdown`、`view-kinds` helper 下沉到 core，或让 broker 只接收已编译好的 markdown。
+  ✅ 已于阶段 1 完成（下沉到 core）。
 - **views/visual-frame → connectors**：摄取与编译分离。runtime 在 tick 时拉 frame，把数据喂给编译器，
-  编译器不再 import sensor。
-- **src/pipeline 断连**：content-classifier 并入 `@info/views`，由 runtime 统一调度。
-- **去重**：合并两份 language-learning；删 `packages/evaluators`；`worker.ts` 复用 `http-server` 路由表；
-  `visual-frame` regex 提取到单一 shared。
+  编译器不再 import sensor。⏸ **延后**：这是行为重构（改编译器签名），留到 9 个结构阶段全部完成后单独处理。
+  当前 visual-frame→sensor 已是 `@info/views` 声明的合法 `@info/sensors` 依赖，不再是隐藏跨目录 reach。
+- **src/pipeline 断连**：content-classifier 并入 `@info/views`（✅ 阶段 3a 结构已并入）。
+  ⏸ **延后**：由 runtime 统一调度（content-classifier 当前仍只由脚本触达）是行为变更，结构迁移完成后处理。
+- **去重**：✅ 阶段 3b 已去 visual-frame 6 个重复函数。
+  合并两份 language-learning（阶段 5）；删 `packages/evaluators`、`worker.ts` 复用路由表（阶段 7/8）。
+
+### 延后的行为重构（结构迁移全部完成后单独评估）
+
+1. visual-frame 摄取/编译分离（runtime 喂 frame 数据，编译器去掉 `@info/sensors` 依赖）。
+2. content-classifier（pipeline）并入 runtime tick 统一调度。
+3. `worker.ts` 复用 `http-server` 路由表，消除手抄子集。
 
 ## 3. 分阶段执行（每阶段独立验证 typecheck+test）
 
