@@ -44,7 +44,8 @@
     "acpx": "^0.10.0",
     "iii-sdk": "latest",
     "zod": "^3.24.4",
-    "@info/core": "workspace:*"
+    "@info/core": "workspace:*",
+    "@info/sensors": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

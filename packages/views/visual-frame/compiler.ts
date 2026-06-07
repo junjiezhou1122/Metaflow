@@ -1,4 +1,4 @@
-import { fetchScreenpipeFrameImage } from "../../connectors/screenpipe/index.js";
+import { fetchScreenpipeFrameImage } from "@info/sensors";
 import { loadDotEnv } from "@info/core";
 import { parseJsonObject, visionCompletion, type LlmOptions } from "@info/core";
 import { ContextStore } from "@info/core";

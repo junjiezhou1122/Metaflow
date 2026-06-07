@@ -1,5 +1,5 @@
 import { ContextStore } from "@info/core";
-import { fetchScreenpipeRecords } from "../packages/connectors/screenpipe/index.js";
+import { fetchScreenpipeRecords } from "@info/sensors";
 
 const store = new ContextStore();
 const screenpipeUrl = process.env.SCREENPIPE_URL ?? "http://localhost:3030";
