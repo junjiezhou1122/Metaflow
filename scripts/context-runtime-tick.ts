@@ -1,7 +1,7 @@
 import { ContextStore } from "@info/core";
 import type { RuntimeEvent, StoredContextRecord } from "@info/core";
 import { compileWorkThreadView, workThreadViewToMarkdown } from "@info/views/timeline/work-thread-view.js";
-import { BUILTIN_CONTEXT_TRIGGERS, decisionsToRuntimeEvents, evaluateTriggers } from "../src/runtime/triggers.js";
+import { BUILTIN_CONTEXT_TRIGGERS, decisionsToRuntimeEvents, evaluateTriggers } from "@info/runtime/triggers.js";
 
 const argv = process.argv.slice(2);
 const options: any = { write: true };

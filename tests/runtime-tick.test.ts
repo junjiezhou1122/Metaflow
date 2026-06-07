@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
-import { runtimeTick } from "../src/runtime/runtime.js";
+import { runtimeTick } from "@info/runtime/runtime.js";
 import { compileWorkThreadView } from "@info/views/timeline/work-thread-view.js";
 import { compileActivityTimeline } from "@info/views/timeline/activity-timeline.js";
 

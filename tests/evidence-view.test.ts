@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
 import { buildEvidenceView, compileEvidenceViews } from "@info/views/evidence/index.js";
-import { runtimeTick } from "../src/runtime/runtime.js";
+import { runtimeTick } from "@info/runtime/runtime.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-evidence-view-test-"));

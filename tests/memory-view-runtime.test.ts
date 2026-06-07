@@ -14,7 +14,7 @@ import {
   compileWorkflowViews,
   buildMemoryView,
 } from "../packages/views/_shared/memory-views.js";
-import { runtimeTick } from "../src/runtime/runtime.js";
+import { runtimeTick } from "@info/runtime/runtime.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-memory-view-runtime-test-"));

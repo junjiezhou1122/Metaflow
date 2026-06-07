@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
-import { collectViewProvenance } from "../src/runtime/view-provenance.js";
+import { collectViewProvenance } from "@info/runtime/view-provenance.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-view-provenance-test-"));

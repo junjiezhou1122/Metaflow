@@ -23,6 +23,9 @@ importers:
       '@info/programs':
         specifier: workspace:*
         version: link:packages/programs
+      '@info/runtime':
+        specifier: workspace:*
+        version: link:packages/runtime
       '@info/sensors':
         specifier: workspace:*
         version: link:packages/sensors
@@ -94,6 +97,21 @@ importers:
       '@info/core':
         specifier: workspace:*
         version: link:../core
+
+  packages/runtime:
+    dependencies:
+      '@info/core':
+        specifier: workspace:*
+        version: link:../core
+      '@info/programs':
+        specifier: workspace:*
+        version: link:../programs
+      '@info/sensors':
+        specifier: workspace:*
+        version: link:../sensors
+      '@info/views':
+        specifier: workspace:*
+        version: link:../views
 
   packages/sensors:
     dependencies:

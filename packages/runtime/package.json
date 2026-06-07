@@ -1,0 +1,16 @@
+{
+  "name": "@info/runtime",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./*.js": "./*.ts"
+  },
+  "dependencies": {
+    "@info/core": "workspace:*",
+    "@info/sensors": "workspace:*",
+    "@info/views": "workspace:*",
+    "@info/programs": "workspace:*"
+  }
+}
