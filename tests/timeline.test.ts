@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
-import { compileObservationTimeline } from "../src/runtime/timeline.js";
-import { compileActivityTimeline } from "../src/runtime/activity-timeline.js";
-import { compileProjectTimeline } from "../src/runtime/project-timeline.js";
+import { compileObservationTimeline } from "@info/views/timeline/timeline.js";
+import { compileActivityTimeline } from "@info/views/timeline/activity-timeline.js";
+import { compileProjectTimeline } from "@info/views/timeline/project-timeline.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-timeline-test-"));

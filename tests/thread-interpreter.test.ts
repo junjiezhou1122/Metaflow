@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
-import { interpretThread } from "../src/threads/thread-interpreter.js";
+import { interpretThread } from "@info/views/threads/thread-interpreter.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-thread-interpreter-test-"));

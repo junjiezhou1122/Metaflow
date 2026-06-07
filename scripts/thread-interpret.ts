@@ -1,4 +1,4 @@
-import { activeThreadId, interpretThread } from "../src/threads/thread-interpreter.js";
+import { activeThreadId, interpretThread } from "@info/views/threads/thread-interpreter.js";
 
 const argv = process.argv.slice(2).filter(arg => arg !== "--");
 const target = argv[0] ?? "active";

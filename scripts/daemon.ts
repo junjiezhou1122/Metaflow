@@ -1,7 +1,7 @@
 import { ContextStore } from "@info/core";
 import { runtimeStatus, runtimeTick, type RuntimeTickRequest } from "../src/runtime/runtime.js";
-import { compileObservationTimeline } from "../src/runtime/timeline.js";
-import { interpretThread, shouldInterpretThread } from "../src/threads/thread-interpreter.js";
+import { compileObservationTimeline } from "@info/views/timeline/timeline.js";
+import { interpretThread, shouldInterpretThread } from "@info/views/threads/thread-interpreter.js";
 
 function parseArgs(argv: string[]): RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number; timeline?: boolean; timeline_interval_seconds?: number; timeline_minutes?: number; timeline_limit?: number } {
   const req: RuntimeTickRequest & { interval_seconds?: number; once?: boolean; interpret?: boolean; interpret_force?: boolean; interpret_interval_seconds?: number; timeline?: boolean; timeline_interval_seconds?: number; timeline_minutes?: number; timeline_limit?: number } = {};

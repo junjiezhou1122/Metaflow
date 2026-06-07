@@ -8,12 +8,12 @@ import {
   AI_VISUAL_FRAME_VIEW_STRATEGY_ID,
   compileVisualFrameViews,
   type VisualFrameAnalyzer,
-} from "../packages/views/visual-frame/index.js";
+} from "@info/views/visual-frame/index.js";
 import {
   AI_ACTIVITY_BLOCK_VIEW_STRATEGY_ID,
   compileActivityBlockViews,
   type ActivityBlockAnalyzer,
-} from "../packages/views/activity-block/index.js";
+} from "@info/views/activity-block/index.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-visual-views-test-"));

@@ -18,8 +18,8 @@ test("default dev entrypoint uses the policy-aware HTTP server", () => {
 test("runtime no longer routes candidate WorkThreads through episode Records", () => {
   const files = [
     "src/runtime/runtime.ts",
-    "src/runtime/work-thread-view.ts",
-    "src/runtime/correlation.ts",
+    "packages/views/timeline/work-thread-view.ts",
+    "packages/views/timeline/correlation.ts",
   ];
 
   for (const file of files) {

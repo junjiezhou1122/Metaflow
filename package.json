@@ -45,7 +45,8 @@
     "iii-sdk": "latest",
     "zod": "^3.24.4",
     "@info/core": "workspace:*",
-    "@info/sensors": "workspace:*"
+    "@info/sensors": "workspace:*",
+    "@info/views": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

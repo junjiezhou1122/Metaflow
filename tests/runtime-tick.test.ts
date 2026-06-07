@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
 import { runtimeTick } from "../src/runtime/runtime.js";
-import { compileWorkThreadView } from "../src/runtime/work-thread-view.js";
-import { compileActivityTimeline } from "../src/runtime/activity-timeline.js";
+import { compileWorkThreadView } from "@info/views/timeline/work-thread-view.js";
+import { compileActivityTimeline } from "@info/views/timeline/activity-timeline.js";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-runtime-tick-test-"));

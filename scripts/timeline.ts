@@ -1,6 +1,6 @@
-import { compileActivityTimeline } from "../src/runtime/activity-timeline.js";
-import { compileObservationTimeline } from "../src/runtime/timeline.js";
-import { compileProjectTimeline } from "../src/runtime/project-timeline.js";
+import { compileActivityTimeline } from "@info/views/timeline/activity-timeline.js";
+import { compileObservationTimeline } from "@info/views/timeline/timeline.js";
+import { compileProjectTimeline } from "@info/views/timeline/project-timeline.js";
 
 const argv = process.argv.slice(2);
 const options: any = {};

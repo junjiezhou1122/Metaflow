@@ -10,12 +10,12 @@ import { enrichWithJinaReader, shouldAutoEnrichBrowserRecord } from "@info/senso
 import { fetchScreenpipeFrameImage, fetchScreenpipeRecords } from "@info/sensors";
 import { aiSessionRefToRecord, locateAiSessions } from "@info/sensors";
 import { publicRuntimeSettings, runtimeSettings, runtimeStatus, runtimeTick, saveRuntimeSettings } from "../runtime/runtime.js";
-import { compileObservationTimeline } from "../runtime/timeline.js";
-import { compileActivityTimeline } from "../runtime/activity-timeline.js";
-import { compileProjectTimeline } from "../runtime/project-timeline.js";
-import { activeThreadId, interpretThread } from "../threads/thread-interpreter.js";
-import { persistThreadEvidenceMap } from "../threads/thread-evidence.js";
-import { mergeThreads, splitThread } from "../threads/thread-ops.js";
+import { compileObservationTimeline } from "@info/views/timeline/timeline.js";
+import { compileActivityTimeline } from "@info/views/timeline/activity-timeline.js";
+import { compileProjectTimeline } from "@info/views/timeline/project-timeline.js";
+import { activeThreadId, interpretThread } from "@info/views/threads/thread-interpreter.js";
+import { persistThreadEvidenceMap } from "@info/views/threads/thread-evidence.js";
+import { mergeThreads, splitThread } from "@info/views/threads/thread-ops.js";
 import { buildContextPack, filterEventsForPlugin, filterRecordsForPlugin, filterViewsForPlugin, surfacingPreferencesForPlugin } from "@info/core";
 import { listPluginManifests, readPluginManifest } from "@info/core";
 import { runLanguageLearningPlugin } from "@info/core";

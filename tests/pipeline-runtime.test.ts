@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextStore } from "@info/core";
-import { runPipelineTick } from "../src/pipeline/runner.js";
+import { runPipelineTick } from "@info/views/pipeline/runner.js";
 import type { ContextRecord } from "@info/core";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {

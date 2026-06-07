@@ -1,4 +1,4 @@
-import { runPipelineTick } from "../src/pipeline/runner.js";
+import { runPipelineTick } from "@info/views/pipeline/runner.js";
 
 function flag(name: string): boolean {
   return process.argv.includes(name);

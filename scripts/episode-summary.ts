@@ -1,5 +1,5 @@
 import { ContextStore } from "@info/core";
-import { compileProjectWorkEpisodeForThread } from "../src/runtime/episode-summary.js";
+import { compileProjectWorkEpisodeForThread } from "@info/views/timeline/episode-summary.js";
 
 const store = new ContextStore();
 const argv = process.argv.slice(2).filter(arg => arg !== "--");
