@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { parseJsonObject, visionCompletion, type LlmOptions } from "../../../src/core/llm.js";
-import type { ContextView, StoredContextView } from "../../../src/core/types.js";
+import { parseJsonObject, visionCompletion, type LlmOptions } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
 
 export type VisualFrameAnalyzerResponse = {
   ok: boolean;

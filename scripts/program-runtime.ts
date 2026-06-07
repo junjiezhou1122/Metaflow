@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { createDefaultProgramRuntime, listDefaultPrograms } from "../src/programs/registry.js";
 import { signalFromRecord, signalFromView } from "../src/programs/signals.js";
 

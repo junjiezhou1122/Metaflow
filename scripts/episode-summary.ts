@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { compileProjectWorkEpisodeForThread } from "../src/runtime/episode-summary.js";
 
 const store = new ContextStore();

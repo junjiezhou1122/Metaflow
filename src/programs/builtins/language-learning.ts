@@ -1,6 +1,6 @@
-import { runLanguageLearningPlugin } from "../../plugins/language-learning.js";
+import { runLanguageLearningPlugin } from "@info/core";
 import type { AttentionDecision, ContextSignal, Program, ProgramRunResult } from "../types.js";
-import type { ContextStore } from "../../core/store.js";
+import type { ContextStore } from "@info/core";
 
 const LANGUAGE_SCHEMAS = new Set([
   "observation.browser_page_snapshot",

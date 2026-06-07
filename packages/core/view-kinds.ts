@@ -1,4 +1,4 @@
-import type { StoredContextView } from "../core/types.js";
+import type { StoredContextView } from "./types.js";
 
 export type AgentOutputContent = {
   summary?: string;

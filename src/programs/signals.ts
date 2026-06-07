@@ -1,5 +1,5 @@
 import type { ContextSignal } from "./types.js";
-import type { StoredContextRecord, StoredContextView } from "../core/types.js";
+import type { StoredContextRecord, StoredContextView } from "@info/core";
 
 const STOPWORDS = new Set([
   "the", "and", "for", "that", "this", "with", "from", "into", "your", "you", "are", "was", "were", "will", "would", "could", "should", "have", "has", "had", "not", "but", "about", "what", "when", "where", "which", "there", "their", "then", "than", "them", "they", "our", "out", "all", "can", "just", "more", "some", "like", "use", "used", "using", "how", "why", "http", "https", "localhost", "function", "const", "return", "import", "export", "type", "interface", "true", "false", "null", "undefined",

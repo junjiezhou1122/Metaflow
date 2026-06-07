@@ -1,11 +1,11 @@
-import { ContextStore } from "../core/store.js";
-import { workThreadViewToMarkdown } from "../runtime/work-thread-view.js";
-import { mergePluginQuery, readPluginManifest } from "../plugins/registry.js";
-import { activeContextView } from "../core/view-lifecycle.js";
-import { viewMatchesQuery } from "../core/view-query.js";
-import { rankViewsForSurfacing, surfacingPreferencesFromMemoryViews } from "../core/view-surfacing.js";
-import type { ContextBrokerPack, ContextQuery, PluginManifest, RuntimeEvent, StoredContextRecord, StoredContextView, StoredRuntimeEvent } from "../core/types.js";
-import { analysisTextFromView, keyPointsFromView } from "../programs/view-kinds.js";
+import { ContextStore } from "./store.js";
+import { workThreadViewToMarkdown } from "./work-thread-view-markdown.js";
+import { mergePluginQuery, readPluginManifest } from "./plugin-registry.js";
+import { activeContextView } from "./view-lifecycle.js";
+import { viewMatchesQuery } from "./view-query.js";
+import { rankViewsForSurfacing, surfacingPreferencesFromMemoryViews } from "./view-surfacing.js";
+import type { ContextBrokerPack, ContextQuery, PluginManifest, RuntimeEvent, StoredContextRecord, StoredContextView, StoredRuntimeEvent } from "./types.js";
+import { analysisTextFromView, keyPointsFromView } from "./view-kinds.js";
 
 export function buildContextPack(query: ContextQuery, store = new ContextStore()): ContextBrokerPack {
   const plugin = query.plugin_id ? readPluginManifest(query.plugin_id) : undefined;

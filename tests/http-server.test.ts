@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { createContextHttpHandler } from "../src/server/http-server.js";
 
 async function withStore(fn: (store: ContextStore) => Promise<void>) {

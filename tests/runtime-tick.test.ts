@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { runtimeTick } from "../src/runtime/runtime.js";
 import { compileWorkThreadView } from "../src/runtime/work-thread-view.js";
 import { compileActivityTimeline } from "../src/runtime/activity-timeline.js";

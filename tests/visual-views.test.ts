@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import {
   AI_VISUAL_FRAME_VIEW_STRATEGY_ID,
   compileVisualFrameViews,

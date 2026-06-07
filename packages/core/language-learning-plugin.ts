@@ -1,6 +1,6 @@
-import { ContextStore } from "../core/store.js";
-import { buildContextPack } from "../broker/context-broker.js";
-import type { ContextQuery, ContextView, StoredContextRecord, StoredContextView } from "../core/types.js";
+import { ContextStore } from "./store.js";
+import { buildContextPack } from "./broker.js";
+import type { ContextQuery, ContextView, StoredContextRecord, StoredContextView } from "./types.js";
 
 export type LanguageLearningRunOptions = {
   days?: number;

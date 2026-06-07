@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "../packages/connectors/ai-sessions/index.js";
 
 const args = process.argv.slice(2).filter(arg => arg !== "--");

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ContextView, StoredContextRecord } from "../core/types.js";
+import type { ContextView, StoredContextRecord } from "@info/core";
 
 export const CONTENT_CLASSIFIER_ID = "builtin.content-classifier";
 export const CONTENT_CLASSIFIER_VERSION = "0.1.0";

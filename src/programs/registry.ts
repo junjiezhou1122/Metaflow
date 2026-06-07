@@ -1,5 +1,5 @@
 import { ProgramRuntime } from "./runner.js";
-import type { ContextStore } from "../core/store.js";
+import type { ContextStore } from "@info/core";
 import { languageLearningProgram } from "./builtins/language-learning.js";
 import { browserAmbientExploreCapability, browserAmbientProgram } from "./builtins/browser-ambient.js";
 import { projectAmbientProgram } from "./builtins/project-ambient.js";

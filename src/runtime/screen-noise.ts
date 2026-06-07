@@ -1,4 +1,4 @@
-import type { StoredContextRecord } from "../core/types.js";
+import type { StoredContextRecord } from "@info/core";
 
 export function screenNoiseLevel(record: StoredContextRecord): "none" | "low" | "high" {
   if (record.source.type !== "screenpipe" && !record.schema.name.includes("screenpipe")) return "none";

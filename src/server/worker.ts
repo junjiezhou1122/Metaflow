@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { registerWorker } from "iii-sdk";
-import { ContextStore } from "../core/store.js";
+import { ContextStore } from "@info/core";
 import { createContextHttpHandler } from "./http-server.js";
 
 const engineUrl = process.env.III_ENGINE_URL ?? "ws://localhost:49134";

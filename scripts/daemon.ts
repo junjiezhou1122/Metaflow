@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { runtimeStatus, runtimeTick, type RuntimeTickRequest } from "../src/runtime/runtime.js";
 import { compileObservationTimeline } from "../src/runtime/timeline.js";
 import { interpretThread, shouldInterpretThread } from "../src/threads/thread-interpreter.js";

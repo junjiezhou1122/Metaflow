@@ -1,6 +1,6 @@
-import type { ContextRecord, ContextView, RuntimeEvent, StoredContextRecord, StoredContextView } from "../core/types.js";
-import type { ContextBrokerPack, ContextQuery } from "../core/types.js";
-import type { ContextStore } from "../core/store.js";
+import type { ContextRecord, ContextView, RuntimeEvent, StoredContextRecord, StoredContextView } from "@info/core";
+import type { ContextBrokerPack, ContextQuery } from "@info/core";
+import type { ContextStore } from "@info/core";
 
 export type SpeedTier = "reflex" | "glance" | "think" | "work" | "background";
 

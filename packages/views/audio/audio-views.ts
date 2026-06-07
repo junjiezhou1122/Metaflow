@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { chatCompletion, parseJsonObject, type LlmOptions } from "../../../src/core/llm.js";
-import { ContextStore } from "../../../src/core/store.js";
-import type { ContextView, StoredContextView } from "../../../src/core/types.js";
+import { chatCompletion, parseJsonObject, type LlmOptions } from "@info/core";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
 
 export const AI_AUDIO_VIEW_STRATEGY_ID = "ai.audio.semantic";
 

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 
 test("correlate-recent --write persists WorkThreads and work_thread Views without candidate episode Records", () => {
   const dir = mkdtempSync(join(tmpdir(), "info-correlate-script-test-"));

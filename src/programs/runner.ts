@@ -1,7 +1,7 @@
-import { ContextStore } from "../core/store.js";
-import type { ContextRecord, ContextView, RuntimeEvent, StoredContextRecord, StoredContextView } from "../core/types.js";
-import { activeContextView } from "../core/view-lifecycle.js";
-import { buildContextPack, filterViewsForPlugin } from "../broker/context-broker.js";
+import { ContextStore } from "@info/core";
+import type { ContextRecord, ContextView, RuntimeEvent, StoredContextRecord, StoredContextView } from "@info/core";
+import { activeContextView } from "@info/core";
+import { buildContextPack, filterViewsForPlugin } from "@info/core";
 import { signalFromObject } from "./signals.js";
 import type { AttentionInfluence, AutonomyProfile, Capability, CapabilityRunResult, ContextSignal, ContextWriteSet, Program, ProgramRunResult, SpeedTier } from "./types.js";
 

@@ -1,7 +1,7 @@
-import type { ContextBrokerPack, ContextQuery, ContextRecord, ContextView, StoredContextRecord, StoredContextView } from "../../core/types.js";
-import { activeContextView } from "../../core/view-lifecycle.js";
+import type { ContextBrokerPack, ContextQuery, ContextRecord, ContextView, StoredContextRecord, StoredContextView } from "@info/core";
+import { activeContextView } from "@info/core";
 import type { AttentionDecision, ContextSignal, Program, ProgramRunResult } from "../types.js";
-import { analysisTextFromView, keyPointsFromView } from "../view-kinds.js";
+import { analysisTextFromView, keyPointsFromView } from "@info/core";
 
 const AGENT_TASK_CAPABILITY = "capability.agent_task.submit";
 const WRITING_SCAFFOLD_ENV = "WRITING_AMBIENT_ENABLE_SCAFFOLD";

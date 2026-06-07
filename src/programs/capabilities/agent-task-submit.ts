@@ -1,5 +1,5 @@
 import { createDefaultAgentRuntimeAdapter, type AgentMcpServerConfig, type AgentTaskOutput, type AgentTaskOutputView } from "../../../packages/adapters/agent-runtime/index.js";
-import type { ContextRecord, ContextView, StoredContextRecord, StoredContextView } from "../../core/types.js";
+import type { ContextRecord, ContextView, StoredContextRecord, StoredContextView } from "@info/core";
 import type { Capability, CapabilityRunResult, ContextSignal } from "../types.js";
 
 export type AgentTaskPayload = {

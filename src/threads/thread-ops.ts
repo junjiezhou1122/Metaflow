@@ -1,5 +1,5 @@
-import { ContextStore } from "../core/store.js";
-import type { StoredWorkThread, WorkThread } from "../core/types.js";
+import { ContextStore } from "@info/core";
+import type { StoredWorkThread, WorkThread } from "@info/core";
 import { persistThreadEvidenceMap } from "./thread-evidence.js";
 
 export function mergeThreads(targetId: string, sourceIds: string[], options: { title?: string; write?: boolean } = {}, store = new ContextStore()) {

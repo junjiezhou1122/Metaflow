@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { ProgramRuntime } from "../src/programs/runner.js";
 import { browserAmbientExploreCapability, browserAmbientProgram } from "../src/programs/builtins/browser-ambient.js";
 import { projectAmbientProgram } from "../src/programs/builtins/project-ambient.js";
@@ -16,7 +16,7 @@ import { agentTaskSubmitCapability } from "../src/programs/capabilities/agent-ta
 import { createDefaultProgramRuntime, listDefaultCapabilities } from "../src/programs/registry.js";
 import { agentOutputFromDiagnostics } from "../src/programs/view-kinds.js";
 import type { Capability, Program } from "../src/programs/types.js";
-import type { ContextRecord } from "../src/core/types.js";
+import type { ContextRecord } from "@info/core";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-runtime-test-"));

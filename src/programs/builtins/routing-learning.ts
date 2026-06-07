@@ -1,4 +1,4 @@
-import type { ContextView, StoredContextRecord, StoredContextView } from "../../core/types.js";
+import type { ContextView, StoredContextRecord, StoredContextView } from "@info/core";
 import type { AttentionDecision, ContextSignal, Program, ProgramRunResult } from "../types.js";
 
 export const routingLearningProgram: Program = {

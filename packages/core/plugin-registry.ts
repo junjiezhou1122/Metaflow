@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ContextQuery, PluginManifest } from "../core/types.js";
+import type { ContextQuery, PluginManifest } from "./types.js";
 
 const PLUGIN_DIR = "plugins";
 

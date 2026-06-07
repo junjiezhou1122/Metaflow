@@ -1,4 +1,4 @@
-import type { ContextRecord, StoredContextRecord } from "../core/types.js";
+import type { ContextRecord, StoredContextRecord } from "@info/core";
 import { isHighScreenNoise, screenNoiseLevel } from "./screen-noise.js";
 
 export type RecordFeatures = {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rankViewsForSurfacing, surfacingPreferencesFromMemoryViews } from "../src/core/view-surfacing.js";
-import type { StoredContextView } from "../src/core/types.js";
+import { rankViewsForSurfacing, surfacingPreferencesFromMemoryViews } from "@info/core";
+import type { StoredContextView } from "@info/core";
 
 function memory(input: Partial<StoredContextView> & { id: string; content?: Record<string, unknown> }): StoredContextView {
   const now = "2026-05-25T00:00:00.000Z";

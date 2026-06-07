@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ContextStore } from "../core/store.js";
-import type { ContextView, StoredContextView } from "../core/types.js";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
 
 const TOOLSMITH_SOURCE_TYPES = ["draft.tool_prototype", "task.toolsmith_prototype", "opportunity.tool"] as const;
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { ContextStore } from "../../../src/core/store.js";
-import type { ContextView, StoredContextView } from "../../../src/core/types.js";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
 
 export const ACTIVITY_VIEW_COMPILER_ID = "builtin.activity-view";
 export const PROPOSAL_VIEW_COMPILER_ID = "builtin.proposal-view";

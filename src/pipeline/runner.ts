@@ -1,4 +1,4 @@
-import { ContextStore } from "../core/store.js";
+import { ContextStore } from "@info/core";
 import { classifyCodingContext, CONTENT_CLASSIFIER_ID } from "./content-classifier.js";
 
 export type PipelineTickOptions = {

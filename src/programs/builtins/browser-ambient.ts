@@ -1,9 +1,9 @@
 import type { AttentionDecision, Capability, ContextSignal, Program, ProgramRunResult } from "../types.js";
-import type { ContextStore } from "../../core/store.js";
-import type { ContextBrokerPack, ContextQuery, ContextView, StoredContextRecord, StoredContextView } from "../../core/types.js";
-import { activeContextView } from "../../core/view-lifecycle.js";
-import { filterRecordsForPlugin } from "../../broker/context-broker.js";
-import { readPluginManifest } from "../../plugins/registry.js";
+import type { ContextStore } from "@info/core";
+import type { ContextBrokerPack, ContextQuery, ContextView, StoredContextRecord, StoredContextView } from "@info/core";
+import { activeContextView } from "@info/core";
+import { filterRecordsForPlugin } from "@info/core";
+import { readPluginManifest } from "@info/core";
 
 const BROWSER_SCHEMAS = new Set([
   "observation.browser_page_saved",

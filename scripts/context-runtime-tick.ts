@@ -1,5 +1,5 @@
-import { ContextStore } from "../src/core/store.js";
-import type { RuntimeEvent, StoredContextRecord } from "../src/core/types.js";
+import { ContextStore } from "@info/core";
+import type { RuntimeEvent, StoredContextRecord } from "@info/core";
 import { compileWorkThreadView, workThreadViewToMarkdown } from "../src/runtime/work-thread-view.js";
 import { BUILTIN_CONTEXT_TRIGGERS, decisionsToRuntimeEvents, evaluateTriggers } from "../src/runtime/triggers.js";
 

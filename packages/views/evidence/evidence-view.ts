@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { ContextStore } from "../../../src/core/store.js";
-import type { ContextView, StoredContextRecord, StoredContextView } from "../../../src/core/types.js";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextRecord, StoredContextView } from "@info/core";
 
 export const EVIDENCE_VIEW_COMPILER_ID = "builtin.evidence-view";
 

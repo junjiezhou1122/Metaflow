@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { persistThreadEvidenceMap } from "../src/threads/thread-evidence.js";
 import { mergeThreads, splitThread } from "../src/threads/thread-ops.js";
 

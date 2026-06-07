@@ -1,6 +1,6 @@
-import type { ContextStore } from "../core/store.js";
-import type { StoredContextRecord, StoredContextView } from "../core/types.js";
-import { activeContextView } from "../core/view-lifecycle.js";
+import type { ContextStore } from "@info/core";
+import type { StoredContextRecord, StoredContextView } from "@info/core";
+import { activeContextView } from "@info/core";
 
 export type ViewProvenanceResult = {
   ok: boolean;

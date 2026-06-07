@@ -1,4 +1,4 @@
-import type { ContextRecord, RuntimeEvent, StoredContextRecord, StoredRuntimeEvent } from "../core/types.js";
+import type { ContextRecord, RuntimeEvent, StoredContextRecord, StoredRuntimeEvent } from "@info/core";
 
 export type TriggerType = "event" | "schedule" | "manual" | "state";
 

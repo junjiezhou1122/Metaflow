@@ -1,4 +1,4 @@
-import type { ContextRecord, StoredContextRecord } from "../../../src/core/types.js";
+import type { ContextRecord, StoredContextRecord } from "@info/core";
 
 export type ScreenpipePackOptions = {
   enabled?: boolean;

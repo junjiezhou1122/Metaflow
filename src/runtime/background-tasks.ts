@@ -1,6 +1,6 @@
-import { buildContextPack } from "../broker/context-broker.js";
-import { ContextStore } from "../core/store.js";
-import type { ContextView, StoredContextView } from "../core/types.js";
+import { buildContextPack } from "@info/core";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
 import { createDefaultProgramRuntime } from "../programs/registry.js";
 import { signalFromObject } from "../programs/signals.js";
 import type { AutonomyProfile } from "../programs/types.js";

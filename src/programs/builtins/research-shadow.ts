@@ -1,7 +1,7 @@
-import type { ContextView, StoredContextView } from "../../core/types.js";
-import { activeContextView } from "../../core/view-lifecycle.js";
+import type { ContextView, StoredContextView } from "@info/core";
+import { activeContextView } from "@info/core";
 import type { AttentionDecision, ContextSignal, Program, ProgramRunResult } from "../types.js";
-import { analysisTextFromView, isGenericAgentAnalysisView, keyPointsFromView } from "../view-kinds.js";
+import { analysisTextFromView, isGenericAgentAnalysisView, keyPointsFromView } from "@info/core";
 
 const INPUT_VIEWS = new Set(["analysis.browser_page", "analysis.repo", "extraction.pdf_text"]);
 

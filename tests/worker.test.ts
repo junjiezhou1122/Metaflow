@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { registerContextWorkerFunctions } from "../src/server/worker.js";
 
 type RegisteredFunction = (input: unknown) => Promise<{ status_code: number; body: any }>;

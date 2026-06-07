@@ -1,8 +1,8 @@
 import { fetchScreenpipeFrameImage } from "../../connectors/screenpipe/index.js";
-import { loadDotEnv } from "../../../src/core/env.js";
-import { parseJsonObject, visionCompletion, type LlmOptions } from "../../../src/core/llm.js";
-import { ContextStore } from "../../../src/core/store.js";
-import type { ContextView, StoredContextView } from "../../../src/core/types.js";
+import { loadDotEnv } from "@info/core";
+import { parseJsonObject, visionCompletion, type LlmOptions } from "@info/core";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
 import {
   arrayOfStrings,
   clamp,

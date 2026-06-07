@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildContextPack } from "../src/broker/context-broker.js";
-import { ContextStore } from "../src/core/store.js";
-import type { ContextRecord, ContextView } from "../src/core/types.js";
+import { buildContextPack } from "@info/core";
+import { ContextStore } from "@info/core";
+import type { ContextRecord, ContextView } from "@info/core";
 
 function withStore(fn: (store: ContextStore) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "info-broker-test-"));

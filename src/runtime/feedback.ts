@@ -1,5 +1,5 @@
-import type { ContextRecord, StoredContextRecord } from "../core/types.js";
-import { ContextStore } from "../core/store.js";
+import type { ContextRecord, StoredContextRecord } from "@info/core";
+import { ContextStore } from "@info/core";
 
 export type FeedbackInput = {
   type: string;

@@ -1,6 +1,6 @@
-import { ContextStore } from "../core/store.js";
-import { filterEventsForPlugin } from "../broker/context-broker.js";
-import type { ContextView, RuntimeEvent, StoredContextRecord, StoredContextView, StoredRuntimeEvent } from "../core/types.js";
+import { ContextStore } from "@info/core";
+import { filterEventsForPlugin } from "@info/core";
+import type { ContextView, RuntimeEvent, StoredContextRecord, StoredContextView, StoredRuntimeEvent } from "@info/core";
 import { screenNoiseLevel } from "./screen-noise.js";
 
 export const ACTIVITY_TIMELINE_COMPILER_ID = "builtin.activity-timeline";

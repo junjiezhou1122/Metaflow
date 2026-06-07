@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterViewsByQuery, viewMatchesQuery } from "../src/core/view-query.js";
+import { filterViewsByQuery, viewMatchesQuery } from "@info/core";
 
 const agentOutputView = {
   id: "analysis:agent-output",

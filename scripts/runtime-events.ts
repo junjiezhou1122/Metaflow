@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 
 const argv = process.argv.slice(2);
 const options: any = {};

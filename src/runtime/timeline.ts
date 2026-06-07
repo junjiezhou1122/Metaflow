@@ -1,5 +1,5 @@
-import { ContextStore } from "../core/store.js";
-import type { ContextView, StoredContextRecord, StoredContextView } from "../core/types.js";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextRecord, StoredContextView } from "@info/core";
 
 export type CompileObservationTimelineOptions = {
   minutes?: number;

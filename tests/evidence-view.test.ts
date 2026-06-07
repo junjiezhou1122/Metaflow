@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { buildEvidenceView, compileEvidenceViews } from "../packages/views/evidence/index.js";
 import { runtimeTick } from "../src/runtime/runtime.js";
 

@@ -1,8 +1,8 @@
 import { basename, resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { ContextStore } from "../core/store.js";
-import { filterViewsForPlugin } from "../broker/context-broker.js";
-import type { ContextView, StoredContextRecord, StoredContextView, StoredRuntimeEvent } from "../core/types.js";
+import { ContextStore } from "@info/core";
+import { filterViewsForPlugin } from "@info/core";
+import type { ContextView, StoredContextRecord, StoredContextView, StoredRuntimeEvent } from "@info/core";
 import { compileActivityTimeline, type ActivityTimelineBucket, type ActivityTimelineItem } from "./activity-timeline.js";
 import { extractFeatures } from "./correlation.js";
 

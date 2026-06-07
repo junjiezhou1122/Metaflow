@@ -1,6 +1,6 @@
-import { ContextStore } from "../../../src/core/store.js";
-import type { ContextView, StoredContextView } from "../../../src/core/types.js";
-import type { LlmOptions } from "../../../src/core/llm.js";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextView } from "@info/core";
+import type { LlmOptions } from "@info/core";
 import {
   analyzeActivityBlockWithText,
   clamp,

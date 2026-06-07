@@ -1,5 +1,5 @@
-import { ContextStore } from "../core/store.js";
-import type { ContextView, StoredContextRecord, StoredWorkThread } from "../core/types.js";
+import { ContextStore } from "@info/core";
+import type { ContextView, StoredContextRecord, StoredWorkThread } from "@info/core";
 
 export type ProjectWorkEpisodeSummary = {
   start_time: string;

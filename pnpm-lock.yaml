@@ -14,9 +14,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: ^0.22.1
         version: 0.22.1(zod@3.25.76)
-      '@info/probe':
+      '@info/core':
         specifier: workspace:*
-        version: link:packages/_probe
+        version: link:packages/core
       acpx:
         specifier: ^0.10.0
         version: 0.10.0
@@ -36,8 +36,6 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
-
-  packages/_probe: {}
 
   packages/browser-extension:
     dependencies:
@@ -63,6 +61,12 @@ importers:
       '@types/react-dom':
         specifier: latest
         version: 19.2.3(@types/react@19.2.17)
+
+  packages/core:
+    dependencies:
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
 
   packages/ui:
     dependencies:

@@ -1,4 +1,4 @@
-import { ContextStore } from "../src/core/store.js";
+import { ContextStore } from "@info/core";
 import { fetchScreenpipeRecords } from "../packages/connectors/screenpipe/index.js";
 
 const store = new ContextStore();

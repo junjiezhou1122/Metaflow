@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import type { StoredContextRecord } from "../../../src/core/types.js";
+import type { StoredContextRecord } from "@info/core";
 
 export type AiSessionTool = "codex" | "claude-code";
 
