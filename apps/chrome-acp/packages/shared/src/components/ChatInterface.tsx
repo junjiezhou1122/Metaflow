@@ -168,6 +168,13 @@ type ThreadEntry = UserMessageEntry | AssistantMessageEntry | ToolCallEntry;
 
 interface ChatInterfaceProps {
   client: ACPClient;
+  // Optional hook called before each prompt send. The returned string
+  // (if any) is prepended to the user's text as a system-style context
+  // block. Used by the chrome extension to inject the active tab's url,
+  // title, and a short text excerpt so the agent can answer
+  // "what is on this page" without first having to call browser_tabs.
+  // Web client does not pass this; behavior is unchanged.
+  prependContext?: () => Promise<string | null>;
 }
 
 // Helper to format tool call content for display
@@ -230,7 +237,7 @@ function findToolCallIndex(entries: ThreadEntry[], toolCallId: string): number {
 // ChatInterface Component
 // =============================================================================
 
-export function ChatInterface({ client }: ChatInterfaceProps) {
+export function ChatInterface({ client, prependContext }: ChatInterfaceProps) {
   // Flat list of entries (like Zed's entries: Vec<AgentThreadEntry>)
   const [entries, setEntries] = useState<ThreadEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -611,8 +618,37 @@ export function ChatInterface({ client }: ChatInterfaceProps) {
     // Reference: Zed's contents() method builds text chunks and image chunks
     const contentBlocks: ContentBlock[] = [];
 
+    // Optionally prepend browser context (active tab url/title/text excerpt)
+    // before the user's text. Failures are silent — the user message
+    // still goes through unmodified.
+    let displayContent = text;
+    if (prependContext) {
+      try {
+        const ctx = await prependContext();
+        if (ctx) {
+          const combined = `${ctx}\n\n---\n\nUser question: ${text}`;
+          // Replace the first text block; if the user typed nothing but
+          // a context block is available, we still need a text block so
+          // the agent receives something.
+          if (contentBlocks.length === 0) {
+            contentBlocks.push({ type: "text", text: combined });
+          } else {
+            const first = contentBlocks[0];
+            if (first && first.type === "text") {
+              contentBlocks[0] = { type: "text", text: combined };
+            } else {
+              contentBlocks.unshift({ type: "text", text: combined });
+            }
+          }
+          displayContent = combined;
+        }
+      } catch (error) {
+        console.warn("[ChatInterface] prependContext hook failed:", error);
+      }
+    }
+
     // Add text content if present
-    if (text) {
+    if (text && contentBlocks.length === 0) {
       contentBlocks.push({ type: "text", text });
     }
 
@@ -715,7 +751,7 @@ export function ChatInterface({ client }: ChatInterfaceProps) {
     const userEntry: UserMessageEntry = {
       type: "user_message",
       id: `user-${Date.now()}`,
-      content: text,
+      content: displayContent,
       images: userImages.length > 0 ? userImages : undefined,
     };
     setEntries((prev) => [...prev, userEntry]);

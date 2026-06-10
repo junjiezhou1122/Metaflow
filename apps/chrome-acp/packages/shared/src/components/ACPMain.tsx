@@ -9,6 +9,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
 interface ACPMainProps {
   client: ACPClient;
+  // Forwarded to ChatInterface. The chrome extension uses it to inject
+  // the active tab's url/title/text excerpt so the agent can answer
+  // "what is on this page" without first calling browser_tabs.
+  prependContext?: () => Promise<string | null>;
 }
 
 const TAB_ORDER = ["chat", "history", "files"] as const;
@@ -19,7 +23,7 @@ type TabValue = (typeof TAB_ORDER)[number];
  * Reference: Zed's AgentPanel with ThreadHistory integration
  * This component should be rendered after successful connection.
  */
-export function ACPMain({ client }: ACPMainProps) {
+export function ACPMain({ client, prependContext }: ACPMainProps) {
   const [activeTab, setActiveTab] = useState<TabValue>("chat");
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
@@ -120,7 +124,7 @@ export function ACPMain({ client }: ACPMainProps) {
         onTouchEnd={handleTouchEnd}
       >
         <TabsContent value="chat" forceMount className="w-full h-full m-0 max-w-2xl mx-auto">
-          <ChatInterface client={client} />
+          <ChatInterface client={client} prependContext={prependContext} />
         </TabsContent>
 
         <TabsContent value="history" forceMount className="flex flex-col h-full m-0 max-w-2xl mx-auto w-full">
