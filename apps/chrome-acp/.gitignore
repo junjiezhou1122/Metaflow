@@ -1,0 +1,39 @@
+# dependencies
+node_modules
+
+# output
+dist
+out
+*.tgz
+packages/proxy-server/public/
+
+# Chrome extension auto-generated metadata
+_metadata
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# dotenv
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IDEs
+.idea
+.vscode/
+
+# OS
+.DS_Store
