@@ -48,12 +48,14 @@ test("docs describe current View-based runtime outputs", () => {
   }
 });
 
-test("README documents browser extension as sensor View reader and AgentTask client", () => {
+test("README documents Chrome ACP extension as sensor View reader and AgentTask client", () => {
   const readme = readFileSync("README.md", "utf8");
 
+  assert.match(readme, /apps\/chrome-acp\/packages\/chrome-extension/);
   assert.match(readme, /Save & Analyze 写入 `\/context\/ingest\?process=true&cascade_views=true`/);
   assert.match(readme, /Ask Claude Code.*`\/agent-tasks\?cascade_views=true`/);
   assert.match(readme, /实时检索所有 active Views/);
+  assert.match(readme, /archive\/browser-extension-legacy/);
 });
 
 test("docs do not present direct Claude ACP as the primary agent boundary", () => {

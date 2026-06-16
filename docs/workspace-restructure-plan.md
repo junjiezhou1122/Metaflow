@@ -39,7 +39,7 @@ Observation -> Context Graph -> Program -> Capability/Agent -> View -> Applicati
 ```text
 apps/          Applications —— 纯 HTTP，零代码耦合
   @info/ui                 (现 packages/ui)
-  @info/browser-extension  (现 packages/browser-extension)
+  chrome-acp extension     (现 apps/chrome-acp/packages/chrome-extension)
 
 @info/server      HTTP API + iii worker（唯一对外暴露面）   现 src/server
 @info/runtime     Tick 编排：sensors→views→programs 串联     现 src/runtime

@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { DEFAULT_RELATED_VIEW_TYPES, DEFAULT_VIEW_FILTERS, agentTasksEndpointFromSettings, buildBrowserAgentTaskRequest, buildViewFeedbackRequest, buildViewQueryFromTab, contextChatEndpointFromSettings, contextIngestEndpointFromSettings, contextViewUrlFromSettings, contextViewsEndpointFromSettings, feedbackEndpointFromSettings, feedbackTargetFromInput, formatAmbientViewResult, formatViewSubscriptionResult, selectedViewFromInput, selectedViewIdFromInput, viewIdsFromAgentTaskResponse, viewIdsFromProcessedIngestResponse, viewKeyPoints, viewSummaryText, writingAssistEndpointFromSettings } from "../apps/browser-extension/agent-task.js";
+import { DEFAULT_RELATED_VIEW_TYPES, DEFAULT_VIEW_FILTERS, agentTasksEndpointFromSettings, buildBrowserAgentTaskRequest, buildViewFeedbackRequest, buildViewQueryFromTab, contextChatEndpointFromSettings, contextIngestEndpointFromSettings, contextViewUrlFromSettings, contextViewsEndpointFromSettings, feedbackEndpointFromSettings, feedbackTargetFromInput, formatAmbientViewResult, formatViewSubscriptionResult, selectedViewFromInput, selectedViewIdFromInput, viewIdsFromAgentTaskResponse, viewIdsFromProcessedIngestResponse, viewKeyPoints, viewSummaryText, writingAssistEndpointFromSettings } from "../archive/browser-extension-legacy/agent-task.js";
+
+const LEGACY_EXTENSION_DIR = "archive/browser-extension-legacy";
 
 test("Browser ambient save button posts an Observation into Program processing", () => {
   assert.equal(
@@ -12,14 +14,14 @@ test("Browser ambient save button posts an Observation into Program processing",
     "http://127.0.0.1:3111/context/ingest?process=true&cascade_views=true",
   );
 
-  const background = readFileSync("apps/browser-extension/background.js", "utf8");
+  const background = readFileSync(`${LEGACY_EXTENSION_DIR}/background.js`, "utf8");
   assert.match(background, /captureAmbientRequest[\s\S]+postRecord\(record, \{ process: true, cascadeViews: true \}\)/);
 });
 
 test("Browser extension can mark browser observations as allowed for external LLM runtimes", () => {
-  const background = readFileSync("apps/browser-extension/background.js", "utf8");
-  const popup = readFileSync("apps/browser-extension/popup.html", "utf8");
-  const popupJs = readFileSync("apps/browser-extension/popup.js", "utf8");
+  const background = readFileSync(`${LEGACY_EXTENSION_DIR}/background.js`, "utf8");
+  const popup = readFileSync(`${LEGACY_EXTENSION_DIR}/popup.html`, "utf8");
+  const popupJs = readFileSync(`${LEGACY_EXTENSION_DIR}/popup.js`, "utf8");
 
   assert.match(background, /allowExternalLlm:\s*true/);
   assert.match(background, /agentRuntime:\s*"claude_code"/);
@@ -30,8 +32,8 @@ test("Browser extension can mark browser observations as allowed for external LL
 });
 
 test("Browser popup exposes Save Analyze Ask Claude Code live Views and feedback controls", () => {
-  const popup = readFileSync("apps/browser-extension/popup.html", "utf8");
-  const popupJs = readFileSync("apps/browser-extension/popup.js", "utf8");
+  const popup = readFileSync(`${LEGACY_EXTENSION_DIR}/popup.html`, "utf8");
+  const popupJs = readFileSync(`${LEGACY_EXTENSION_DIR}/popup.js`, "utf8");
 
   assert.match(popup, /Save &amp; Analyze|Save & Analyze/);
   assert.match(popup, /Ask Claude Code/);
@@ -117,7 +119,7 @@ test("Browser popup can query all active View types without narrowing view_types
 });
 
 test("Browser popup can narrow to writing assist Views", () => {
-  const popup = readFileSync("apps/browser-extension/popup.html", "utf8");
+  const popup = readFileSync(`${LEGACY_EXTENSION_DIR}/popup.html`, "utf8");
 
   assert.deepEqual(DEFAULT_VIEW_FILTERS.writing, ["advice.writing_assist", "draft.writing_continuation"]);
   assert.match(popup, /value="writing">Writing assist/);
@@ -150,8 +152,8 @@ test("Browser ambient can query Views by source record id", () => {
 });
 
 test("Browser content script captures writing input and renders inline writing assist", () => {
-  const background = readFileSync("apps/browser-extension/background.js", "utf8");
-  const content = readFileSync("apps/browser-extension/content.js", "utf8");
+  const background = readFileSync(`${LEGACY_EXTENSION_DIR}/background.js`, "utf8");
+  const content = readFileSync(`${LEGACY_EXTENSION_DIR}/content.js`, "utf8");
 
   assert.match(content, /context\.capture\.writing_input/);
   assert.match(content, /document\.addEventListener\("input"/);
@@ -185,8 +187,8 @@ test("Browser content script captures writing input and renders inline writing a
 });
 
 test("Browser content script shows selection Explain Save toolbar", () => {
-  const background = readFileSync("apps/browser-extension/background.js", "utf8");
-  const content = readFileSync("apps/browser-extension/content.js", "utf8");
+  const background = readFileSync(`${LEGACY_EXTENSION_DIR}/background.js`, "utf8");
+  const content = readFileSync(`${LEGACY_EXTENSION_DIR}/content.js`, "utf8");
 
   assert.match(content, /id = "info-selection-toolbar"/);
   assert.match(content, /showSelectionToolbar/);
@@ -456,8 +458,8 @@ test("Browser sidepanel Ask uses normal context chat instead of AgentTask", () =
     contextChatEndpointFromSettings({ endpoint: "http://127.0.0.1:3111/context/ingest" }),
     "http://127.0.0.1:3111/context/chat",
   );
-  const background = readFileSync("apps/browser-extension/background.js", "utf8");
-  const sidepanel = readFileSync("apps/browser-extension/src/sidepanel/main.tsx", "utf8");
+  const background = readFileSync(`${LEGACY_EXTENSION_DIR}/background.js`, "utf8");
+  const sidepanel = readFileSync(`${LEGACY_EXTENSION_DIR}/src/sidepanel/main.tsx`, "utf8");
 
   assert.match(background, /ask-current-page/);
   assert.match(background, /get-chat-page-context/);

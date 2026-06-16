@@ -16,4 +16,3 @@ packages:
   - "apps/ui"
   - "apps/chrome-acp"
   - "apps/chrome-acp/packages/*"
-  - "apps/browser-extension"

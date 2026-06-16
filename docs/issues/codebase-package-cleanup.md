@@ -13,10 +13,10 @@ application code, compatibility surface, or local reference material.
   - `packages/adapters/agent-runtime`
   - `packages/connectors`
   - `packages/views`
-  - `packages/browser-extension`
+  - `apps/chrome-acp/packages/chrome-extension`
 - Unreferenced `src/connectors/*.ts` and package-backed `src/runtime/*`
   compatibility re-exports have been archived under `archive/dead-code/`.
-- Root `browser-extension/` has been superseded by `packages/browser-extension/`.
+- Root `browser-extension/` has been superseded by `archive/browser-extension-legacy/`.
 - `src/agents/` no longer contains implementation files.
 - `craft-reference/` contains old static UI concepts and screenshots with no
   repository references. It belongs in `archive/craft-reference/`, not beside
