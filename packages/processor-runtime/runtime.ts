@@ -76,6 +76,7 @@ export class ProcessorRuntime {
           source_record_ids: sourceRecordIds,
           source_view_ids: sourceViewIds,
         });
+        const writtenObservations = (result.observations ?? []).map(observation => this.store.insertRecord(observation));
         const diagnostics = result.diagnostics ?? {};
         const run: ProcessorRun = {
           processor_id: processor.id,
@@ -83,7 +84,9 @@ export class ProcessorRuntime {
           ok: true,
           source,
           view_drafts: result.views?.length ?? 0,
+          observation_drafts: result.observations?.length ?? 0,
           views_written: written.map(view => view.id),
+          observations_written: writtenObservations.map(record => record.id),
           diagnostics,
         };
         runs.push(run);
@@ -101,6 +104,7 @@ export class ProcessorRuntime {
             runtime: processor.runtime.kind,
             started_event_id: started.id,
             views_written: written.map(view => view.id),
+            observations_written: writtenObservations.map(record => record.id),
             diagnostics,
           },
         });
@@ -112,7 +116,9 @@ export class ProcessorRuntime {
           ok: false,
           source,
           view_drafts: 0,
+          observation_drafts: 0,
           views_written: [],
+          observations_written: [],
           diagnostics: {},
           error: message,
         });
@@ -142,6 +148,7 @@ export class ProcessorRuntime {
       processors_matched: processors.map(processor => processor.id),
       runs,
       views_written: runs.flatMap(run => run.views_written),
+      observations_written: runs.flatMap(run => run.observations_written ?? []),
     };
   }
 }

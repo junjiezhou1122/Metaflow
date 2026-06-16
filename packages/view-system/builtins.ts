@@ -32,6 +32,32 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     }],
   },
   {
+    view_type: "work.focus_set",
+    title: "Work Focus Set",
+    purpose: "Recent active work lanes produced by scheduled hybrid routing before project/research/memory updates.",
+    lifecycle: "session",
+    subject: {
+      description: "A recent time window of user work that may contain multiple simultaneous lanes.",
+      examples: [{ window_minutes: 90, active_lanes: ["project:/Users/junjie/info", "topic:midscene"] }],
+    },
+    producers: [{ id: "processor.work_router_batch", kind: "processor" }],
+    consumes: {
+      observations: ["observation.route_candidate", "observation.*"],
+      views: ["state.surface"],
+    },
+    default_query: { view_types: ["work.focus_set"], limit: 5 },
+    tags: ["work", "router", "focus", "hybrid"],
+    examples: [{
+      view_type: "work.focus_set",
+      content: {
+        active_lanes: [
+          { lane_key: "project:/Users/junjie/info", lane_kind: "project", attention_share: 0.78 },
+          { lane_key: "topic:midscene", lane_kind: "topic", attention_share: 0.16 },
+        ],
+      },
+    }],
+  },
+  {
     view_type: "project.current",
     title: "Project Current",
     purpose: "Current project state, active focus, key context, and next useful agent context.",
@@ -43,7 +69,7 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     producers: [{ id: "processor.project_current", kind: "processor" }, { id: "manual.project_note", kind: "manual" }],
     consumes: {
       observations: ["observation.codex.message", "observation.claude.message", "observation.browser_page_snapshot", "observation.local_project"],
-      views: ["project.decisions", "project.tasks", "project.inbox"],
+      views: ["work.focus_set", "project.decisions", "project.tasks", "project.inbox"],
     },
     default_query: { view_types: ["project.current"], limit: 5 },
     tags: ["project", "dogfood"],
@@ -127,6 +153,33 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     }],
   },
   {
+    view_type: "memory.candidate",
+    title: "Memory Candidate",
+    purpose: "Reviewable memory proposal produced from observations and Views before durable promotion.",
+    lifecycle: "session",
+    subject: {
+      description: "Open candidate subject metadata; every candidate must preserve source provenance.",
+      examples: [{ memory_kind: "preference", target_view_type: "memory.preferences" }],
+    },
+    producers: [{ id: "processor.memory_candidate", kind: "processor" }],
+    consumes: {
+      observations: ["feedback.*", "observation.codex.message", "observation.claude.message", "observation.ai_session_locator_result"],
+      views: ["project.current", "work.focus_set", "writing.advice"],
+    },
+    default_query: { view_types: ["memory.candidate"], limit: 20 },
+    tags: ["memory", "candidate", "gate"],
+    examples: [{
+      view_type: "memory.candidate",
+      content: {
+        memory_kind: "agent_collaboration_style",
+        target_view_type: "memory.agent_collaboration_style",
+        claim: "User prefers concrete implementation over architecture-only discussion.",
+        evidence_count: 2,
+        gate_status: "candidate",
+      },
+    }],
+  },
+  {
     view_type: "memory.profile",
     title: "Memory Profile",
     purpose: "High-level retained user model that routes future assistance.",
@@ -187,6 +240,18 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     examples: [{ view_type: "memory.agent_collaboration_style", content: { style: "Challenge weak assumptions; keep momentum." } }],
   },
   {
+    view_type: "agent.case_memory",
+    title: "Agent Case Memory",
+    purpose: "Reusable agent execution cases, tool outcomes, and collaboration lessons for future automation.",
+    lifecycle: "long_term",
+    subject: { description: "Agent/task/capability subject metadata is open.", examples: [{ type: "agent_case" }] },
+    producers: [{ id: "processor.memory_gate", kind: "processor" }, { id: "manual.agent_case_memory", kind: "manual" }],
+    consumes: { observations: ["feedback.automation_result", "feedback.output.edited"], views: ["memory.candidate", "automation.outcome"] },
+    default_query: { view_types: ["agent.case_memory"], limit: 20 },
+    tags: ["memory", "agent", "case"],
+    examples: [{ view_type: "agent.case_memory", content: { case: "Use DOM tools before vision fallback on current Chrome pages." } }],
+  },
+  {
     view_type: "learning.youtube_fragment",
     title: "Learning YouTube Fragment",
     purpose: "Timestamped caption or playback fragment that can become review material.",
@@ -197,6 +262,35 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     default_query: { view_types: ["learning.youtube_fragment"], limit: 50 },
     tags: ["learning", "youtube", "scenario"],
     examples: [{ view_type: "learning.youtube_fragment", content: { start_seconds: 120, end_seconds: 146, caption_text: "Example caption text." } }],
+  },
+  {
+    view_type: "learning.review_queue",
+    title: "Learning Review Queue",
+    purpose: "Prioritized review queue generated from YouTube fragments and difficult segments.",
+    lifecycle: "session",
+    subject: { description: "A list of YouTube fragments and difficult segments to review.", examples: [{ type: "review_queue", count: 5 }] },
+    producers: [{ id: "processor.youtube_learning", kind: "processor" }],
+    consumes: {
+      views: [
+        "learning.youtube_fragment",
+        "memory.language.difficult_segments",
+      ],
+    },
+    default_query: { view_types: ["learning.review_queue"], limit: 10 },
+    tags: ["learning", "youtube", "review"],
+    examples: [{ view_type: "learning.review_queue", content: { item_count: 5, items: [] } }],
+  },
+  {
+    view_type: "memory.language.difficult_segments",
+    title: "Difficult Language Segments",
+    purpose: "Segments marked as difficult during YouTube language learning, stored for targeted review.",
+    lifecycle: "long_term",
+    subject: { description: "Difficult video segments.", examples: [{ type: "difficult_segment", video_id: "abc123", start: 120 }] },
+    producers: [{ id: "processor.youtube_learning", kind: "processor" }],
+    consumes: { views: ["learning.youtube_fragment"] },
+    default_query: { view_types: ["memory.language.difficult_segments"], limit: 50 },
+    tags: ["memory", "language", "difficult_segments"],
+    examples: [{ view_type: "memory.language.difficult_segments", content: { video_id: "abc123", start_seconds: 120, end_seconds: 135, difficulty_reason: "fast speech" } }],
   },
   {
     view_type: "writing.advice",

@@ -119,7 +119,9 @@ export type ProcessorRun = {
     type?: string;
   };
   view_drafts: number;
+  observation_drafts?: number;
   views_written: string[];
+  observations_written?: string[];
   diagnostics: Record<string, unknown>;
   error?: string;
 };
@@ -131,6 +133,7 @@ export type ProcessorRunResult = {
   processors_matched: string[];
   runs: ProcessorRun[];
   views_written: string[];
+  observations_written?: string[];
 };
 
 export type WriteViewDraftContext = {
