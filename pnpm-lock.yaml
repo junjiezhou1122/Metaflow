@@ -35,6 +35,9 @@ importers:
       '@info/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@info/scheduled-batch':
+        specifier: workspace:*
+        version: link:packages/scheduled-batch
       '@info/sensors':
         specifier: workspace:*
         version: link:packages/sensors
@@ -433,6 +436,12 @@ importers:
       '@info/views':
         specifier: workspace:*
         version: link:../views
+
+  packages/scheduled-batch:
+    dependencies:
+      '@info/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/sensors:
     dependencies:

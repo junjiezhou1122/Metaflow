@@ -2,6 +2,8 @@
 # Backend @info/* packages + the two Application surfaces.
 # See docs/workspace-restructure-plan.md.
 packages:
+  - "packages/ambient-layer"
+  - "packages/scheduled-batch"
   - "packages/core"
   - "packages/sensors"
   - "packages/views"

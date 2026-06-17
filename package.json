@@ -54,6 +54,7 @@
     "@info/runtime": "workspace:*",
     "@info/sensors": "workspace:*",
     "@info/server": "workspace:*",
+    "@info/scheduled-batch": "workspace:*",
     "@info/view-system": "workspace:*",
     "@info/views": "workspace:*",
     "acpx": "^0.10.0",
