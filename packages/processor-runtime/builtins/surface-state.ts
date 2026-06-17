@@ -124,6 +124,7 @@ export function buildSurfaceStateView(input: {
       : "unknown";
 
   return {
+    id: "view:state_surface:current",
     type: SURFACE_STATE_VIEW_TYPE,
     title: `Current surface: ${activeTitle ?? activeApp ?? surfaceKind}`,
     summary: summaryFor({ surfaceKind, activeApp, activeTitle, activeUrl, editorText, selectedText, screenText }),

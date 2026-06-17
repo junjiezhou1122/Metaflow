@@ -418,6 +418,7 @@ async function executeCurrentBrowserTool(
   args: {
     intent?: string;
     target?: string;
+    selector?: string;
     text?: string;
     submit?: boolean;
     mode?: BrowserToolParams["mode"] | "tap";
@@ -451,6 +452,7 @@ async function executeCurrentBrowserTool(
     tabId,
     intent: args.intent,
     target: args.target,
+    selector: args.selector,
     text: args.text,
     submit: args.submit,
     mode: args.mode === "tap" ? "click" : args.mode,
@@ -497,6 +499,7 @@ async function handleToolCall(
       const result = await executeCurrentBrowserTool(params.name, (params.arguments ?? {}) as {
         intent?: string;
         target?: string;
+        selector?: string;
         text?: string;
         submit?: boolean;
         mode?: BrowserToolParams["mode"] | "tap";

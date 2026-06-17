@@ -110,6 +110,10 @@ function taskStatusTone(status?: string): "default" | "secondary" | "destructive
   return "secondary";
 }
 
+function canRunTaskLifecycleAction(view: AmbientView): boolean {
+  return view.view_type.startsWith("task.");
+}
+
 function summaryOf(view: AmbientView): string {
   if (view.summary) return view.summary;
   const c: any = view.content ?? {};
@@ -228,8 +232,10 @@ export function TasksView() {
         }
         let incoming = response.views ?? [];
         if (filteredPrefixes.length > 1) {
-          // Apply the additional prefixes as a client-side filter.
-          incoming = incoming.filter(v => filteredPrefixes.slice(1).some(p => v.view_type.startsWith(p)));
+          // Combine selected namespaces with OR semantics. These are View
+          // families, not workflow steps, so selecting Queue + Tasks should show
+          // both agent.task_list and task.* Views.
+          incoming = incoming.filter(v => filteredPrefixes.some(p => v.view_type.startsWith(p)));
         }
         setViews(prev => (mode === "append" ? [...prev, ...incoming] : incoming));
         setCursor(response.next_cursor);
@@ -340,7 +346,7 @@ export function TasksView() {
       <header className="px-3 pt-3 pb-2 flex items-center justify-between gap-2 border-b">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium">Ambient Tasks</h2>
+          <h2 className="text-sm font-medium">Agent Work Queue</h2>
           <Badge variant="secondary" className="text-[10px]">
             {views.length}
           </Badge>
@@ -393,12 +399,12 @@ export function TasksView() {
 
       <div className="px-3 py-2 flex items-center gap-1 text-xs border-b bg-muted/30 flex-wrap">
           {[
-          { id: "agent.", label: "Queue" },
-          { id: "analysis.", label: "Browser" },
-          { id: "advice.", label: "Advice" },
-          { id: "task.", label: "Tasks" },
-          { id: "opportunity.", label: "Opps" },
-          { id: "brief.", label: "Briefs" },
+          { id: "agent.", label: "Queue view" },
+          { id: "task.", label: "Task views" },
+          { id: "brief.", label: "Results" },
+          { id: "advice.", label: "Suggestions" },
+          { id: "opportunity.", label: "Opportunities" },
+          { id: "analysis.", label: "Browser analysis" },
         ].map(f => {
           const active = activeFilters.has(f.id);
           return (
@@ -456,8 +462,8 @@ export function TasksView() {
           {!loading && !error && views.length === 0 && (
             <div className="text-center text-xs text-muted-foreground py-12">
               <Sparkles className="h-5 w-5 mx-auto mb-2 opacity-50" />
-              <p>No ambient tasks yet.</p>
-              <p className="mt-1">Click &quot;Analyze&quot; or let ambient run on a page you&apos;re reading.</p>
+              <p>No agent work items yet.</p>
+              <p className="mt-1">Click &quot;Analyze&quot; to create suggestions, or &quot;Queue&quot; to collect slow agent tasks.</p>
             </div>
           )}
 
@@ -566,20 +572,22 @@ export function TasksView() {
                             Open
                           </Button>
                         )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={taskAction !== null}
-                          onClick={() => void runTaskItemAction(view, view.status === "cancelled" ? "retry" : "cancel")}
-                          title={view.status === "cancelled" ? "Retry task" : "Cancel task"}
-                        >
-                          {taskAction === (view.status === "cancelled" ? "retry" : "cancel") && activeTaskId === view.id ? (
-                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                          ) : (
-                            <RotateCcw className="h-3 w-3 mr-1" />
-                          )}
-                          {view.status === "cancelled" ? "Retry" : "Cancel"}
-                        </Button>
+                        {canRunTaskLifecycleAction(view) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={taskAction !== null}
+                            onClick={() => void runTaskItemAction(view, view.status === "cancelled" ? "retry" : "cancel")}
+                            title={view.status === "cancelled" ? "Retry task" : "Cancel task"}
+                          >
+                            {taskAction === (view.status === "cancelled" ? "retry" : "cancel") && activeTaskId === view.id ? (
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            ) : (
+                              <RotateCcw className="h-3 w-3 mr-1" />
+                            )}
+                            {view.status === "cancelled" ? "Retry" : "Cancel"}
+                          </Button>
+                        )}
                       </div>
                     </CollapsibleContent>
                   </CardContent>

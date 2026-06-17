@@ -18,6 +18,9 @@ const RECENT_CAPTION_GAPS_KEY = "language.recent_caption_gaps";
 const SAVED_CAPTION_GAPS_BY_VIDEO_KEY = "language.caption_gaps.by_video";
 const DEBUGGER_SETTINGS_KEY = "advanced_browser_control";
 const CDP_VERSION = "1.3";
+const DEFAULT_OBSERVE_LIMIT = 60;
+const ACT_OBSERVE_CACHE_TTL_MS = 1500;
+const MAX_READ_DOM_CHARS = 12000;
 const SENSITIVE_DOMAIN_PATTERNS = [
   "mail.google.com",
   "gmail.com",
@@ -43,6 +46,13 @@ type DebuggerSettings = {
   deniedDomains?: string[];
   requireConfirmForHighRisk?: boolean;
 };
+
+type ObserveCacheEntry = {
+  at: number;
+  result: BrowserObserveResult;
+};
+
+const observeCache = new Map<string, ObserveCacheEntry>();
 
 // Execute browser_tabs: List all open tabs
 async function executeBrowserTabs(): Promise<BrowserTabsResult> {
@@ -81,8 +91,9 @@ async function executeBrowserRead(tabId: number): Promise<BrowserReadResult> {
     throw new Error("Failed to collect page info");
   }
 
-  console.log(`[BrowserTool] Read complete: ${pageInfo.dom.length} chars`);
-  return { action: "read", tabId, ...pageInfo };
+  const dom = truncateText(pageInfo.dom, MAX_READ_DOM_CHARS);
+  console.log(`[BrowserTool] Read complete: ${dom.length} chars`);
+  return { action: "read", tabId, ...pageInfo, dom };
 }
 
 // Execute browser_execute: Run script in specific tab
@@ -222,15 +233,27 @@ async function executeBrowserType(tabId: number, selector: string, text: string)
   };
 }
 
-async function executeBrowserObserve(tabId: number, maxElements = 80): Promise<BrowserObserveResult> {
+async function executeBrowserObserve(
+  tabId: number,
+  maxElements = DEFAULT_OBSERVE_LIMIT,
+  options: { useCache?: boolean } = {},
+): Promise<BrowserObserveResult> {
   const tab = await chrome.tabs.get(tabId);
-  const safeLimit = Math.max(1, Math.min(200, Math.floor(maxElements || 80)));
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(maxElements || DEFAULT_OBSERVE_LIMIT)));
+  const cacheKey = `${tabId}:${tab.url || ""}:${safeLimit}:${tab.windowId ?? ""}`;
+  const now = Date.now();
+  if (options.useCache !== false) {
+    const cached = observeCache.get(cacheKey);
+    if (cached && now - cached.at <= ACT_OBSERVE_CACHE_TTL_MS) {
+      return cached.result;
+    }
+  }
   const result = (await chrome.scripting.executeScript({
     target: { tabId },
     func: observeInteractiveElements,
     args: [safeLimit],
   }))[0]?.result;
-  return {
+  const observed: BrowserObserveResult = {
     action: "observe",
     tabId,
     url: tab.url || result?.url || "",
@@ -239,6 +262,10 @@ async function executeBrowserObserve(tabId: number, maxElements = 80): Promise<B
     elements: result?.elements ?? [],
     elementCount: result?.elementCount ?? 0,
   };
+  if (options.useCache !== false) {
+    observeCache.set(cacheKey, { at: now, result: observed });
+  }
+  return observed;
 }
 
 async function executeBrowserAct(params: BrowserToolParams): Promise<BrowserActionResult> {
@@ -249,45 +276,76 @@ async function executeBrowserAct(params: BrowserToolParams): Promise<BrowserActi
   const mode = params.mode || "auto";
   const text = params.text;
   const target = params.target;
-  const observe = await executeBrowserObserve(tabId, 160);
-  const ranked = rankObservedElements(observe.elements, { intent, target, text, mode });
-  const best = ranked[0];
-  if (!best) {
+  const queryText = `${intent} ${target ?? ""}`.toLowerCase();
+  const wantsSubmit = params.submit === true || mode === "submit" || /submit|send|发送|提交|enter|回车/.test(`${intent} ${target ?? ""}`.toLowerCase());
+  let actionResult: any;
+  let verification: Awaited<ReturnType<typeof verifyAct>> = { ok: false };
+  let observe: BrowserObserveResult | undefined;
+  let ranked: ReturnType<typeof rankObservedElements> = [];
+  let best: ReturnType<typeof rankObservedElements>[number] | undefined;
+  let selector = params.selector;
+  let wantsType = mode === "type" || Boolean(text && mode !== "click" && /type|fill|输入|填写|搜索|search|message|消息|聊天/.test(queryText));
+
+  if (!selector) {
+    observe = await executeBrowserObserve(tabId, params.maxElements ?? DEFAULT_OBSERVE_LIMIT);
+    ranked = rankObservedElements(observe.elements, { intent, target, text, mode });
+    best = ranked[0];
+    if (!best) {
+      return {
+        action: "act",
+        ok: false,
+        tabId,
+        url: observe.url,
+        title: observe.title,
+        result: { intent, target, mode, candidates: [] },
+        error: "No interactive element candidates found",
+      };
+    }
+    selector = best.element.selector;
+    wantsType = mode === "type" || Boolean(text && mode !== "click" && (best.element.editable || /type|fill|输入|填写|搜索|search|message|消息|聊天/.test(queryText)));
+  }
+
+  if (!selector) {
     return {
       action: "act",
       ok: false,
       tabId,
-      url: observe.url,
-      title: observe.title,
-      result: { intent, target, mode, candidates: [] },
-      error: "No interactive element candidates found",
+      url: observe?.url || "",
+      title: observe?.title || "",
+      result: { intent, target, mode, candidates: ranked.slice(0, 8) },
+      error: "No selector resolved for action",
     };
   }
 
-  const wantsType = mode === "type" || Boolean(text && mode !== "click" && (best.element.editable || /type|fill|输入|填写|搜索|search|message|消息|聊天/.test(`${intent} ${target ?? ""}`.toLowerCase())));
-  const wantsSubmit = params.submit === true || mode === "submit" || /submit|send|发送|提交|enter|回车/.test(`${intent} ${target ?? ""}`.toLowerCase());
-  let actionResult: any;
   if (wantsType && text !== undefined) {
-    actionResult = await cdpTypeIntoSelector(tabId, best.element.selector, text);
+    actionResult = await cdpTypeIntoSelector(tabId, selector, text);
     if (wantsSubmit && actionResult?.ok) {
       await cdpPressKey(tabId, "Enter");
     }
+    verification = await verifyAct(tabId, {
+      selector,
+      text,
+      expectNavigation: false,
+      waitMs: wantsSubmit ? 220 : 120,
+    });
   } else {
-    actionResult = await cdpClickSelector(tabId, best.element.selector);
+    actionResult = await cdpClickSelector(tabId, selector);
+    verification = wantsSubmit
+      ? await verifyAct(tabId, {
+          selector,
+          expectNavigation: true,
+          waitMs: 180,
+        })
+      : { ok: Boolean(actionResult?.ok), ...(await currentTabSnapshot(tabId)) };
   }
 
-  const verification = await verifyAct(tabId, {
-    selector: best.element.selector,
-    text,
-    expectNavigation: !wantsType,
-  });
   const ok = Boolean(actionResult?.ok) && verification.ok !== false;
   return {
     action: "act",
     ok,
     tabId,
-    url: observe.url,
-    title: observe.title,
+    url: observe?.url || verification.url || "",
+    title: observe?.title || verification.title || "",
     result: {
       intent,
       target,
@@ -357,10 +415,11 @@ async function cdpTypeIntoSelector(tabId: number, selector: string, text: string
   const target = { tabId };
   let attached = false;
   try {
-    const clickResult = await cdpClickSelector(tabId, selector);
-    if (!clickResult.ok) return clickResult;
     await chrome.debugger.attach(target, CDP_VERSION);
     attached = true;
+    const rect = await selectorCenter(tabId, selector);
+    if (!rect.ok) return rect;
+    await dispatchCdpClick(target, rect.x, rect.y);
     await sendCdp(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2 });
     await sendCdp(target, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2 });
     await sendCdp(target, "Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", code: "Backspace" });
@@ -388,6 +447,29 @@ async function cdpTypeIntoSelector(tabId: number, selector: string, text: string
   } finally {
     if (attached) await chrome.debugger.detach(target).catch(() => undefined);
   }
+}
+
+async function dispatchCdpClick(target: chrome.debugger.Debuggee, x: number, y: number): Promise<void> {
+  await sendCdp(target, "Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+    button: "none",
+  });
+  await sendCdp(target, "Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
+  await sendCdp(target, "Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
 }
 
 async function selectorCenter(tabId: number, selector: string) {
@@ -620,6 +702,11 @@ function compactForTransport(value: unknown, maxChars: number): unknown {
   };
 }
 
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}…`;
+}
+
 type ObservedElement = BrowserObserveResult["elements"][number];
 
 function rankObservedElements(
@@ -688,10 +775,13 @@ function normalizeSearch(value: string): string {
 
 async function verifyAct(
   tabId: number,
-  options: { selector: string; text?: string; expectNavigation?: boolean },
+  options: { selector: string; text?: string; expectNavigation?: boolean; waitMs?: number },
 ): Promise<{ ok?: boolean; textPresent?: boolean; url?: string; title?: string; error?: string }> {
   try {
-    await new Promise(resolve => setTimeout(resolve, 450));
+    const waitMs = Math.max(0, Math.min(500, Math.floor(options.waitMs ?? 120)));
+    if (waitMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
     const result = (await chrome.scripting.executeScript({
       target: { tabId },
@@ -712,6 +802,14 @@ async function verifyAct(
   } catch (error) {
     return { ok: undefined, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+async function currentTabSnapshot(tabId: number): Promise<{ url?: string; title?: string }> {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  return {
+    url: tab?.url,
+    title: tab?.title,
+  };
 }
 
 // Main entry point - routes to appropriate action

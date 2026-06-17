@@ -10,7 +10,7 @@ import { aiSessionRefToRecord, locateAiSessions, type AiSessionTool } from "@inf
 import { buildCandidateThreads, type CandidateThread } from "@info/views/timeline/correlation.js";
 import { buildLocalProjectSnapshotRecord } from "@info/sensors";
 import { buildThreadEvidenceMap } from "@info/views/threads/thread-evidence.js";
-import { buildCandidateRoutes, buildRouteCandidateRecord, extractRouteFeatures } from "@info/processor-runtime";
+import { buildCandidateRoutes, buildRouteCandidateRecord, buildSurfaceStateView, createSurfaceStateProcessor, extractRouteFeatures, ProcessorRuntime } from "@info/processor-runtime";
 import { processAmbientBackgroundTasks } from "./background-tasks.js";
 import type { AmbientBackgroundTaskMode } from "./background-tasks.js";
 import { processToolsmithSandboxArtifacts } from "./toolsmith-artifacts.js";
@@ -606,6 +606,8 @@ async function compileRuntimeViews(input: {
   projectMinutes?: number;
 }): Promise<RuntimeTickResult["compiled_views"]> {
   const out: RuntimeTickResult["compiled_views"] = [];
+  const surface = await compileSurfaceStateView(input.store, input.records ?? [], input.windowMinutes, input.write);
+  out.push(surface);
   if (!input.iii) return [{ view_type: "iii_runtime", skipped: "iii runtime client required for view compilation" }];
   const iii = input.iii;
   try {
@@ -798,6 +800,69 @@ async function compileRuntimeViews(input: {
     out.push({ view_type: "project_timeline", skipped: "no active workspace" });
   }
   return out;
+}
+
+async function compileSurfaceStateView(
+  store: ContextStore,
+  records: StoredContextRecord[],
+  windowMinutes: number,
+  write: boolean,
+): Promise<RuntimeTickResult["compiled_views"][number]> {
+  const seed = records.slice().sort((a, b) => recordTimeMs(b) - recordTimeMs(a)).find(isSurfaceSeedRecord);
+  if (!seed) {
+    return {
+      view_type: "state.surface",
+      skipped: "no recent surface observations",
+    };
+  }
+  if (!write) {
+    const view = buildSurfaceStateView({
+      seed,
+      records,
+    });
+    return {
+      view_type: "state.surface",
+      title: view.title,
+      records_used: view.source_records?.length ?? 0,
+      view_count: 1,
+    };
+  }
+  const runtime = new ProcessorRuntime({
+    store,
+    processors: [createSurfaceStateProcessor({ windowMinutes: Math.max(windowMinutes, 10) })],
+  });
+  const result = await runtime.processObservation(seed);
+  const run = result.runs.find(item => item.processor_id === "processor.surface_state");
+  const viewId = result.views_written[0];
+  if (!run?.ok) {
+    return {
+      view_type: "state.surface",
+      skipped: run?.error ?? "surface processor did not complete",
+    };
+  }
+  return {
+    view_type: "state.surface",
+    view_id: write ? viewId : undefined,
+    title: "Current Surface",
+    records_used: numberValue(run.diagnostics.source_records),
+    view_count: result.views_written.length,
+  };
+}
+
+function isSurfaceSeedRecord(record: StoredContextRecord): boolean {
+  const schema = record.schema.name;
+  return schema.startsWith("observation.browser_")
+    || schema.startsWith("observation.editor.")
+    || schema.startsWith("observation.media.")
+    || schema.startsWith("observation.youtube.")
+    || schema.startsWith("observation.screenpipe_")
+    || schema === "observation.local_project";
+}
+
+function recordTimeMs(record: StoredContextRecord): number {
+  const value = record.time?.observed_at ?? record.updated_at ?? record.created_at;
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 type RuntimeViewWorkerPayload = {

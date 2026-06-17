@@ -290,6 +290,20 @@ test("Chrome ACP exposes optional gated Browser Debugger tools", () => {
   assert.match(browserTool, /blocked on sensitive domain/);
 });
 
+test("Chrome ACP current browser act can accept direct selectors for fast-path automation", () => {
+  const proxyTypes = readFileSync("apps/chrome-acp/packages/proxy-server/src/mcp/types.ts", "utf8");
+  const proxyHandler = readFileSync("apps/chrome-acp/packages/proxy-server/src/mcp/handler.ts", "utf8");
+  const browserTool = readFileSync("apps/chrome-acp/packages/chrome-extension/src/tools/browser.ts", "utf8");
+
+  assert.match(proxyTypes, /selector:\s*\{\s*type:\s*"string", description:\s*"Optional CSS selector to act on directly when already known from browser_current_observe\." \}/);
+  assert.match(proxyTypes, /selector:\s*\{\s*type:\s*"string", description:\s*"Optional CSS selector to act on directly when already known from browser_observe\." \}/);
+  assert.match(proxyHandler, /selector:\s*args\.selector/);
+  assert.match(browserTool, /if \(!selector\) \{/);
+  assert.match(browserTool, /executeBrowserObserve\(tabId, params\.maxElements \?\? DEFAULT_OBSERVE_LIMIT\)/);
+  assert.match(browserTool, /await dispatchCdpClick\(target, rect\.x, rect\.y\)/);
+  assert.match(browserTool, /const waitMs = Math\.max\(0, Math\.min\(500, Math\.floor\(options\.waitMs \?\? 120\)\)\)/);
+});
+
 test("Chrome ACP content script shows selection Explain Save toolbar", () => {
   const capture = readFileSync("apps/chrome-acp/packages/chrome-extension/src/lib/info-capture.ts", "utf8");
   const content = readFileSync("apps/chrome-acp/packages/chrome-extension/src/content.ts", "utf8");

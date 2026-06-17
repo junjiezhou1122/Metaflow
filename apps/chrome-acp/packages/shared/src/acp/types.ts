@@ -66,7 +66,7 @@ export interface BrowserToolParams {
   command?: BrowserDebuggerCommand; // Required for debugger
   args?: Record<string, unknown>;   // Optional debugger command args
   url?: string;      // Required for open_tab
-  selector?: string; // Required for click/type
+  selector?: string; // Required for click/type, optional direct selector for act
   text?: string;     // Required for type
   active?: boolean;  // Optional for open_tab
   intent?: string;   // Required for act

@@ -65,11 +65,13 @@ test("runtimeTick writes WorkThread state and Views without episode candidate Re
   assert.equal(result.evidence.written_records.some(id => id.startsWith("runtime:")), false);
   assert.equal(store.recent(20).filter(record => record.schema.name === "episode.candidate_thread").length, 0);
   assert.ok(store.listViews({ view_types: ["work_thread"], limit: 5 })[0]);
+  assert.ok(store.listViews({ view_types: ["state.surface"], limit: 5 })[0]);
   assert.ok(store.recent(20).some(record => record.schema.name === "observation.route_candidate"));
   assert.ok(store.listViews({ view_types: ["work.focus_set"], limit: 5 })[0]);
   assert.ok(store.listViews({ view_types: ["project.current"], limit: 5 })[0]);
   assert.ok(result.compiled_views.some(view => view.view_type === "work.focus_set"));
   assert.ok(result.compiled_views.some(view => view.view_type === "project.current"));
+  assert.ok(result.compiled_views.some(view => view.view_type === "state.surface"));
   assert.equal(store.getRuntimeState("active_thread")?.value?.thread_id, result.written_threads[0]);
 }));
 

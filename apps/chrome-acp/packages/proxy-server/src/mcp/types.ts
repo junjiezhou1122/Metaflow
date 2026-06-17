@@ -40,7 +40,7 @@ export interface BrowserToolParams {
   command?: BrowserDebuggerCommand; // Required for debugger
   args?: Record<string, unknown>;   // Optional debugger command args
   url?: string;      // Required for open_tab
-  selector?: string; // Required for click/type
+  selector?: string; // Required for click/type, optional direct selector for act
   text?: string;     // Required for type
   active?: boolean;  // Optional for open_tab
   intent?: string;   // Required for act
@@ -475,7 +475,7 @@ export const BROWSER_OBSERVE_TOOL: McpTool = {
     type: "object",
     properties: {
       tabId: { type: "number", description: "Tab ID to observe. Use browser_tabs first." },
-      maxElements: { type: "number", description: "Maximum elements to return. Defaults to 80, capped at 200." },
+      maxElements: { type: "number", description: "Maximum elements to return. Defaults to 60, capped at 200." },
     },
     required: ["tabId"],
   },
@@ -493,6 +493,7 @@ export const BROWSER_ACT_TOOL: McpTool = {
       tabId: { type: "number", description: "Tab ID to act in. Use browser_tabs first." },
       intent: { type: "string", description: "Natural-language action, e.g. 'click chat button', 'type message into main input', 'send message'." },
       target: { type: "string", description: "Optional target hint, e.g. '聊一聊 button', 'main chat input', 'search box'." },
+      selector: { type: "string", description: "Optional CSS selector to act on directly when already known from browser_observe." },
       text: { type: "string", description: "Text to enter when the action types/fills an editable element." },
       submit: { type: "boolean", description: "Whether to submit after typing, usually by Enter or a send button." },
       mode: { type: "string", enum: ["click", "type", "submit", "auto"], description: "Optional action mode. Defaults to auto." },
@@ -540,7 +541,7 @@ export const BROWSER_CURRENT_OBSERVE_TOOL: McpTool = {
   inputSchema: {
     type: "object",
     properties: {
-      maxElements: { type: "number", description: "Maximum elements to return. Defaults to 80, capped at 200." },
+      maxElements: { type: "number", description: "Maximum elements to return. Defaults to 60, capped at 200." },
     },
   },
 };
@@ -557,6 +558,7 @@ export const BROWSER_CURRENT_ACT_TOOL: McpTool = {
     properties: {
       intent: { type: "string", description: "Natural-language action, e.g. 'click the send button', 'type message into the main input'." },
       target: { type: "string", description: "Optional target hint, e.g. 'bottom ChatGPT input'." },
+      selector: { type: "string", description: "Optional CSS selector to act on directly when already known from browser_current_observe." },
       text: { type: "string", description: "Text to enter when the action types/fills an editable element." },
       submit: { type: "boolean", description: "Whether to submit after typing, usually by Enter or a send button." },
       mode: { type: "string", enum: ["click", "type", "submit", "auto"], description: "Optional action mode. Defaults to auto." },
