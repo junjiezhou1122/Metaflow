@@ -535,6 +535,67 @@ export class ContextStore {
     return result.changes > 0;
   }
 
+  mergeViews(sourceIds: string[], targetId: string, overrides: Partial<Pick<ContextView, "view_type" | "title" | "content" | "status">> = {}): StoredContextView | undefined {
+    const sources = sourceIds.map(id => this.getView(id)).filter((v): v is StoredContextView => v !== undefined);
+    if (!sources.length) return undefined;
+    const base = sources[0]!;
+    const merged = this.upsertView({
+      id: targetId,
+      view_type: overrides.view_type ?? base.view_type,
+      title: overrides.title ?? base.title,
+      status: overrides.status ?? "candidate",
+      source_views: sourceIds,
+      compiler: { id: "system.merge_views", mode: "deterministic" },
+      content: overrides.content ?? Object.assign({}, ...sources.map(s => s.content ?? {})),
+      metadata: { graph_op: "merge", merged_from: sourceIds },
+    });
+    return merged;
+  }
+
+  splitView(sourceId: string, children: Array<{ id: string; content?: Record<string, unknown>; title?: string }>): StoredContextView[] {
+    const source = this.getView(sourceId);
+    if (!source) return [];
+    return children.map(child => this.upsertView({
+      id: child.id,
+      view_type: source.view_type,
+      title: child.title ?? source.title,
+      status: "candidate",
+      source_views: [sourceId],
+      compiler: { id: "system.split_view", mode: "deterministic" },
+      content: child.content ?? {},
+      metadata: { graph_op: "split", split_from: sourceId },
+    }));
+  }
+
+  diffViews(idA: string, idB: string): { added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, { from: unknown; to: unknown }> } | undefined {
+    const a = this.getView(idA);
+    const b = this.getView(idB);
+    if (!a || !b) return undefined;
+    const contentA = a.content ?? {};
+    const contentB = b.content ?? {};
+    const keys = new Set([...Object.keys(contentA), ...Object.keys(contentB)]);
+    const added: Record<string, unknown> = {};
+    const removed: Record<string, unknown> = {};
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+    for (const key of keys) {
+      if (!(key in contentA)) added[key] = contentB[key];
+      else if (!(key in contentB)) removed[key] = contentA[key];
+      else if (JSON.stringify(contentA[key]) !== JSON.stringify(contentB[key])) changed[key] = { from: contentA[key], to: contentB[key] };
+    }
+    return { added, removed, changed };
+  }
+
+  promoteView(id: string, targetViewType: string): StoredContextView | undefined {
+    const view = this.getView(id);
+    if (!view) return undefined;
+    return this.upsertView({
+      ...view,
+      view_type: targetViewType,
+      status: "candidate",
+      metadata: { ...(view.metadata ?? {}), graph_op: "promote", promoted_from: id, promoted_from_type: view.view_type },
+    });
+  }
+
   listViewFamilySummaries(options: { view_types?: string[]; active_only?: boolean; include_kinds?: boolean } = {}): Array<{ family: string; count: number; latest?: StoredContextView; kinds: string[] }> {
     const clauses: string[] = [];
     const params: SQLInputValue[] = [];

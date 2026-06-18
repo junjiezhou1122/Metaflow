@@ -196,6 +196,26 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "merge") {
+    mergeViewsFromCli(rest);
+    return;
+  }
+
+  if (command === "split") {
+    splitViewFromCli(rest);
+    return;
+  }
+
+  if (command === "diff") {
+    diffViewsFromCli(rest);
+    return;
+  }
+
+  if (command === "promote") {
+    promoteViewFromCli(rest);
+    return;
+  }
+
   fail("unknown command", "UNKNOWN_COMMAND");
 }
 
@@ -704,6 +724,77 @@ function deleteViewFromCli(args: string[]): void {
     return;
   }
   out(`archived ${archived.view_type} ${archived.id}`);
+}
+
+function mergeViewsFromCli(args: string[]): void {
+  const sourceIds = valuesAfter(args, "--source-view");
+  if (sourceIds.length < 2) {
+    fail("merge requires at least two --source-view ids", "MISSING_ARGS");
+    return;
+  }
+  const targetId = required(valueAfter(args, "--id"), "target_id");
+  const viewType = valueAfter(args, "--view-type");
+  const title = valueAfter(args, "--title");
+  const patch = patchFromArgs(args);
+  const merged = store.mergeViews(sourceIds, targetId, { view_type: viewType ?? undefined, title: title ?? undefined, content: patch?.content });
+  if (!merged) {
+    fail("None of the source views were found", "VIEW_NOT_FOUND");
+    return;
+  }
+  appendAgentSurfaceViewEvent("agent_surface.view_merged", "agent", merged, { source_view_ids: sourceIds, command: currentCommand });
+  emitViewMutationResult("merged", merged);
+}
+
+function splitViewFromCli(args: string[]): void {
+  const sourceId = required(args[0], "view_id");
+  const source = store.getView(sourceId);
+  if (!source) {
+    fail(`View not found: ${sourceId}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  const count = numberAfter(args, "--into") ?? 2;
+  const children = Array.from({ length: count }, (_, index) => ({
+    id: `${sourceId}:split:${index}`,
+    content: { split_index: index, split_total: count },
+    title: source.title ? `${source.title} (${index + 1}/${count})` : undefined,
+  }));
+  const results = store.splitView(sourceId, children);
+  if (jsonOutput) {
+    emitJson({ source: viewSummary(source), views: results.map(viewSummary) });
+    return;
+  }
+  out(`split ${source.view_type} ${sourceId} into ${results.length}`);
+  for (const v of results) out(`  ${v.id}`);
+}
+
+function diffViewsFromCli(args: string[]): void {
+  const idA = required(args[0], "view_id_a");
+  const idB = required(args[1], "view_id_b");
+  const diff = store.diffViews(idA, idB);
+  if (!diff) {
+    fail(`One or both views not found: ${idA}, ${idB}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  if (jsonOutput) {
+    emitJson({ id_a: idA, id_b: idB, diff });
+    return;
+  }
+  out(`diff ${idA} ${idB}`);
+  for (const [key, value] of Object.entries(diff.added)) out(`  + ${key}: ${JSON.stringify(value)}`);
+  for (const [key, value] of Object.entries(diff.removed)) out(`  - ${key}: ${JSON.stringify(value)}`);
+  for (const [key, value] of Object.entries(diff.changed)) out(`  ~ ${key}: ${JSON.stringify(value.from)} -> ${JSON.stringify(value.to)}`);
+}
+
+function promoteViewFromCli(args: string[]): void {
+  const id = required(args[0], "view_id");
+  const targetType = required(valueAfter(args, "--view-type"), "view_type");
+  const promoted = store.promoteView(id, targetType);
+  if (!promoted) {
+    fail(`View not found: ${id}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  appendAgentSurfaceViewEvent("agent_surface.view_promoted", "agent", promoted, { source_view_id: id, command: currentCommand });
+  emitViewMutationResult("promoted", promoted);
 }
 
 function printViewChildren(viewId: string, args: string[]): void {
@@ -1217,6 +1308,10 @@ function printHelp(): void {
         "pnpm mf [--json] view update <view_id> [--status candidate|accepted|archived|rejected] [--patch <json_file|->] [--actor agent|user]",
         "pnpm mf [--json] view delete <view_id> [--hard] [--reason <reason>] [--actor agent|user]",
         "pnpm mf [--json] view children <view_id> [--all] [--limit 50]",
+        "pnpm mf [--json] view merge --source-view <id> --source-view <id> --id <new_id> [--view-type <type>] [--title <title>]",
+        "pnpm mf [--json] view split <view_id> [--into <count>]",
+        "pnpm mf [--json] view diff <view_id_a> <view_id_b>",
+        "pnpm mf [--json] view promote <view_id> --view-type <target_type>",
         "pnpm mf [--json] processor list",
         "pnpm mf [--json] processor report",
         "pnpm mf [--json] processor run <processor_id> --record <record_id>",
@@ -1250,6 +1345,10 @@ function printHelp(): void {
   pnpm mf [--json] view update <view_id> [--status candidate|accepted|archived|rejected] [--patch <json_file|->] [--actor agent|user]
   pnpm mf [--json] view delete <view_id> [--hard] [--reason <reason>] [--actor agent|user]
   pnpm mf [--json] view children <view_id> [--all] [--limit 50]
+  pnpm mf [--json] view merge --source-view <id> --source-view <id> --id <new_id> [--view-type <type>] [--title <title>]
+  pnpm mf [--json] view split <view_id> [--into <count>]
+  pnpm mf [--json] view diff <view_id_a> <view_id_b>
+  pnpm mf [--json] view promote <view_id> --view-type <target_type>
   pnpm mf [--json] processor list
   pnpm mf [--json] processor report
   pnpm mf [--json] processor run <processor_id> --record <record_id>

@@ -414,3 +414,54 @@ fi
     rmSync(dir, { recursive: true, force: true });
   }
 }));
+
+test("mf view merge split diff promote graph operations", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:gm:a",
+    view_type: "project.current",
+    title: "View A",
+    status: "accepted",
+    content: { focus: "alpha", shared: "old" },
+  });
+  store.upsertView({
+    id: "view:gm:b",
+    view_type: "project.current",
+    title: "View B",
+    status: "accepted",
+    content: { detail: "beta", shared: "new" },
+  });
+
+  // merge
+  const merge = JSON.parse(mf(dbPath, [
+    "--json", "view", "merge",
+    "--source-view", "view:gm:a",
+    "--source-view", "view:gm:b",
+    "--id", "view:gm:merged",
+  ])) as { ok: boolean; data: { view: { id: string; source_views: string[] } } };
+  assert.equal(merge.ok, true);
+  assert.equal(merge.data.view.id, "view:gm:merged");
+  assert.deepEqual(merge.data.view.source_views, ["view:gm:a", "view:gm:b"]);
+
+  // split
+  const split = JSON.parse(mf(dbPath, [
+    "--json", "view", "split", "view:gm:a", "--into", "2",
+  ])) as { ok: boolean; data: { views: Array<{ id: string }> } };
+  assert.equal(split.ok, true);
+  assert.equal(split.data.views.length, 2);
+
+  // diff
+  const diff = JSON.parse(mf(dbPath, [
+    "--json", "view", "diff", "view:gm:a", "view:gm:b",
+  ])) as { ok: boolean; data: { diff: { added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, unknown> } } };
+  assert.equal(diff.ok, true);
+  assert.ok("detail" in diff.data.diff.added);
+  assert.ok("focus" in diff.data.diff.removed);
+  assert.ok("shared" in diff.data.diff.changed);
+
+  // promote
+  const promote = JSON.parse(mf(dbPath, [
+    "--json", "view", "promote", "view:gm:a", "--view-type", "work.focus_set",
+  ])) as { ok: boolean; data: { view: { view_type: string } } };
+  assert.equal(promote.ok, true);
+  assert.equal(promote.data.view.view_type, "work.focus_set");
+}));
