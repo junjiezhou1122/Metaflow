@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@info/core": "workspace:*",
-    "@info/view-system": "workspace:*"
+    "@info/view-system": "workspace:*",
+    "@info/views": "workspace:*"
   }
 }

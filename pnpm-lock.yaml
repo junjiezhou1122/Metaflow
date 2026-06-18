@@ -409,6 +409,9 @@ importers:
       '@info/view-system':
         specifier: workspace:*
         version: link:../view-system
+      '@info/views':
+        specifier: workspace:*
+        version: link:../views
 
   packages/programs:
     dependencies:

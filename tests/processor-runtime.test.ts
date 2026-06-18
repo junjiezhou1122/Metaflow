@@ -11,6 +11,7 @@ import {
   createProcessorRegistry,
   createSurfaceStateProcessor,
   createViewPromotionEngineProcessor,
+  createWorkRouterBatchProcessor,
   matchesPattern,
   type ProcessorDefinition,
 } from "@info/processor-runtime";
@@ -434,3 +435,71 @@ test("surface view builder can summarize raw records without a runtime", () => {
   assert.equal(view.content?.surface_kind, "ide");
   assert.equal((view.content?.screen as any)?.frame_id, "7");
 });
+
+test("work_router_batch processor is registered with correct id and metadata", () => {
+  const processor = createWorkRouterBatchProcessor();
+  assert.equal(processor.id, "processor.work_router_batch");
+  assert.deepEqual(processor.produces.views, ["work.focus_set"]);
+  assert.ok(processor.consumes.observations?.includes("observation.route_candidate"));
+  assert.equal(processor.runtime.kind, "local");
+});
+
+test("work_router_batch processor writes a work.focus_set view from route candidates", async () => withStore(async (store) => {
+  const now = new Date("2026-06-18T10:00:00.000Z");
+  for (let i = 0; i < 3; i++) {
+    store.insertRecord({
+      id: `route:batch:${i}`,
+      schema: { name: "observation.route_candidate", version: 1 },
+      source: { type: "runtime", connector: "processor.route_candidate" },
+      time: { observed_at: new Date(now.getTime() - i * 60_000).toISOString() },
+      payload: {
+        candidate_routes: [{
+          route_key: "project:/Users/junjie/info",
+          lane_kind: "project",
+          score: 0.85,
+          rule_hits: ["project_path.present"],
+        }],
+      },
+      privacy: { level: "private", retention: "normal" },
+    });
+  }
+  const seed = store.insertRecord({
+    id: "obs:batch:seed",
+    schema: { name: "observation.route_candidate", version: 1 },
+    source: { type: "runtime" },
+    time: { observed_at: now.toISOString() },
+    payload: { candidate_routes: [{ route_key: "project:/Users/junjie/info", lane_kind: "project", score: 0.9, rule_hits: [] }] },
+    privacy: { level: "private", retention: "normal" },
+  });
+
+  const runtime = new ProcessorRuntime({ store, processors: [createWorkRouterBatchProcessor({ now })] });
+  const result = await runtime.processObservation(seed);
+
+  assert.deepEqual(result.processors_matched, ["processor.work_router_batch"]);
+  assert.equal(result.views_written.length, 1);
+  const view = store.getView(result.views_written[0]);
+  assert.equal(view?.view_type, "work.focus_set");
+  assert.equal(view?.compiler?.id, "processor.work_router_batch");
+  const lanes = (view?.content?.active_lanes as Array<{ lane_key: string }>) ?? [];
+  assert.ok(lanes.some(lane => lane.lane_key === "project:/Users/junjie/info"));
+}));
+
+test("work_router_batch processor writes empty focus set when no route candidates present", async () => withStore(async (store) => {
+  const now = new Date("2026-06-18T10:00:00.000Z");
+  const seed = store.insertRecord({
+    id: "obs:batch:empty",
+    schema: { name: "observation.route_candidate", version: 1 },
+    source: { type: "runtime" },
+    time: { observed_at: now.toISOString() },
+    payload: { candidate_routes: [] },
+    privacy: { level: "private", retention: "normal" },
+  });
+
+  const runtime = new ProcessorRuntime({ store, processors: [createWorkRouterBatchProcessor({ now })] });
+  const result = await runtime.processObservation(seed);
+
+  assert.equal(result.views_written.length, 1);
+  const view = store.getView(result.views_written[0]);
+  assert.equal(view?.view_type, "work.focus_set");
+  assert.deepEqual((view?.content?.active_lanes as unknown[]) ?? [], []);
+}));

@@ -12,3 +12,4 @@ export * from "./builtins/current-page-router.js";
 export * from "./builtins/screenpipe-surface.js";
 export * from "./builtins/screenpipe-surface-processor.js";
 export * from "./builtins/view-promotion-engine.js";
+export * from "./builtins/work-router-batch.js";
