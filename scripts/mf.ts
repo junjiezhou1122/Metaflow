@@ -132,6 +132,34 @@ async function main(argv: string[]): Promise<void> {
         return;
       }
     }
+    if (area === "evolution") {
+      if (command === "candidates") {
+        printEvolutionCandidates();
+        return;
+      }
+      if (command === "show") {
+        const id = required(rest[0], "candidate_id");
+        showEvolutionCandidate(id);
+        return;
+      }
+      if (command === "apply") {
+        const id = required(rest[0], "candidate_id");
+        await applyEvolutionCandidate(id, rest.slice(1));
+        return;
+      }
+      if (command === "verify") {
+        const id = required(rest[0], "candidate_id");
+        printEvolutionVerification(id);
+        return;
+      }
+      if (command === "rollback") {
+        const id = required(rest[0], "candidate_id");
+        rollbackEvolutionCandidate(id);
+        return;
+      }
+      fail("unknown command", "UNKNOWN_COMMAND");
+      return;
+    }
     fail("unknown command", "UNKNOWN_COMMAND");
     return;
   }
@@ -1071,6 +1099,199 @@ function promoteMemoryCandidate(id: string): void {
   else out(`target ${result.views[0]?.id ?? decision.target_view_type}`);
 }
 
+function findEvolutionCandidate(id: string): { candidate: Record<string, unknown>; view: StoredContextView } | null {
+  const views = store.listViews({ view_types: ["view.promotion_candidates"], active_only: true, limit: 100 });
+  for (const view of views) {
+    const candidates = Array.isArray(view.content?.candidates) ? view.content.candidates as Array<Record<string, unknown>> : [];
+    const candidate = candidates.find(c => c.id === id);
+    if (candidate) return { candidate, view };
+  }
+  return null;
+}
+
+function printEvolutionCandidates(): void {
+  const views = store.listViews({ view_types: ["view.promotion_candidates"], active_only: true, limit: 100 });
+  const rows: Array<Record<string, string>> = [];
+  for (const view of views) {
+    const candidates = Array.isArray(view.content?.candidates) ? view.content.candidates as Array<Record<string, unknown>> : [];
+    for (const c of candidates) {
+      rows.push({
+        id: String(c.id ?? "-"),
+        action: String(c.action ?? "-"),
+        priority: String(c.priority ?? "-"),
+        target: String(c.target_view_type ?? c.target_processor_id ?? c.target_view_id ?? "-"),
+        reason: String(c.reason ?? "").slice(0, 80),
+      });
+    }
+  }
+  if (jsonOutput) {
+    emitJson({ candidates: rows });
+    return;
+  }
+  if (!rows.length) {
+    out("No evolution candidates found");
+    return;
+  }
+  printTable(rows, ["id", "action", "priority", "target", "reason"]);
+}
+
+function showEvolutionCandidate(id: string): void {
+  const found = findEvolutionCandidate(id);
+  if (!found) {
+    fail(`Evolution candidate not found: ${id}`, "EVOLUTION_CANDIDATE_NOT_FOUND");
+    return;
+  }
+  const { candidate, view } = found;
+  const operations = store.listViews({ view_types: ["evolution.operation"], limit: 100 })
+    .filter(v => v.content?.candidate_id === id);
+  const verification = store.listViews({ view_types: ["evolution.verification"], limit: 10 })
+    .find(v => v.content?.candidate_id === id);
+  if (jsonOutput) {
+    emitJson({ candidate, source_view_id: view.id, operations: operations.map(viewSummary), verification: verification ? viewSummary(verification) : null });
+    return;
+  }
+  out(`candidate: ${id}`);
+  out(`  action: ${candidate.action ?? "-"}`);
+  out(`  priority: ${candidate.priority ?? "-"}`);
+  out(`  target_view_type: ${candidate.target_view_type ?? "-"}`);
+  out(`  target_view_id: ${candidate.target_view_id ?? "-"}`);
+  out(`  target_processor_id: ${candidate.target_processor_id ?? "-"}`);
+  out(`  reason: ${candidate.reason ?? "-"}`);
+  out(`  expected_future_task: ${candidate.expected_future_task ?? "-"}`);
+  out(`  source_view_id: ${view.id}`);
+  if (operations.length) out(`  operations: ${operations.map(v => v.id).join(", ")}`);
+  if (verification) out(`  verification: ${verification.id} verdict=${verification.content?.verdict ?? "-"}`);
+}
+
+async function applyEvolutionCandidate(id: string, args: string[]): Promise<void> {
+  const found = findEvolutionCandidate(id);
+  if (!found) {
+    fail(`Evolution candidate not found: ${id}`, "EVOLUTION_CANDIDATE_NOT_FOUND");
+    return;
+  }
+  const { candidate } = found;
+  const mode = valueAfter(args, "--mode") ?? "agent_draft";
+  const action = String(candidate.action ?? "");
+  const opId = `evolution:op:${Date.now()}:${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  let appliedViewId: string | undefined;
+
+  if (action === "create_view" && candidate.target_view_type) {
+    const targetViewType = String(candidate.target_view_type);
+    const newViewId = valueAfter(args, "--id") ?? `${targetViewType}:evo:${Date.now().toString(36)}`;
+    const newView = store.upsertView({
+      id: newViewId,
+      view_type: targetViewType,
+      title: String(candidate.reason ?? targetViewType).slice(0, 100),
+      status: mode === "full_auto" ? "accepted" : "candidate",
+      source_views: [found.view.id],
+      compiler: { id: "evolution.apply", version: "1", mode: "deterministic" },
+      content: { evolution_candidate_id: id, evolution_action: action, evolution_mode: mode },
+      metadata: { evolution_candidate_id: id, evolution_mode: mode },
+    });
+    appliedViewId = newView.id;
+  } else if (action && candidate.target_view_id) {
+    const target = store.getView(String(candidate.target_view_id));
+    if (target) {
+      if (action === "retire_view") {
+        const archived = store.upsertView({ ...target, status: "archived", metadata: { ...(target.metadata ?? {}), evolution_candidate_id: id } });
+        appliedViewId = archived.id;
+      } else {
+        const draftId = `evolution:draft:${Date.now().toString(36)}`;
+        const draft = store.upsertView({
+          id: draftId, view_type: "evolution.draft",
+          title: `Draft: ${action} (${mode})`,
+          status: "candidate", source_views: [found.view.id, String(candidate.target_view_id)],
+          compiler: { id: "evolution.apply", version: "1", mode: "deterministic" },
+          content: { evolution_candidate_id: id, evolution_action: action, evolution_mode: mode, target_view_id: candidate.target_view_id },
+          metadata: { evolution_candidate_id: id, evolution_mode: mode },
+        });
+        appliedViewId = draft.id;
+      }
+    }
+  }
+
+  const rollbackStrategy = isPlainObject(candidate.rollback) ? String((candidate.rollback as Record<string, unknown>).strategy ?? "archive_created") : "archive_created";
+  const opView = store.upsertView({
+    id: opId, view_type: "evolution.operation",
+    title: `Evolution: ${action} (${mode})`,
+    status: "accepted", source_views: [found.view.id],
+    compiler: { id: "evolution.apply", version: "1", mode: "deterministic" },
+    content: { candidate_id: id, action, mode, applied_view_id: appliedViewId, rollback_strategy: rollbackStrategy },
+    metadata: { evolution_candidate_id: id },
+  });
+  store.appendRuntimeEvent({
+    event_type: "evolution.applied", actor: "agent", status: "completed",
+    subject_type: "view", subject_id: opView.id,
+    related_views: [found.view.id, ...(appliedViewId ? [appliedViewId] : [])],
+    payload: { candidate_id: id, action, mode, applied_view_id: appliedViewId, command: currentCommand },
+  });
+  if (jsonOutput) {
+    emitJson({ operation_id: opId, candidate_id: id, action, mode, applied_view_id: appliedViewId ?? null });
+    return;
+  }
+  out(`applied ${id} (${action}) mode=${mode}`);
+  out(`operation ${opId}`);
+  if (appliedViewId) out(`view ${appliedViewId}`);
+}
+
+function printEvolutionVerification(candidateId: string): void {
+  const found = findEvolutionCandidate(candidateId);
+  if (!found) {
+    fail(`Evolution candidate not found: ${candidateId}`, "EVOLUTION_CANDIDATE_NOT_FOUND");
+    return;
+  }
+  const operations = store.listViews({ view_types: ["evolution.operation"], limit: 100 })
+    .filter(v => v.content?.candidate_id === candidateId);
+  const verifications = store.listViews({ view_types: ["evolution.verification"], limit: 20 })
+    .filter(v => v.content?.candidate_id === candidateId);
+  if (jsonOutput) {
+    emitJson({ candidate_id: candidateId, candidate: found.candidate, operations: operations.map(viewSummary), verifications: verifications.map(viewSummary) });
+    return;
+  }
+  out(`candidate: ${candidateId}`);
+  out(`  applied_operations: ${operations.length}`);
+  if (!verifications.length) {
+    out("  verifications: none");
+    return;
+  }
+  for (const v of verifications) {
+    out(`  verification ${v.id}: verdict=${v.content?.verdict ?? "-"} metric=${v.content?.metric ?? "-"}`);
+  }
+}
+
+function rollbackEvolutionCandidate(candidateId: string): void {
+  const operations = store.listViews({ view_types: ["evolution.operation"], limit: 50 })
+    .filter(v => v.content?.candidate_id === candidateId && v.status !== "archived");
+  if (!operations.length) {
+    fail(`No applied operations found for candidate: ${candidateId}`, "EVOLUTION_OPERATION_NOT_FOUND");
+    return;
+  }
+  const rolledBack: string[] = [];
+  for (const op of operations) {
+    const appliedViewId = op.content?.applied_view_id as string | undefined;
+    if (appliedViewId) {
+      const appliedView = store.getView(appliedViewId);
+      if (appliedView && appliedView.status !== "archived") {
+        store.upsertView({ ...appliedView, status: "archived", metadata: { ...(appliedView.metadata ?? {}), rollback_reason: `rollback of ${candidateId}` } });
+      }
+    }
+    store.upsertView({ ...op, status: "archived", metadata: { ...(op.metadata ?? {}), rolled_back: true } });
+    rolledBack.push(op.id);
+  }
+  store.appendRuntimeEvent({
+    event_type: "evolution.rolled_back", actor: "agent", status: "completed",
+    subject_type: "view", subject_id: candidateId,
+    related_views: operations.map(op => op.id),
+    payload: { candidate_id: candidateId, rolled_back_operations: rolledBack, command: currentCommand },
+  });
+  if (jsonOutput) {
+    emitJson({ candidate_id: candidateId, rolled_back_operations: rolledBack });
+    return;
+  }
+  out(`rolled back ${rolledBack.length} operation(s) for ${candidateId}`);
+  for (const id of rolledBack) out(`  rolled back ${id}`);
+}
+
 function printStoredViewLine(view: StoredContextView): void {
   out(`  ${view.view_type} ${view.id} ${view.updated_at} ${view.title ?? ""}`.trim());
 }
@@ -1233,6 +1454,11 @@ function printHelp(): void {
         "pnpm mf [--json] memory trace <memory_id>",
         "pnpm mf [--json] memory reject <candidate_id> [reason]",
         "pnpm mf [--json] memory promote <candidate_id>",
+        "pnpm mf [--json] evolution candidates",
+        "pnpm mf [--json] evolution show <candidate_id>",
+        "pnpm mf [--json] evolution apply <candidate_id> [--mode agent_draft|sandbox_auto|full_auto|manual] [--id <view_id>]",
+        "pnpm mf [--json] evolution verify <candidate_id>",
+        "pnpm mf [--json] evolution rollback <candidate_id>",
       ],
     });
     return;
@@ -1265,7 +1491,12 @@ function printHelp(): void {
   pnpm mf [--json] memory candidates
   pnpm mf [--json] memory trace <memory_id>
   pnpm mf [--json] memory reject <candidate_id> [reason]
-  pnpm mf [--json] memory promote <candidate_id>`);
+  pnpm mf [--json] memory promote <candidate_id>
+  pnpm mf [--json] evolution candidates
+  pnpm mf [--json] evolution show <candidate_id>
+  pnpm mf [--json] evolution apply <candidate_id> [--mode agent_draft|sandbox_auto|full_auto|manual] [--id <view_id>]
+  pnpm mf [--json] evolution verify <candidate_id>
+  pnpm mf [--json] evolution rollback <candidate_id>`);
 }
 
 function parseGlobalArgs(argv: string[]): { json: boolean; argv: string[] } {

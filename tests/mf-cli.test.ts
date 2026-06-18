@@ -414,3 +414,204 @@ fi
     rmSync(dir, { recursive: true, force: true });
   }
 }));
+
+test("mf evolution candidates lists promotion candidates from view.promotion_candidates views", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:promo:01",
+    view_type: "view.promotion_candidates",
+    title: "Promotion batch 1",
+    status: "candidate",
+    compiler: { id: "processor.view_promotion_engine", mode: "deterministic" },
+    content: {
+      candidates: [
+        { id: "cand:create:research", action: "create_view", target_view_type: "research.brief", priority: "high", reason: "Repeated failure evidence", expected_future_task: "debug", expected_search_reduction: "30%" },
+        { id: "cand:retire:stale", action: "retire_view", target_view_id: "view:stale:01", priority: "low", reason: "Stale view", expected_future_task: "cleanup", expected_search_reduction: "5%" },
+      ],
+    },
+  });
+
+  const result = JSON.parse(mf(dbPath, ["--json", "evolution", "candidates"])) as {
+    ok: boolean;
+    data: { candidates: Array<{ id: string; action: string; priority: string; target: string }> };
+  };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.candidates.length, 2);
+  assert.ok(result.data.candidates.some(c => c.id === "cand:create:research" && c.action === "create_view"));
+  assert.ok(result.data.candidates.some(c => c.id === "cand:retire:stale" && c.action === "retire_view"));
+}));
+
+test("mf evolution candidates returns empty when no promotion candidates exist", () => withDb((dbPath) => {
+  const result = JSON.parse(mf(dbPath, ["--json", "evolution", "candidates"])) as { ok: boolean; data: { candidates: unknown[] } };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.candidates.length, 0);
+}));
+
+test("mf evolution show returns candidate details and errors for unknown ids", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:promo:show",
+    view_type: "view.promotion_candidates",
+    status: "candidate",
+    compiler: { id: "processor.view_promotion_engine", mode: "deterministic" },
+    content: {
+      candidates: [
+        { id: "cand:show:01", action: "create_processor", target_processor_id: "processor.failure_miner", priority: "medium", reason: "No registered processor", expected_future_task: "mine failures", expected_search_reduction: "20%" },
+      ],
+    },
+  });
+
+  const result = JSON.parse(mf(dbPath, ["--json", "evolution", "show", "cand:show:01"])) as {
+    ok: boolean;
+    data: { candidate: Record<string, unknown>; source_view_id: string; operations: unknown[]; verification: null };
+  };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.candidate.id, "cand:show:01");
+  assert.equal(result.data.candidate.action, "create_processor");
+  assert.equal(result.data.source_view_id, "view:promo:show");
+  assert.equal(result.data.operations.length, 0);
+  assert.equal(result.data.verification, null);
+
+  const missing = spawnSync("node", ["--no-warnings", "--experimental-sqlite", "--import", "tsx", "scripts/mf.ts", "--json", "evolution", "show", "cand:missing"], {
+    cwd: process.cwd(),
+    env: { ...process.env, CONTEXT_DB_PATH: dbPath },
+    encoding: "utf8",
+  });
+  assert.notEqual(missing.status, 0);
+  const err = JSON.parse(missing.stderr) as { ok: boolean; error: { code: string } };
+  assert.equal(err.error.code, "EVOLUTION_CANDIDATE_NOT_FOUND");
+}));
+
+test("mf evolution apply creates operation view, emits event, and creates draft view", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:promo:apply",
+    view_type: "view.promotion_candidates",
+    status: "candidate",
+    compiler: { id: "processor.view_promotion_engine", mode: "deterministic" },
+    content: {
+      candidates: [
+        { id: "cand:apply:01", action: "create_view", target_view_type: "research.brief", priority: "high", reason: "Evidence of repeated research", expected_future_task: "research", expected_search_reduction: "40%", rollback: { strategy: "archive_created" } },
+      ],
+    },
+  });
+
+  const result = JSON.parse(mf(dbPath, ["--json", "evolution", "apply", "cand:apply:01", "--mode", "agent_draft"])) as {
+    ok: boolean;
+    data: { operation_id: string; candidate_id: string; action: string; mode: string; applied_view_id: string | null };
+  };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.candidate_id, "cand:apply:01");
+  assert.equal(result.data.action, "create_view");
+  assert.equal(result.data.mode, "agent_draft");
+  assert.ok(result.data.operation_id.startsWith("evolution:op:"));
+  assert.ok(result.data.applied_view_id !== null);
+
+  // operation view written
+  const opView = store.getView(result.data.operation_id);
+  assert.equal(opView?.view_type, "evolution.operation");
+  assert.equal(opView?.content?.candidate_id, "cand:apply:01");
+  assert.equal(opView?.content?.mode, "agent_draft");
+
+  // applied view created as candidate
+  const appliedView = store.getView(result.data.applied_view_id!);
+  assert.equal(appliedView?.view_type, "research.brief");
+  assert.equal(appliedView?.status, "candidate");
+
+  // evolution.applied event emitted
+  assert.ok(store.listRuntimeEvents({ event_types: ["evolution.applied"], limit: 5 }).some(e => e.payload?.candidate_id === "cand:apply:01"));
+
+  // show now surfaces the operation
+  const show = JSON.parse(mf(dbPath, ["--json", "evolution", "show", "cand:apply:01"])) as {
+    ok: boolean;
+    data: { operations: Array<{ id: string }> };
+  };
+  assert.equal(show.data.operations.length, 1);
+  assert.equal(show.data.operations[0]?.id, result.data.operation_id);
+}));
+
+test("mf evolution verify returns candidate with operations and verifications", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:promo:verify",
+    view_type: "view.promotion_candidates",
+    status: "candidate",
+    compiler: { id: "processor.view_promotion_engine", mode: "deterministic" },
+    content: {
+      candidates: [
+        { id: "cand:verify:01", action: "create_view", target_view_type: "project.memory", priority: "medium", reason: "Project repeated", expected_future_task: "project lookup", expected_search_reduction: "15%" },
+      ],
+    },
+  });
+  store.upsertView({
+    id: "evolution:op:verify:01",
+    view_type: "evolution.operation",
+    status: "accepted",
+    compiler: { id: "evolution.apply", mode: "deterministic" },
+    content: { candidate_id: "cand:verify:01", action: "create_view", mode: "agent_draft" },
+    metadata: { evolution_candidate_id: "cand:verify:01" },
+  });
+  store.upsertView({
+    id: "evolution:verification:01",
+    view_type: "evolution.verification",
+    status: "accepted",
+    compiler: { id: "evolution.verify", mode: "deterministic" },
+    content: { candidate_id: "cand:verify:01", operation_id: "evolution:op:verify:01", metric: "search_steps", verdict: "keep" },
+    metadata: { evolution_candidate_id: "cand:verify:01" },
+  });
+
+  const result = JSON.parse(mf(dbPath, ["--json", "evolution", "verify", "cand:verify:01"])) as {
+    ok: boolean;
+    data: { candidate_id: string; operations: Array<{ id: string }>; verifications: Array<{ id: string; content: Record<string, unknown> }> };
+  };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.candidate_id, "cand:verify:01");
+  assert.equal(result.data.operations.length, 1);
+  assert.equal(result.data.verifications.length, 1);
+  assert.equal(result.data.verifications[0]?.content?.verdict, "keep");
+}));
+
+test("mf evolution rollback archives applied operations and emits rolled_back event", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:promo:rollback",
+    view_type: "view.promotion_candidates",
+    status: "candidate",
+    compiler: { id: "processor.view_promotion_engine", mode: "deterministic" },
+    content: {
+      candidates: [
+        { id: "cand:rollback:01", action: "create_view", target_view_type: "research.brief", priority: "high", reason: "Test rollback", expected_future_task: "research", expected_search_reduction: "10%" },
+      ],
+    },
+  });
+  // apply first
+  mf(dbPath, ["evolution", "apply", "cand:rollback:01", "--mode", "agent_draft", "--id", "research.brief:rollback-test"]);
+
+  const opBefore = store.listViews({ view_types: ["evolution.operation"], active_only: true, limit: 10 })
+    .find(v => v.content?.candidate_id === "cand:rollback:01");
+  assert.ok(opBefore, "operation should exist before rollback");
+
+  const result = JSON.parse(mf(dbPath, ["--json", "evolution", "rollback", "cand:rollback:01"])) as {
+    ok: boolean;
+    data: { candidate_id: string; rolled_back_operations: string[] };
+  };
+  assert.equal(result.ok, true);
+  assert.equal(result.data.candidate_id, "cand:rollback:01");
+  assert.equal(result.data.rolled_back_operations.length, 1);
+
+  // operation is now archived
+  const opAfter = store.getView(result.data.rolled_back_operations[0]!);
+  assert.equal(opAfter?.status, "archived");
+
+  // applied view is archived
+  const appliedView = store.getView("research.brief:rollback-test");
+  assert.equal(appliedView?.status, "archived");
+
+  // evolution.rolled_back event emitted
+  assert.ok(store.listRuntimeEvents({ event_types: ["evolution.rolled_back"], limit: 5 }).some(e => e.payload?.candidate_id === "cand:rollback:01"));
+
+  // rollback on already-rolled-back candidate fails
+  const second = spawnSync("node", ["--no-warnings", "--experimental-sqlite", "--import", "tsx", "scripts/mf.ts", "--json", "evolution", "rollback", "cand:rollback:01"], {
+    cwd: process.cwd(),
+    env: { ...process.env, CONTEXT_DB_PATH: dbPath },
+    encoding: "utf8",
+  });
+  assert.notEqual(second.status, 0);
+  const err = JSON.parse(second.stderr) as { ok: boolean; error: { code: string } };
+  assert.equal(err.error.code, "EVOLUTION_OPERATION_NOT_FOUND");
+}));
