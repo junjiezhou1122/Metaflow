@@ -19,7 +19,3 @@ export * as ViewCatalog from "./catalog.js";
 export * from "./catalog.js";
 export * as ViewProcessors from "./processors.js";
 export * from "./processors.js";
-export * as WorkRouterView from "./work-router/index.js";
-export * from "./work-router/index.js";
-export * as ProjectView from "./project/index.js";
-export * from "./project/index.js";

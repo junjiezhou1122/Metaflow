@@ -12,3 +12,5 @@ export * from "./builtins/current-page-router.js";
 export * from "./builtins/screenpipe-surface.js";
 export * from "./builtins/screenpipe-surface-processor.js";
 export * from "./builtins/view-promotion-engine.js";
+export * from "./builtins/project-current.js";
+export * from "./builtins/memory-profile-update.js";
