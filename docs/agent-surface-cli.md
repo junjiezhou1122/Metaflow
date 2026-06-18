@@ -56,8 +56,26 @@ pnpm mf --json view upsert ./view.json --actor agent
 cat ./view.json | pnpm mf --json view upsert - --actor user
 ```
 
-The upsert path records provenance/audit metadata with actor, command, View id,
-and View type.
+Operate the View graph directly:
+
+```bash
+pnpm mf --json view fork view:example --id view:example:browser --view-type task.browser_brief --patch ./patch.json
+pnpm mf --json view update view:example:browser --status accepted --patch ./patch.json
+pnpm mf --json view children view:example
+pnpm mf --json view delete view:example:browser --reason "superseded"
+pnpm mf --json view delete view:example:browser --hard
+```
+
+`fork` creates a new View with the source View in `source_views`. `update`
+mutates the current materialized View through a JSON object patch. `delete`
+archives by default so provenance remains queryable; `--hard` physically removes
+the View. All write paths record provenance/audit metadata with actor, command,
+View id, and View type.
+
+Agents can add new View families in code by registering a `ViewSpec` and, when
+needed, a processor. They can also create ad-hoc View instances through CLI
+without changing code. The graph is intentionally dynamic: different tasks can
+fork the same source View into different task Views.
 
 ## Processors
 
@@ -68,11 +86,17 @@ pnpm mf --json processor list
 pnpm mf --json processor report
 pnpm mf --json processor run processor.route_candidate --record obs:example
 pnpm mf --json processor run processor.surface_state --view view:example
+pnpm mf --json processor run processor.view_promotion_engine --record obs:example
 ```
 
 Processor runs write runtime evidence. Agents should use the returned run data
 and provenance instead of treating `confidence` as the Agent Surface quality
 signal.
+
+`processor.view_promotion_engine` is the first task-discovery processor. It
+scans recent observations, Views, and runtime events, then writes
+`view.promotion_candidates`. Agents can inspect that View to decide which Views
+or processors should be created, updated, combined, retired, or improved.
 
 ## Agent Tasks
 

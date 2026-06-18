@@ -1,4 +1,36 @@
-import type { ViewSpec } from "./spec.js";
+import type { LegacyViewFamilyDefinition, ViewSpec } from "./spec.js";
+import { legacyViewFamilyToSpec } from "./spec.js";
+
+// Legacy catalog entries not yet superseded by a named ViewSpec above.
+// These are kept for backwards compatibility with older UI and server routes.
+const LEGACY_CATALOG_DEFINITIONS: readonly LegacyViewFamilyDefinition[] = [
+  { view_type: "evidence", label: "EvidenceView", purpose: "Normalized evidence from raw observations.", category: "semantic", producers: ["compiler"], default_page_size: 120 },
+  { view_type: "visual_frame", label: "VisualFrameView", purpose: "Screen semantics compressed from visual evidence.", category: "semantic", producers: ["compiler"], default_page_size: 80 },
+  { view_type: "audio", label: "AudioView", purpose: "Speech or transcript semantics compressed from audio evidence.", category: "semantic", producers: ["compiler"], default_page_size: 60 },
+  { view_type: "activity", label: "ActivityView", purpose: "Time-based activity chunks built from evidence.", category: "semantic", producers: ["compiler"], default_page_size: 120 },
+  { view_type: "activity_block", label: "ActivityBlockView", purpose: "Short work blocks synthesized from visual, audio, and activity views.", category: "semantic", producers: ["compiler"], default_page_size: 60 },
+  { view_type: "proposal", label: "ProposalView", purpose: "Control view that proposes which downstream views should exist.", category: "semantic", producers: ["compiler"], default_page_size: 80 },
+  { view_type: "resource", label: "ResourceView", purpose: "Reusable material observed in the user's workflow.", category: "semantic", producers: ["compiler", "manual", "agent"], default_page_size: 60, manual_create: true },
+  { view_type: "intent", label: "IntentView", purpose: "Current or inferred goal signal.", category: "semantic", producers: ["compiler", "manual", "agent"], default_page_size: 60, manual_create: true },
+  { view_type: "workflow", label: "WorkflowView", purpose: "Structured work session composed from activities, resources, and intents.", category: "semantic", producers: ["compiler", "manual", "agent"], default_page_size: 60, manual_create: true },
+  { view_type: "memory", label: "MemoryView", purpose: "Durable agent/app-consumable memory.", category: "memory", producers: ["compiler", "program", "manual", "agent"], default_page_size: 60, manual_create: true },
+  { view_type: "thread.active_work", label: "Active Work", purpose: "Current work focus from project/context signals.", category: "project", producers: ["program"], default_page_size: 60 },
+  { view_type: "project.current_context", label: "Project Context", purpose: "Current project state and relevant context.", category: "project", producers: ["program", "manual"], default_page_size: 60, manual_create: true },
+  { view_type: "brief.research", label: "Research Brief", purpose: "Research synthesis for a topic, resource, or active work thread.", category: "ambient", producers: ["program", "agent", "manual"], default_page_size: 60, manual_create: true },
+  { view_type: "brief.background_research", label: "Background Research", purpose: "Background research prepared from proactive task delegation.", category: "ambient", producers: ["agent", "runtime"], default_page_size: 80 },
+  { view_type: "advice.research", label: "Research Advice", purpose: "Lightweight research suggestion surfaced at the right time.", category: "ambient", producers: ["program"], default_page_size: 80 },
+  { view_type: "advice.writing_assist", label: "Writing Assist", purpose: "Inline-safe writing advice for active text editing.", category: "ambient", producers: ["program", "agent"], default_page_size: 80 },
+  { view_type: "task.background_research", label: "Research Task", purpose: "Proactive background research task for an agent runtime.", category: "ambient", producers: ["program", "manual"], default_page_size: 80, manual_create: true },
+  { view_type: "draft.writing_continuation", label: "Writing Draft", purpose: "Editable writing continuation or draft.", category: "ambient", producers: ["program", "agent"], default_page_size: 80 },
+  { view_type: "opportunity.tool", label: "Tool Opportunity", purpose: "Detected workflow improvement or small-tool opportunity.", category: "ambient", producers: ["program", "manual"], default_page_size: 80, manual_create: true },
+  { view_type: "task.toolsmith_prototype", label: "Toolsmith Task", purpose: "Task for drafting a local tool prototype without direct file edits.", category: "ambient", producers: ["program", "manual"], default_page_size: 80, manual_create: true },
+  { view_type: "draft.tool_prototype", label: "Tool Prototype", purpose: "Prototype plan for a workflow-improving tool.", category: "ambient", producers: ["agent", "program"], default_page_size: 80 },
+  { view_type: "tool.prototype_artifact", label: "Tool Artifact", purpose: "Inspectable sandbox artifact compiled from a tool prototype.", category: "runtime", producers: ["runtime"], default_page_size: 80 },
+  { view_type: "work_thread", label: "Work Thread", purpose: "Runtime-maintained candidate thread index.", category: "runtime", producers: ["runtime"], default_page_size: 60 },
+  { view_type: "timeline.activity", label: "Activity Timeline", purpose: "Runtime activity timeline for UI and debugging.", category: "runtime", producers: ["runtime"], default_page_size: 60 },
+  { view_type: "project_timeline", label: "Project Timeline", purpose: "Project-scoped timeline with records, events, and work threads.", category: "runtime", producers: ["runtime"], default_page_size: 60 },
+  { view_type: "summary.project_work_episode", label: "Project Episode", purpose: "Episode summary for a work thread.", category: "runtime", producers: ["runtime"], default_page_size: 60 },
+];
 
 export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
   {
@@ -161,6 +193,32 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     default_query: { view_types: ["agent.task_list"], limit: 1 },
     tags: ["agent", "tasks", "queue"],
     examples: [{ view_type: "agent.task_list", content: { item_count: 2, counts: { queued: 1, completed: 1 }, items: [] } }],
+  },
+  {
+    view_type: "view.promotion_candidates",
+    title: "View Promotion Candidates",
+    purpose: "Task-discovery output that proposes which Views or processors should be created, updated, combined, retired, or promoted.",
+    lifecycle: "session",
+    subject: {
+      description: "A recent observation/view/event window analyzed for future-search compression opportunities.",
+      examples: [{ window_minutes: 720, candidates: ["create_view", "combine_views", "retire_view", "create_processor"] }],
+    },
+    producers: [{ id: "processor.view_promotion_engine", kind: "processor" }],
+    consumes: {
+      observations: ["observation.*", "feedback.*"],
+      views: ["*"],
+    },
+    default_query: { view_types: ["view.promotion_candidates"], limit: 10 },
+    tags: ["viewgraph", "promotion", "task-discovery", "adaptive-memory"],
+    examples: [{
+      view_type: "view.promotion_candidates",
+      content: {
+        candidates: [
+          { action: "create_view", target_view_type: "research.failure", reason: "Repeated failure evidence would reduce future debugging search." },
+          { action: "create_processor", target_processor_id: "processor.failure_miner", reason: "No registered processor produces research.failure." },
+        ],
+      },
+    }],
   },
   {
     view_type: "memory.daily",
@@ -334,6 +392,12 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
   },
 ];
 
+const CORE_VIEW_TYPES = new Set(CORE_VIEW_SPECS.map(s => s.view_type));
+
+export const LEGACY_VIEW_SPECS: readonly ViewSpec[] = LEGACY_CATALOG_DEFINITIONS
+  .filter(d => !CORE_VIEW_TYPES.has(d.view_type))
+  .map(legacyViewFamilyToSpec);
+
 export function builtinViewSpecs(): ViewSpec[] {
-  return [...CORE_VIEW_SPECS];
+  return [...CORE_VIEW_SPECS, ...LEGACY_VIEW_SPECS];
 }

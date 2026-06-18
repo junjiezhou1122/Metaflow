@@ -40,6 +40,7 @@ test("view registry supports dynamic arbitrary view families", () => {
   assert.equal(registry.get("memory.daily")?.producers?.some(producer => producer.kind === "manual"), true);
   assert.equal(registry.get("memory.profile")?.producers?.some(producer => producer.kind === "agent"), true);
   assert.equal(registry.get("agent.case_memory")?.lifecycle, "long_term");
+  assert.equal(registry.get("view.promotion_candidates")?.producers?.some(producer => producer.id === "processor.view_promotion_engine"), true);
 });
 
 test("registry can merge legacy catalog-shaped definitions", () => {
