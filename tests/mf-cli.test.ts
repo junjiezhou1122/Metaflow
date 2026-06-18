@@ -37,6 +37,7 @@ test("mf processor list and report expose built-in processors", () => withDb((db
   const list = mf(dbPath, ["processor", "list"]);
   assert.match(list, /processor\.surface_state/);
   assert.match(list, /processor\.route_candidate/);
+  assert.match(list, /processor\.view_promotion_engine/);
   assert.match(list, /runtime/);
   assert.match(list, /autonomy/);
 
@@ -219,6 +220,88 @@ test("mf view upsert writes dynamic Views with agent provenance", () => withDb((
   assert.ok(store.listRuntimeEvents({ event_types: ["agent_surface.view_upserted"], limit: 5 }).some(event => event.subject_id === "view:dynamic:agent"));
 }));
 
+test("mf view graph commands fork update list children and delete views", () => withDb((dbPath, store) => {
+  store.upsertView({
+    id: "view:graph:root",
+    view_type: "project.current",
+    title: "Root view",
+    status: "accepted",
+    content: { project: "info", nested: { old: true } },
+    metadata: { lane: "root" },
+  });
+  const patchFile = join(tmpdir(), `info-mf-view-patch-${Date.now()}.json`);
+  writeFileSync(patchFile, JSON.stringify({
+    content: { nested: { new: true }, task: "browser" },
+    metadata: { lane: "browser" },
+  }));
+
+  const fork = JSON.parse(mf(dbPath, [
+    "--json",
+    "view",
+    "fork",
+    "view:graph:root",
+    "--id",
+    "view:graph:child",
+    "--view-type",
+    "custom.browser_task",
+    "--title",
+    "Browser task",
+    "--patch",
+    patchFile,
+  ])) as { ok: boolean; data: { view: { id: string; view_type: string; source_views: string[]; content: any; producer?: string } } };
+  assert.equal(fork.ok, true);
+  assert.equal(fork.data.view.id, "view:graph:child");
+  assert.equal(fork.data.view.view_type, "custom.browser_task");
+  assert.deepEqual(fork.data.view.source_views, ["view:graph:root"]);
+  assert.equal(fork.data.view.content.nested.old, true);
+  assert.equal(fork.data.view.content.nested.new, true);
+  assert.equal(fork.data.view.producer, "agent.fork_view");
+
+  const children = JSON.parse(mf(dbPath, ["--json", "view", "children", "view:graph:root"])) as {
+    ok: boolean;
+    data: { children: Array<{ id: string }> };
+  };
+  assert.equal(children.ok, true);
+  assert.deepEqual(children.data.children.map(view => view.id), ["view:graph:child"]);
+
+  const updatePatch = join(tmpdir(), `info-mf-view-update-${Date.now()}.json`);
+  writeFileSync(updatePatch, JSON.stringify({ content: { task: "done" }, metadata: { reviewed: true } }));
+  const update = JSON.parse(mf(dbPath, [
+    "--json",
+    "view",
+    "update",
+    "view:graph:child",
+    "--status",
+    "accepted",
+    "--patch",
+    updatePatch,
+  ])) as { ok: boolean; data: { view: { status: string; content: any; source_views: string[] } } };
+  assert.equal(update.ok, true);
+  assert.equal(update.data.view.status, "accepted");
+  assert.equal(update.data.view.content.task, "done");
+  assert.deepEqual(update.data.view.source_views, ["view:graph:root"]);
+
+  const archive = JSON.parse(mf(dbPath, ["--json", "view", "delete", "view:graph:child", "--reason", "no longer needed"])) as {
+    ok: boolean;
+    data: { deleted: boolean; hard: boolean; view: { status: string } };
+  };
+  assert.equal(archive.ok, true);
+  assert.equal(archive.data.deleted, true);
+  assert.equal(archive.data.hard, false);
+  assert.equal(archive.data.view.status, "archived");
+  assert.equal(store.getView("view:graph:child")?.status, "archived");
+
+  const hardDelete = JSON.parse(mf(dbPath, ["--json", "view", "delete", "view:graph:child", "--hard"])) as {
+    ok: boolean;
+    data: { deleted: boolean; hard: boolean };
+  };
+  assert.equal(hardDelete.ok, true);
+  assert.equal(hardDelete.data.hard, true);
+  assert.equal(store.getView("view:graph:child"), undefined);
+  assert.ok(store.listRuntimeEvents({ event_types: ["agent_surface.view_forked"], limit: 5 }).some(event => event.subject_id === "view:graph:child"));
+  assert.ok(store.listRuntimeEvents({ event_types: ["agent_surface.view_deleted"], limit: 5 }).some(event => event.subject_id === "view:graph:child"));
+}));
+
 test("mf processor run triggers a whitelisted processor and records evidence", () => withDb((dbPath, store) => {
   const source = store.insertRecord({
     id: "obs:processor-run",
@@ -246,6 +329,42 @@ test("mf processor run triggers a whitelisted processor and records evidence", (
   assert.ok(result.data.result.observations_written.length >= 1);
   assert.ok(store.recent(10).some(record => record.schema.name === "observation.route_candidate"));
   assert.ok(store.listRuntimeEvents({ event_types: ["processor.run.completed"], limit: 10 }).some(event => event.plugin_id === "processor.route_candidate"));
+}));
+
+test("mf processor run can produce View promotion candidates", () => withDb((dbPath, store) => {
+  const source = store.insertRecord({
+    id: "obs:promotion-cli",
+    schema: { name: "observation.local_project", version: 1 },
+    source: { type: "local_project" },
+    content: { title: "Info project" },
+  });
+  for (let index = 0; index < 3; index += 1) {
+    store.insertRecord({
+      id: `route:promotion-cli:${index}`,
+      schema: { name: "observation.route_candidate", version: 1 },
+      source: { type: "runtime", connector: "processor.route_candidate" },
+      payload: {
+        candidate_routes: [{
+          route_key: "topic:chrome-acp",
+          lane_kind: "topic",
+          score: 0.7,
+          rule_hits: ["topic.token"],
+        }],
+      },
+    });
+  }
+
+  const result = JSON.parse(mf(dbPath, ["--json", "processor", "run", "processor.view_promotion_engine", "--record", source.id])) as {
+    ok: boolean;
+    data: { result: { processors_matched: string[]; views_written: string[] } };
+  };
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data.result.processors_matched, ["processor.view_promotion_engine"]);
+  const view = store.getView(result.data.result.views_written[0]);
+  assert.equal(view?.view_type, "view.promotion_candidates");
+  const candidates = view?.content?.candidates as Array<Record<string, unknown>>;
+  assert.ok(candidates.some(candidate => candidate.action === "create_view" && candidate.target_view_type === "research.brief"));
 }));
 
 test("mf sensor screenpipe search passes filters, normalizes records, and can write observations", () => withDb((dbPath, store) => {

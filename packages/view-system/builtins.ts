@@ -163,6 +163,32 @@ export const CORE_VIEW_SPECS: readonly ViewSpec[] = [
     examples: [{ view_type: "agent.task_list", content: { item_count: 2, counts: { queued: 1, completed: 1 }, items: [] } }],
   },
   {
+    view_type: "view.promotion_candidates",
+    title: "View Promotion Candidates",
+    purpose: "Task-discovery output that proposes which Views or processors should be created, updated, combined, retired, or promoted.",
+    lifecycle: "session",
+    subject: {
+      description: "A recent observation/view/event window analyzed for future-search compression opportunities.",
+      examples: [{ window_minutes: 720, candidates: ["create_view", "combine_views", "retire_view", "create_processor"] }],
+    },
+    producers: [{ id: "processor.view_promotion_engine", kind: "processor" }],
+    consumes: {
+      observations: ["observation.*", "feedback.*"],
+      views: ["*"],
+    },
+    default_query: { view_types: ["view.promotion_candidates"], limit: 10 },
+    tags: ["viewgraph", "promotion", "task-discovery", "adaptive-memory"],
+    examples: [{
+      view_type: "view.promotion_candidates",
+      content: {
+        candidates: [
+          { action: "create_view", target_view_type: "research.failure", reason: "Repeated failure evidence would reduce future debugging search." },
+          { action: "create_processor", target_processor_id: "processor.failure_miner", reason: "No registered processor produces research.failure." },
+        ],
+      },
+    }],
+  },
+  {
     view_type: "memory.daily",
     title: "Daily Memory",
     purpose: "Editable markdown-backed daily memory summarizing one calendar day's work, decisions, active projects, useful context, and notable evidence.",

@@ -12,6 +12,7 @@ import {
   createRouteCandidateProcessor,
   createScreenpipeSurfaceProcessor,
   createSurfaceStateProcessor,
+  createViewPromotionEngineProcessor,
   type ProcessorDefinition,
 } from "@info/processor-runtime";
 import { compileMemoryGate as compileMemoryGateView } from "@info/views";
@@ -175,6 +176,26 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "fork") {
+    forkViewFromCli(rest);
+    return;
+  }
+
+  if (command === "update") {
+    updateViewFromCli(rest);
+    return;
+  }
+
+  if (command === "delete") {
+    deleteViewFromCli(rest);
+    return;
+  }
+
+  if (command === "children") {
+    printViewChildren(required(rest[0], "view_id"), rest);
+    return;
+  }
+
   fail("unknown command", "UNKNOWN_COMMAND");
 }
 
@@ -184,6 +205,7 @@ function builtInProcessors(): ProcessorDefinition[] {
     createRouteCandidateProcessor(),
     createCurrentPageRouterProcessor(),
     createScreenpipeSurfaceProcessor(),
+    createViewPromotionEngineProcessor(),
   ];
 }
 
@@ -527,6 +549,182 @@ function upsertViewFromCli(args: string[]): void {
     return;
   }
   out(`upserted ${stored.view_type} ${stored.id}`);
+}
+
+function forkViewFromCli(args: string[]): void {
+  const sourceId = required(args[0], "view_id");
+  const source = store.getView(sourceId);
+  if (!source) {
+    fail(`View not found: ${sourceId}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  const actor = actorFromArgs(args);
+  const targetId = valueAfter(args, "--id") ?? forkedViewId(source.id);
+  const viewType = valueAfter(args, "--view-type") ?? source.view_type;
+  const title = valueAfter(args, "--title") ?? source.title;
+  const summary = valueAfter(args, "--summary") ?? source.summary;
+  const reason = valueAfter(args, "--reason") ?? "forked from CLI";
+  const patch = patchFromArgs(args);
+  const { created_at: _sourceCreatedAt, updated_at: _sourceUpdatedAt, ...sourceDraft } = source;
+  const forked = normalizeCliEditedView({
+    ...sourceDraft,
+    id: targetId,
+    view_type: viewType,
+    title,
+    summary,
+    status: statusFromArgs(args) ?? "candidate",
+    source_records: source.source_records ?? [],
+    source_views: uniqueStrings([source.id, ...(source.source_views ?? [])]),
+    compiler: {
+      id: actor === "agent" ? "agent.fork_view" : "manual.fork_view",
+      version: "1",
+      mode: "deterministic",
+    },
+    content: applyObjectPatch(source.content ?? {}, patch?.content),
+    metadata: applyObjectPatch({
+      ...(source.metadata ?? {}),
+      graph_op: "fork",
+      forked_from: source.id,
+      fork_reason: reason,
+    }, patch?.metadata),
+  }, actor, "fork");
+  const parsed = ContextViewSchema.safeParse(forked);
+  if (!parsed.success) {
+    fail(`Invalid forked ContextView: ${JSON.stringify(parsed.error.flatten())}`, "INVALID_VIEW");
+    return;
+  }
+  const stored = store.upsertView(parsed.data);
+  appendAgentSurfaceViewEvent("agent_surface.view_forked", actor, stored, {
+    source_view_id: source.id,
+    reason,
+    command: currentCommand,
+  });
+  emitViewMutationResult("forked", stored);
+}
+
+function updateViewFromCli(args: string[]): void {
+  const id = required(args[0], "view_id");
+  const existing = store.getView(id);
+  if (!existing) {
+    fail(`View not found: ${id}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  const actor = actorFromArgs(args);
+  const patch = patchFromArgs(args);
+  const replaceContent = args.includes("--replace-content");
+  const replaceMetadata = args.includes("--replace-metadata");
+  const updated = normalizeCliEditedView({
+    ...existing,
+    view_type: valueAfter(args, "--view-type") ?? existing.view_type,
+    title: valueAfter(args, "--title") ?? existing.title,
+    summary: valueAfter(args, "--summary") ?? existing.summary,
+    status: statusFromArgs(args) ?? existing.status,
+    source_records: mergeStringList(existing.source_records, valuesAfter(args, "--source-record")),
+    source_views: mergeStringList(existing.source_views, valuesAfter(args, "--source-view")),
+    content: replaceContent ? patch?.content ?? {} : applyObjectPatch(existing.content ?? {}, patch?.content),
+    metadata: replaceMetadata
+      ? applyObjectPatch({
+        graph_op: "update",
+        updated_from: existing.id,
+      }, patch?.metadata)
+      : applyObjectPatch({
+        ...(existing.metadata ?? {}),
+        graph_op: "update",
+        updated_from: existing.id,
+      }, patch?.metadata),
+  }, actor, "update");
+  const parsed = ContextViewSchema.safeParse(updated);
+  if (!parsed.success) {
+    fail(`Invalid updated ContextView: ${JSON.stringify(parsed.error.flatten())}`, "INVALID_VIEW");
+    return;
+  }
+  const stored = store.upsertView(parsed.data);
+  appendAgentSurfaceViewEvent("agent_surface.view_updated", actor, stored, {
+    previous_updated_at: existing.updated_at,
+    command: currentCommand,
+  });
+  emitViewMutationResult("updated", stored);
+}
+
+function deleteViewFromCli(args: string[]): void {
+  const id = required(args[0], "view_id");
+  const existing = store.getView(id);
+  if (!existing) {
+    fail(`View not found: ${id}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  const actor = actorFromArgs(args);
+  const reason = valueAfter(args, "--reason") ?? "deleted from CLI";
+  if (args.includes("--hard")) {
+    const deleted = store.deleteView(id);
+    if (!deleted) {
+      fail(`View not found: ${id}`, "VIEW_NOT_FOUND");
+      return;
+    }
+    store.appendRuntimeEvent({
+      event_type: "agent_surface.view_deleted",
+      actor,
+      status: "completed",
+      subject_type: "view",
+      subject_id: id,
+      related_records: existing.source_records,
+      related_views: existing.source_views,
+      plugin_id: existing.scope?.plugin_id,
+      payload: {
+        view_type: existing.view_type,
+        hard: true,
+        reason,
+        command: currentCommand,
+      },
+    });
+    if (jsonOutput) {
+      emitJson({ deleted: true, hard: true, view: viewSummary(existing) });
+      return;
+    }
+    out(`deleted ${existing.view_type} ${id}`);
+    return;
+  }
+  const archived = store.upsertView(normalizeCliEditedView({
+    ...existing,
+    status: "archived",
+    metadata: {
+      ...(existing.metadata ?? {}),
+      graph_op: "delete",
+      delete_mode: "archive",
+      delete_reason: reason,
+    },
+  }, actor, "delete"));
+  appendAgentSurfaceViewEvent("agent_surface.view_deleted", actor, archived, {
+    hard: false,
+    reason,
+    command: currentCommand,
+  });
+  if (jsonOutput) {
+    emitJson({ deleted: true, hard: false, view: viewSummary(archived), provenance: provenanceSummary(archived) });
+    return;
+  }
+  out(`archived ${archived.view_type} ${archived.id}`);
+}
+
+function printViewChildren(viewId: string, args: string[]): void {
+  const root = store.getView(viewId);
+  if (!root) {
+    fail(`View not found: ${viewId}`, "VIEW_NOT_FOUND");
+    return;
+  }
+  const limit = numberAfter(args, "--limit") ?? 50;
+  const children = store.listViews({ source_view_id: viewId, limit, active_only: !args.includes("--all") });
+  if (jsonOutput) {
+    emitJson({ view: viewSummary(root), children: children.map(viewSummary) });
+    return;
+  }
+  out(`${root.view_type} ${root.id}`);
+  if (!children.length) {
+    out("  children: none");
+    return;
+  }
+  out("  children:");
+  for (const view of children) printStoredViewLine(view);
 }
 
 async function handleScreenpipeCommand(args: string[]): Promise<void> {
@@ -1015,6 +1213,10 @@ function printHelp(): void {
         "pnpm mf [--json] view trace <view_id>",
         "pnpm mf [--json] view search <query>",
         "pnpm mf [--json] view upsert <json_file|-> [--actor agent|user]",
+        "pnpm mf [--json] view fork <view_id> [--id <new_id>] [--view-type <type>] [--title <title>] [--patch <json_file|->] [--actor agent|user]",
+        "pnpm mf [--json] view update <view_id> [--status candidate|accepted|archived|rejected] [--patch <json_file|->] [--actor agent|user]",
+        "pnpm mf [--json] view delete <view_id> [--hard] [--reason <reason>] [--actor agent|user]",
+        "pnpm mf [--json] view children <view_id> [--all] [--limit 50]",
         "pnpm mf [--json] processor list",
         "pnpm mf [--json] processor report",
         "pnpm mf [--json] processor run <processor_id> --record <record_id>",
@@ -1044,6 +1246,10 @@ function printHelp(): void {
   pnpm mf [--json] view trace <view_id>
   pnpm mf [--json] view search <query>
   pnpm mf [--json] view upsert <json_file|-> [--actor agent|user]
+  pnpm mf [--json] view fork <view_id> [--id <new_id>] [--view-type <type>] [--title <title>] [--patch <json_file|->] [--actor agent|user]
+  pnpm mf [--json] view update <view_id> [--status candidate|accepted|archived|rejected] [--patch <json_file|->] [--actor agent|user]
+  pnpm mf [--json] view delete <view_id> [--hard] [--reason <reason>] [--actor agent|user]
+  pnpm mf [--json] view children <view_id> [--all] [--limit 50]
   pnpm mf [--json] processor list
   pnpm mf [--json] processor report
   pnpm mf [--json] processor run <processor_id> --record <record_id>
@@ -1114,6 +1320,102 @@ function normalizeCliUpsertView(view: ContextView, actor: "user" | "agent"): Con
   };
 }
 
+function normalizeCliEditedView(view: ContextView, actor: "user" | "agent", op: "fork" | "update" | "delete"): ContextView {
+  return {
+    ...view,
+    compiler: view.compiler ?? {
+      id: actor === "agent" ? `agent.${op}_view` : `manual.${op}_view`,
+      version: "1",
+      mode: "deterministic",
+    },
+    metadata: {
+      ...(view.metadata ?? {}),
+      edited_via: actor === "agent" ? "agent_surface_cli" : "manual_cli",
+      actor,
+    },
+  };
+}
+
+function appendAgentSurfaceViewEvent(eventType: string, actor: "user" | "agent", view: StoredContextView, payload: Record<string, unknown>): void {
+  store.appendRuntimeEvent({
+    event_type: eventType,
+    actor,
+    status: "completed",
+    subject_type: "view",
+    subject_id: view.id,
+    related_records: view.source_records,
+    related_views: view.source_views,
+    plugin_id: view.scope?.plugin_id,
+    payload: {
+      view_type: view.view_type,
+      ...payload,
+    },
+  });
+}
+
+function emitViewMutationResult(verb: string, view: StoredContextView): void {
+  if (jsonOutput) {
+    emitJson({ view: viewSummary(view), provenance: provenanceSummary(view) });
+    return;
+  }
+  out(`${verb} ${view.view_type} ${view.id}`);
+}
+
+function forkedViewId(sourceId: string): string {
+  return `${sourceId}:fork:${Date.now().toString(36)}`;
+}
+
+function statusFromArgs(args: string[]): ContextView["status"] | undefined {
+  const value = valueAfter(args, "--status");
+  if (!value) return undefined;
+  if (value === "candidate" || value === "accepted" || value === "archived" || value === "rejected") return value;
+  throw new Error("--status must be candidate, accepted, archived, or rejected");
+}
+
+function patchFromArgs(args: string[]): Record<string, any> | undefined {
+  const input = valueAfter(args, "--patch");
+  if (!input) return undefined;
+  const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
+  const parsed = parseJson(raw, input);
+  if (!parsed.ok) throw new Error(parsed.error);
+  if (!isPlainObject(parsed.value)) throw new Error("--patch must be a JSON object");
+  return parsed.value as Record<string, any>;
+}
+
+function applyObjectPatch(base: Record<string, unknown>, patch: unknown): Record<string, unknown> {
+  if (patch === undefined) return base;
+  if (!isPlainObject(patch)) throw new Error("patch content/metadata must be JSON objects");
+  return deepMerge(base, patch as Record<string, unknown>);
+}
+
+function deepMerge(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete merged[key];
+      continue;
+    }
+    const current = merged[key];
+    merged[key] = isPlainObject(current) && isPlainObject(value)
+      ? deepMerge(current as Record<string, unknown>, value as Record<string, unknown>)
+      : value;
+  }
+  return merged;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeStringList(existing: string[] | undefined, additions: string[]): string[] | undefined {
+  if (!additions.length) return existing;
+  return uniqueStrings([...(existing ?? []), ...additions]);
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 function actorFromArgs(args: string[]): "user" | "agent" {
   const value = valueAfter(args, "--actor") ?? "agent";
   if (value === "agent" || value === "user") return value;
@@ -1124,6 +1426,17 @@ function valueAfter(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
   if (index < 0) return undefined;
   return args[index + 1];
+}
+
+function valuesAfter(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === flag && args[index + 1]) {
+      values.push(args[index + 1]);
+      index += 1;
+    }
+  }
+  return values;
 }
 
 function parseJson(raw: string, label: string): { ok: true; value: unknown } | { ok: false; error: string } {

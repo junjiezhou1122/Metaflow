@@ -5,6 +5,21 @@ documents remain useful background, but this document is the tie-breaker when
 there is tension between program-centric, project-centric, memory-centric, and
 view-centric language.
 
+Info's memory model is Adaptive ViewGraph Memory:
+
+```text
+One observation
+  -> many task-specific Views
+  -> many future tasks
+  -> feedback
+  -> better Views, processors, apps, and routing
+```
+
+The system is not optimized for storing history. It is optimized for reducing
+future search space. Different processors exist to produce different Views, and
+different Views exist to help different tasks. Real task outcomes decide which
+Views should be created, updated, forked, merged, split, retained, or retired.
+
 ## Architecture Invariants
 
 Core owns protocols, not categories.
@@ -27,6 +42,9 @@ The practical rule is:
 ```text
 New capability = ViewSpec(s) + ProcessorSpec(s) + optional UI/CLI rendering.
 ```
+
+New application = ViewSpec(s) + ProcessorSpec(s) + app surface over the
+ViewGraph.
 
 It must not require:
 
@@ -224,6 +242,34 @@ Each view should preserve enough `source_records`, `source_views`, compiler
 metadata, freshness, status, and scope to explain why it exists and how it was
 produced. Agent-facing contracts should expose provenance summaries instead of
 treating `confidence` as a universal quality signal.
+
+Graph operations are first-class. A View family is extended in code with a
+`ViewSpec` and optional processor, while a materialized View instance can be
+operated through the agent CLI:
+
+```bash
+pnpm mf --json view upsert ./view.json --actor agent
+pnpm mf --json view fork view:source --id view:task --view-type task.browser_brief --patch ./patch.json
+pnpm mf --json view update view:task --status accepted --patch ./patch.json
+pnpm mf --json view children view:source
+pnpm mf --json view delete view:task --reason "superseded"
+```
+
+The default delete mode is archive. Hard delete is available for generated or
+incorrect Views, but normal agent workflows should prefer archive so the graph
+can still explain what happened.
+
+The first built-in View Promotion Engine is:
+
+```text
+processor.view_promotion_engine
+  -> view.promotion_candidates
+```
+
+It scans recent observations, materialized Views, and runtime events, then
+proposes `create_view`, `update_view`, `combine_views`, `retire_view`, and
+`create_processor` actions. It writes candidates rather than mutating the graph
+directly, keeping adaptive memory evolution inspectable and reversible.
 
 ### Feedback
 

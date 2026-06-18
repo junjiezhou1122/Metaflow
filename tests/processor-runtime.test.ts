@@ -10,6 +10,7 @@ import {
   buildSurfaceStateView,
   createProcessorRegistry,
   createSurfaceStateProcessor,
+  createViewPromotionEngineProcessor,
   matchesPattern,
   type ProcessorDefinition,
 } from "@info/processor-runtime";
@@ -99,6 +100,64 @@ test("a processor can consume a View produced by another processor", async () =>
   assert.equal(view?.view_type, "memory.preference");
   assert.deepEqual(view?.source_views, ["advice:writing:1"]);
   assert.equal(view?.content?.source_suggestion, "Use simpler wording.");
+}));
+
+test("view promotion engine produces adaptive ViewGraph evolution candidates", async () => withStore(async (store) => {
+  const now = new Date(Date.now() + 60_000);
+  for (let index = 0; index < 3; index += 1) {
+    store.insertRecord({
+      id: `route:promotion:${index}`,
+      schema: { name: "observation.route_candidate", version: 1 },
+      source: { type: "runtime", connector: "processor.route_candidate" },
+      time: { observed_at: new Date(now.getTime() - index * 60_000).toISOString() },
+      payload: {
+        candidate_routes: [{
+          route_key: "project:/Users/junjie/info",
+          lane_kind: "project",
+          score: 0.8,
+          rule_hits: ["project_path.present"],
+        }],
+      },
+      privacy: { level: "private", retention: "normal" },
+    });
+  }
+  store.appendRuntimeEvent({
+    id: "event:promotion:failed:1",
+    event_type: "agent_task.failed",
+    actor: "system",
+    status: "failed",
+    subject_type: "view",
+    subject_id: "task:browser:failed",
+  });
+  store.appendRuntimeEvent({
+    id: "event:promotion:failed:2",
+    event_type: "processor.run.failed",
+    actor: "system",
+    status: "failed",
+    subject_type: "runtime",
+    subject_id: "processor.browser",
+  });
+  const seed = store.insertRecord({
+    id: "obs:promotion:seed",
+    schema: { name: "observation.local_project", version: 1 },
+    source: { type: "local_project" },
+    time: { observed_at: now.toISOString() },
+    content: { title: "Info" },
+  });
+
+  const runtime = new ProcessorRuntime({
+    store,
+    processors: [createViewPromotionEngineProcessor({ now, windowMinutes: 60 })],
+  });
+  const result = await runtime.processObservation(seed);
+
+  assert.deepEqual(result.processors_matched, ["processor.view_promotion_engine"]);
+  const view = store.getView(result.views_written[0]);
+  assert.equal(view?.view_type, "view.promotion_candidates");
+  const candidates = view?.content?.candidates as Array<Record<string, unknown>>;
+  assert.ok(candidates.some(candidate => candidate.action === "create_view" && candidate.target_view_type === "project.current"));
+  assert.ok(candidates.some(candidate => candidate.action === "create_processor" && candidate.target_processor_id === "processor.failure_miner"));
+  assert.equal(view?.metadata?.view_promotion_engine, true);
 }));
 
 test("registry supports exact, prefix wildcard, and global wildcard routing", () => {

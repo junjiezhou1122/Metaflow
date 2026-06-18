@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { builtinViewSpecs, createViewRegistry, type ViewSpec } from "@info/view-system";
-import { buildProcessorViewReport, createSurfaceStateProcessor, type ProcessorDefinition } from "@info/processor-runtime";
+import { buildProcessorViewReport, createSurfaceStateProcessor, createViewPromotionEngineProcessor, type ProcessorDefinition } from "@info/processor-runtime";
 
 const scenarioSpecs: ViewSpec[] = [
   {
@@ -92,7 +92,7 @@ test("processor report maps declarations to registered view specs", () => {
     purpose: "Project decisions.",
     lifecycle: "project",
   }]);
-  const report = buildProcessorViewReport([createSurfaceStateProcessor(), ...declarationProcessors], registry);
+  const report = buildProcessorViewReport([createSurfaceStateProcessor(), createViewPromotionEngineProcessor(), ...declarationProcessors], registry);
 
   const surface = report.processors.find(processor => processor.id === "processor.surface_state");
   assert.ok(surface);
@@ -107,6 +107,10 @@ test("processor report maps declarations to registered view specs", () => {
   const automation = report.processors.find(processor => processor.id === "processor.browser_automation");
   assert.equal(automation?.runtime, "agent_task");
   assert.equal(automation?.policy.autonomy, "sandbox_auto");
+
+  const promotion = report.processors.find(processor => processor.id === "processor.view_promotion_engine");
+  assert.deepEqual(promotion?.produces.views, ["view.promotion_candidates"]);
+  assert.equal(promotion?.runtime, "local");
   assert.deepEqual(report.warnings, []);
 });
 

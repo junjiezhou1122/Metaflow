@@ -530,6 +530,11 @@ export class ContextStore {
     return row ? rowToView(row) : undefined;
   }
 
+  deleteView(id: string): boolean {
+    const result = this.db.prepare(`delete from context_views where id = ?`).run(id);
+    return result.changes > 0;
+  }
+
   listViewFamilySummaries(options: { view_types?: string[]; active_only?: boolean; include_kinds?: boolean } = {}): Array<{ family: string; count: number; latest?: StoredContextView; kinds: string[] }> {
     const clauses: string[] = [];
     const params: SQLInputValue[] = [];
