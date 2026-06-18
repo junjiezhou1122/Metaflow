@@ -13,3 +13,6 @@ export * from "./builtins/screenpipe-surface.js";
 export * from "./builtins/screenpipe-surface-processor.js";
 export * from "./builtins/view-promotion-engine.js";
 export * from "./builtins/work-router-batch.js";
+export * from "./builtins/project-inbox.js";
+export * from "./builtins/project-tasks.js";
+export * from "./builtins/project-decision-extractor.js";
