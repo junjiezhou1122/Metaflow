@@ -328,8 +328,8 @@ function AmbientPanel({ onInspect }: { onInspect: (state: { view?: ContextViewSu
       setSelectedDetail(null);
       return;
     }
-    if (!selectedViewId || !sortedViews.some(view => view.id === selectedViewId)) {
-      setSelectedViewId(sortedViews[0].id);
+    if (selectedViewId && !sortedViews.some(view => view.id === selectedViewId)) {
+      setSelectedViewId(null);
       setSelectedDetail(null);
     }
   }, [sortedViews, selectedViewId]);
@@ -361,7 +361,7 @@ function AmbientPanel({ onInspect }: { onInspect: (state: { view?: ContextViewSu
     setLoading(true);
     setStatus("Loading ambient views...");
     try {
-      const result = await fetchViewsByTypes(AMBIENT_VIEW_TYPES, { limit: 160 });
+      const result = await fetchViewsByTypes(AMBIENT_VIEW_TYPES, { limit: 96 });
       const nextViews = result.views ?? [];
       const hidden = nextViews.filter(view => !isSurfaceableAmbientView(view)).length;
       setViews(nextViews);
@@ -478,6 +478,16 @@ function AmbientPanel({ onInspect }: { onInspect: (state: { view?: ContextViewSu
         <button onClick={buildToolArtifacts} disabled={running || loading}>{running ? "Working..." : "Build Tool Artifacts"}</button>
       </div>
 
+      {activeView && (
+        <AmbientFocus
+          view={activeView}
+          busy={Boolean(actionBusy?.endsWith(`:${activeView.id}`))}
+          onSelect={() => setSelectedViewId(activeView.id)}
+          onFeedback={markFeedback}
+          onCopy={copyDraft}
+        />
+      )}
+
       <div className="ambient-grid">
         <AmbientColumn title="Queue" subtitle="agent task list" views={queueViews} selectedId={selectedSummary?.id} actionBusy={actionBusy} onSelect={setSelectedViewId} onFeedback={markFeedback} onCopy={copyDraft} empty={loading ? "Loading queue..." : "No queued agent tasks yet."} />
         <AmbientColumn title="Research" subtitle="background search" views={researchViews} selectedId={selectedSummary?.id} actionBusy={actionBusy} onSelect={setSelectedViewId} onFeedback={markFeedback} onCopy={copyDraft} empty={loading ? "Loading research..." : "No research suggestions yet."} />
@@ -489,7 +499,35 @@ function AmbientPanel({ onInspect }: { onInspect: (state: { view?: ContextViewSu
   );
 }
 
+function AmbientFocus({ view, busy, onSelect, onFeedback, onCopy }: { view: ContextViewSummary; busy: boolean; onSelect: () => void; onFeedback: (view: ContextViewSummary, action: "use" | "dismiss", extra?: Record<string, unknown>) => void; onCopy: (view: ContextViewSummary) => void }) {
+  const snippets = ambientSnippets(view).slice(0, 4);
+  const canCopy = Boolean(draftTextOf(view));
+  const artifactUri = toolArtifactUri(view);
+  return (
+    <section className="ambient-focus">
+      <button className="ambient-focus-main" type="button" onClick={onSelect}>
+        <span>{viewFamilyLabel(view.view_type)}</span>
+        <h2>{view.title || view.id}</h2>
+        {view.summary && <p>{view.summary}</p>}
+        {snippets.length > 0 && <div className="ambient-snippets">{snippets.map(snippet => <span key={snippet}>{snippet}</span>)}</div>}
+      </button>
+      <div className="ambient-focus-side">
+        <b>{relativeTime(view.updated_at) || "fresh"}</b>
+        <span>{viewTypePurpose(view.view_type)}</span>
+        <div>
+          {canCopy && <button className="secondary" onClick={() => onCopy(view)} disabled={busy}>{busy ? "..." : "Copy"}</button>}
+          {artifactUri && <a className="ambient-open-link" href={artifactUri} target="_blank" rel="noreferrer" onClick={() => onFeedback(view, "use", { action: "open_artifact", artifact_uri: artifactUri })}>Open</a>}
+          <button className="secondary" onClick={() => onFeedback(view, "dismiss")} disabled={busy}>{busy ? "..." : "Dismiss"}</button>
+          <button onClick={() => onFeedback(view, "use")} disabled={busy}>{busy ? "..." : "Use"}</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AmbientColumn({ title, subtitle, views, selectedId, actionBusy, onSelect, onFeedback, onCopy, empty }: { title: string; subtitle: string; views: ContextViewSummary[]; selectedId?: string; actionBusy: string | null; onSelect: (id: string) => void; onFeedback: (view: ContextViewSummary, action: "use" | "dismiss", extra?: Record<string, unknown>) => void; onCopy: (view: ContextViewSummary) => void; empty: string }) {
+  const shownViews = views.slice(0, 12);
+  const hiddenCount = Math.max(0, views.length - shownViews.length);
   return (
     <section className="ambient-column">
       <div className="ambient-column-head">
@@ -500,9 +538,10 @@ function AmbientColumn({ title, subtitle, views, selectedId, actionBusy, onSelec
         <strong>{views.length}</strong>
       </div>
       <div className="ambient-cards">
-        {views.length ? views.map(view => (
+        {shownViews.length ? shownViews.map(view => (
           <AmbientCard key={view.id} view={view} selected={view.id === selectedId} busy={Boolean(actionBusy?.endsWith(`:${view.id}`))} onSelect={() => onSelect(view.id)} onFeedback={onFeedback} onCopy={onCopy} />
         )) : <div className="empty-inline">{empty}</div>}
+        {hiddenCount > 0 && <div className="ambient-more">Showing latest 12 · {hiddenCount} older hidden for speed</div>}
       </div>
     </section>
   );
@@ -1057,11 +1096,101 @@ function draftTextOf(view: ContextViewSummary): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function readableViewPills(view: ContextViewSummary): string[] {
+  const pills = [
+    view.status ?? "active",
+    view.stability,
+    view.lossiness,
+    view.updated_at ? relativeTime(view.updated_at) : undefined,
+    sourceRecordCount(view) ? `${sourceRecordCount(view)} records` : undefined,
+    sourceViewCount(view) ? `${sourceViewCount(view)} views` : undefined,
+  ];
+  return [...new Set(pills.filter((pill): pill is string => Boolean(pill && pill.trim())))].slice(0, 6);
+}
+
+function readableViewSections(view: ContextViewSummary): Array<{ title: string; body?: string; items?: string[] }> {
+  const content = view.content ?? {};
+  const sections: Array<{ title: string; body?: string; items?: string[] }> = [];
+  const primary = firstString(content, ["focus", "goal", "topic", "question", "claim", "analysis", "text", "draft_text", "transcript_excerpt"]);
+  if (primary && primary !== view.summary) sections.push({ title: readableHeading(view.view_type), body: primary });
+  const keyPoints = firstStringArray(content, ["key_points", "takeaways", "findings", "decisions", "open_questions", "next_actions", "suggestions"]);
+  if (keyPoints.length) sections.push({ title: arraySectionTitle(content), items: keyPoints.slice(0, 8) });
+  const tasks = readableTasks(content);
+  if (tasks.length) sections.push({ title: "Tasks", items: tasks.slice(0, 8) });
+  const sources = readableSources(content);
+  if (sources.length) sections.push({ title: "Sources", items: sources.slice(0, 6) });
+  if (!sections.length && view.summary) sections.push({ title: readableHeading(view.view_type), body: view.summary });
+  return sections;
+}
+
+function readableHeading(viewType: string) {
+  if (viewType.includes("research")) return "Research";
+  if (viewType.includes("writing") || viewType.includes("draft")) return "Draft";
+  if (viewType.includes("task")) return "Task";
+  if (viewType.includes("tool")) return "Tool";
+  if (viewType.includes("memory")) return "Memory";
+  return "Readable view";
+}
+
+function arraySectionTitle(content: Record<string, unknown>) {
+  if (Array.isArray(content.open_questions)) return "Open questions";
+  if (Array.isArray(content.next_actions)) return "Next actions";
+  if (Array.isArray(content.decisions)) return "Decisions";
+  if (Array.isArray(content.suggestions)) return "Suggestions";
+  return "Key points";
+}
+
+function firstString(content: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = content[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstStringArray(content: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = content[key];
+    if (Array.isArray(value)) {
+      const strings = value.map(readableValue).filter((item): item is string => Boolean(item));
+      if (strings.length) return strings;
+    }
+  }
+  return [];
+}
+
+function readableTasks(content: Record<string, unknown>): string[] {
+  const items = content.items ?? content.tasks;
+  if (!Array.isArray(items)) return [];
+  return items.map(item => {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return undefined;
+    const record = item as Record<string, unknown>;
+    return readableValue(record.title) ?? readableValue(record.summary) ?? readableValue(record.goal) ?? readableValue(record.id);
+  }).filter((item): item is string => Boolean(item));
+}
+
+function readableSources(content: Record<string, unknown>): string[] {
+  const sources = content.sources ?? content.supporting_sources ?? content.source_records;
+  if (!Array.isArray(sources)) return [];
+  return sources.map(readableValue).filter((item): item is string => Boolean(item));
+}
+
+function readableValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim().replace(/\s+/g, " ");
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return readableValue(record.title) ?? readableValue(record.summary) ?? readableValue(record.url) ?? readableValue(record.id);
+}
+
 function ViewDetail({ view, loading }: { view?: ContextViewSummary; loading: boolean }) {
   if (!view) return <article className="view-detail empty"><span>Select a view to inspect it.</span></article>;
   const kind = typeof view.content?.kind === "string" ? view.content.kind : view.view_type;
   const compiler = compilerId(view);
   const badge = viewPrimaryBadge(view);
+  const sections = readableViewSections(view);
+  const pills = readableViewPills(view);
   return (
     <article className="view-detail">
       <div className="view-detail-header">
@@ -1072,28 +1201,46 @@ function ViewDetail({ view, loading }: { view?: ContextViewSummary; loading: boo
         {badge && <b>{badge}</b>}
       </div>
       {view.summary && <p className="view-detail-summary">{view.summary}</p>}
-      <dl className="view-detail-meta">
-        <dt>compiler</dt><dd>{compiler || "unknown"}</dd>
-        <dt>updated</dt><dd>{view.updated_at ? new Date(view.updated_at).toLocaleString() : "—"}</dd>
-        <dt>source records</dt><dd>{sourceRecordCount(view)}</dd>
-        <dt>source views</dt><dd>{sourceViewCount(view)}</dd>
-        <dt>status</dt><dd>{view.status ?? "active"}</dd>
-        <dt>stability</dt><dd>{view.stability ?? "—"}</dd>
-      </dl>
-      <section className="view-detail-section">
-        <h3>View ID</h3>
-        <code>{view.id}</code>
-      </section>
+      {pills.length > 0 && <div className="view-detail-pills">{pills.map(pill => <span key={pill}>{pill}</span>)}</div>}
+      {loading && <div className="view-detail-loading">Loading richer detail...</div>}
+      {sections.length > 0 ? sections.map(section => (
+        <section className="view-detail-section view-readable-section" key={section.title}>
+          <h3>{section.title}</h3>
+          {section.body && <p>{section.body}</p>}
+          {section.items && (
+            <ul>
+              {section.items.map(item => <li key={item}>{item}</li>)}
+            </ul>
+          )}
+        </section>
+      )) : (
+        <section className="view-detail-section view-readable-section">
+          <h3>Summary</h3>
+          <p>No readable fields were found for this view yet.</p>
+        </section>
+      )}
       {toolArtifactUri(view) && (
         <section className="view-detail-section">
           <h3>Artifact</h3>
           <a className="url-card" href={toolArtifactUri(view)} target="_blank" rel="noreferrer">{toolArtifactUri(view)}</a>
         </section>
       )}
-      <section className="view-detail-section">
-        <h3>Content</h3>
-        {loading ? <div className="empty-inline">Loading full view…</div> : <pre>{JSON.stringify(view.content ?? {}, null, 2)}</pre>}
-      </section>
+      <details className="view-detail-section view-technical">
+        <summary>Technical metadata</summary>
+        <dl className="view-detail-meta">
+          <dt>compiler</dt><dd>{compiler || "unknown"}</dd>
+          <dt>updated</dt><dd>{view.updated_at ? new Date(view.updated_at).toLocaleString() : "—"}</dd>
+          <dt>source records</dt><dd>{sourceRecordCount(view)}</dd>
+          <dt>source views</dt><dd>{sourceViewCount(view)}</dd>
+          <dt>status</dt><dd>{view.status ?? "active"}</dd>
+          <dt>stability</dt><dd>{view.stability ?? "—"}</dd>
+        </dl>
+        <code>{view.id}</code>
+      </details>
+      <details className="view-detail-section view-technical">
+        <summary>Raw content</summary>
+        <pre>{JSON.stringify(view.content ?? {}, null, 2)}</pre>
+      </details>
     </article>
   );
 }
@@ -1163,14 +1310,15 @@ function Bucket({ bucket, selectedItemId, onSelect, onOpenFrame }: { bucket: Tim
         <span>{dominant} · {bucket.count}</span>
       </div>
       <div className="bucket-items">
-        {bucket.items.map(item => <TimelineRow key={item.id} item={item} selected={item.id === selectedItemId} showFrames={item.id === selectedItemId} onSelect={() => onSelect(item.id)} onOpenFrame={onOpenFrame} />)}
+        {bucket.items.map(item => <TimelineRow key={item.id} item={item} selected={item.id === selectedItemId} onSelect={() => onSelect(item.id)} onOpenFrame={onOpenFrame} />)}
       </div>
     </section>
   );
 }
 
-function TimelineRow({ item, selected, showFrames, onSelect, onOpenFrame }: { item: TimelineItem; selected: boolean; showFrames: boolean; onSelect: () => void; onOpenFrame: (preview: FramePreview) => void }) {
-  const frameIds = frameIdsOf(item).slice(0, 3);
+function TimelineRow({ item, selected, onSelect, onOpenFrame }: { item: TimelineItem; selected: boolean; onSelect: () => void; onOpenFrame: (preview: FramePreview) => void }) {
+  const frameIds = frameIdsOf(item);
+  const visibleFrameIds = frameIds.slice(0, selected ? 3 : 1);
   return (
     <article className={`timeline-row ${selected ? "selected" : ""}`} onClick={onSelect}>
       <div className={`row-icon ${sourceClass(item)}`}>{iconFor(item)}</div>
@@ -1182,17 +1330,19 @@ function TimelineRow({ item, selected, showFrames, onSelect, onOpenFrame }: { it
         <div className="row-subtitle">{item.subtitle || sourceLabel(item)}</div>
         <AttributionStrip item={item} />
         {item.text && <div className="row-text">{item.text}</div>}
-        {showFrames && frameIds.length > 0 && (
+        {visibleFrameIds.length > 0 && (
           <div className="row-frames" aria-label="Screenpipe OCR screenshots">
-            {frameIds.map(frameId => (
+            {visibleFrameIds.map(frameId => (
               <FrameThumb key={String(frameId)} frameId={frameId} title={item.title} onOpenFrame={onOpenFrame} />
             ))}
+            {frameIds.length > visibleFrameIds.length && (
+              <button className="row-frame-count" type="button" onClick={event => {
+                event.stopPropagation();
+                onSelect();
+              }}>+{frameIds.length - visibleFrameIds.length}</button>
+            )}
           </div>
         )}
-        {!showFrames && frameIds.length > 0 && <button className="row-frame-count" type="button" onClick={event => {
-          event.stopPropagation();
-          onSelect();
-        }}>{frameIds.length} screenshots</button>}
         <div className="row-meta">
           <Tag>{item.source}</Tag>
           {item.schema && <Tag>{item.schema}</Tag>}
