@@ -1034,14 +1034,41 @@ export class ContextStore {
     includeRuntimeEvents?: boolean;
   } = {}) {
     const normalizedWindow = normalizeTimeWindow(options.timeWindow);
-    const candidateRows = this.db.prepare(`
+    const sourceFilter = options.sourceFilter ?? "all";
+    const clauses = [
+      "schema_name not like 'derived.%'",
+      "schema_name not like 'episode.%'",
+      "schema_name != 'observation.route_candidate'",
+      "coalesce(json_extract(privacy_json, '$.retention'), '') != 'do_not_store'",
+    ];
+    const args: SQLInputValue[] = [];
+    if (sourceFilter !== "all") {
+      const predicate = sourceFilterPredicate(sourceFilter);
+      clauses.push(predicate.sql);
+      args.push(...predicate.params);
+    }
+    if (normalizedWindow?.start_time) {
+      clauses.push("coalesce(json_extract(time_json, '$.observed_at'), created_at) >= ?");
+      args.push(normalizedWindow.start_time);
+    }
+    if (normalizedWindow?.end_time) {
+      clauses.push("coalesce(json_extract(time_json, '$.observed_at'), created_at) <= ?");
+      args.push(normalizedWindow.end_time);
+    }
+    const where = `where ${clauses.join(" and ")}`;
+    const countRow = this.db.prepare(`
+      select count(*) as count
+      from context_records
+      ${where}
+    `).get(...args) as { count?: number } | undefined;
+    const latestRows = this.db.prepare(`
       select *
       from context_records
-      order by updated_at desc, created_at desc, id desc
-      limit ?
-    `).all(2_000) as any[];
-    const sourceFilter = options.sourceFilter ?? "all";
-    const latestRecord = candidateRows
+      ${where}
+      order by coalesce(json_extract(time_json, '$.observed_at'), created_at) desc, created_at desc, id desc
+      limit 1
+    `).all(...args) as any[];
+    const latestRecord = latestRows
       .map(rowToRecord)
       .find(record => activityWatermarkRecordVisible(record) && recordWatermarkMatchesSourceFilter(record, sourceFilter) && timeMatches(record, normalizedWindow));
 
@@ -1075,7 +1102,7 @@ export class ContextStore {
       latest_event_id = latestEvent?.id;
     }
 
-    const record_count = latestRecord ? 1 : 0;
+    const record_count = Number(countRow?.count ?? 0);
     const latest_observed_at = latestRecord?.time?.observed_at ?? latestRecord?.created_at;
     const latest_record_created_at = latestRecord?.created_at;
     const latest_record_updated_at = latestRecord?.updated_at;
@@ -1282,8 +1309,6 @@ function activityWatermarkRecordVisible(record: StoredContextRecord): boolean {
   if (record.schema.name.startsWith("derived.")) return false;
   if (record.schema.name.startsWith("episode.")) return false;
   if (record.schema.name === "observation.route_candidate") return false;
-  if (record.schema.name === "observation.screenpipe_workspace_signal") return false;
-  if (record.schema.name === "observation.screenpipe_input_event") return false;
   if (record.privacy?.retention === "do_not_store") return false;
   return true;
 }

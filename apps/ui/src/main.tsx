@@ -19,7 +19,7 @@ const FALLBACK_VIEW_TYPE_ORDER = [
   "advice.research", "advice.writing_assist",
   "agent.task_list",
   "task.background_research", "draft.writing_continuation",
-  "opportunity.tool", "task.toolsmith_prototype", "draft.tool_prototype", "tool.prototype_artifact",
+  "opportunity.tool", "draft.tool_prototype", "tool.prototype_artifact",
   "learning.review_queue", "memory.language.difficult_segments",
 ];
 const AMBIENT_VIEW_TYPES = [
@@ -41,7 +41,7 @@ const VIEW_GROUPS = [
     id: "actions",
     title: "Actions",
     subtitle: "things the runtime can help with",
-    types: ["agent.task_list", "advice.research", "advice.writing_assist", "task.background_research", "draft.writing_continuation", "opportunity.tool", "task.toolsmith_prototype", "draft.tool_prototype", "tool.prototype_artifact"],
+    types: ["agent.task_list", "advice.research", "advice.writing_assist", "task.background_research", "draft.writing_continuation", "opportunity.tool", "draft.tool_prototype", "tool.prototype_artifact"],
   },
   {
     id: "memory",
@@ -85,6 +85,7 @@ type TimelineSyncState = "idle" | "syncing" | "error";
 type TimelinePagingState = {
   hasMore: boolean;
   loading: boolean;
+  dayTotal?: number;
   cursorEnd?: string;
   loadedStart?: string;
   loadedEnd?: string;
@@ -147,7 +148,7 @@ const TIMELINE_WINDOWS = [
 const VIEW_FAMILIES_CACHE_KEY = "metaflow.viewFamilies.v1";
 const VIEW_TYPE_VIEWS_CACHE_KEY = "metaflow.viewTypeViews.v1";
 const TIMELINE_CACHE_KEY = "metaflow.timeline.v1";
-const TIMELINE_SIGNATURE_VERSION = "timeline-v5";
+const TIMELINE_SIGNATURE_VERSION = "timeline-v6";
 const SIDEBAR_COLLAPSED_CACHE_KEY = "metaflow.sidebar.collapsed.v1";
 let AMBIENT_VIEWS_MEMORY_CACHE: { views: ContextViewSummary[]; status: string } | null = null;
 let RUNTIME_SETTINGS_MEMORY_CACHE: { settings: RuntimeSettings; status: string } | null = null;
@@ -198,6 +199,18 @@ function App() {
     setTimelinePaging({ hasMore: true, loading: false, pages: 0 });
   }
 
+  async function refreshTimelineDayTotal() {
+    const day = todayRange();
+    const next = await fetchActivityTimelineWatermark({
+      startTime: day.start,
+      endTime: day.end,
+      sourceFilter,
+      includeRuntimeEvents: detailMode === "debug" || sourceFilter === "runtime",
+    });
+    setTimelinePaging(current => ({ ...current, dayTotal: next.record_count }));
+    return next;
+  }
+
   async function refresh(options: boolean | { quiet?: boolean; force?: boolean } = false) {
     const quiet = typeof options === "boolean" ? options : options.quiet ?? false;
     const force = typeof options === "boolean" ? true : options.force ?? true;
@@ -239,6 +252,7 @@ function App() {
       if (seq !== refreshSeq.current) return;
       setTimeline(next);
       setTimelinePaging(pagingStateFromResponse(next, todayRange()));
+      refreshTimelineDayTotal().catch(() => undefined);
       timelineCacheMsRef.current = Date.now();
       timelineSignatureRef.current = requestSignature;
       const watermark = timelineWatermarkRef.current || timelineWatermarkFromResponse(next);
@@ -387,11 +401,13 @@ function App() {
     timelineWatermarkInFlightRef.current = true;
     try {
       const next = await fetchActivityTimelineWatermark({
-        minutes: 24 * 60,
+        startTime: todayRange().start,
+        endTime: todayRange().end,
         sourceFilter,
         includeRuntimeEvents: detailMode === "debug" || sourceFilter === "runtime",
       });
       setTimelineSyncState("idle");
+      setTimelinePaging(current => ({ ...current, dayTotal: next.record_count }));
       const previous = timelineWatermarkRef.current;
       timelineWatermarkRef.current = next.watermark;
       if (options.forceRefresh || (options.refreshOnChange !== false && previous && previous !== next.watermark)) {
@@ -1219,8 +1235,7 @@ const VIEW_BIRTH_PARENTS: Record<string, string[]> = {
   "advice.writing_assist": ["memory.preferences", "project.current_context"],
   "draft.writing_continuation": ["advice.writing_assist"],
   "opportunity.tool": ["project.current", "project.inbox"],
-  "task.toolsmith_prototype": ["opportunity.tool"],
-  "draft.tool_prototype": ["task.toolsmith_prototype"],
+  "draft.tool_prototype": ["opportunity.tool"],
   "tool.prototype_artifact": ["draft.tool_prototype"],
   "learning.review_queue": ["memory.language.difficult_segments"],
   "learning.youtube_fragment": ["audio", "visual_frame", "evidence"],
@@ -1277,7 +1292,6 @@ const VIEW_TREE_PLACEMENTS: Record<string, { column: string; y: number }> = {
   "draft.writing_continuation": { column: "Work", y: 522 },
   "opportunity.tool": { column: "Work", y: 642 },
   "agent.task_list": { column: "Work", y: 722 },
-  "task.toolsmith_prototype": { column: "Work", y: 802 },
   "view.promotion_candidates": { column: "Work", y: 882 },
   "draft.tool_prototype": { column: "Artifact", y: 722 },
   "tool.prototype_artifact": { column: "Artifact", y: 802 },
@@ -1423,8 +1437,7 @@ function viewGraphBackboneEdgeKeys(derivations: ViewGraphDerivation[]) {
     ["project.current", "memory.daily"],
     ["memory.daily", "memory.profile"],
     ["memory.daily", "memory.preferences"],
-    ["opportunity.tool", "task.toolsmith_prototype"],
-    ["task.toolsmith_prototype", "draft.tool_prototype"],
+    ["opportunity.tool", "draft.tool_prototype"],
     ["draft.tool_prototype", "tool.prototype_artifact"],
   ];
   const available = new Set(derivations.map(viewGraphEdgeKey));
@@ -2903,7 +2916,8 @@ function TimelineWorkbench({
   paging: TimelinePagingState;
   onLoadMore: () => void;
 }) {
-  const sourceRecordTotal = timeline?.records_used ?? numericMeta(timeline?.view?.metadata?.record_count, buckets.reduce((sum, bucket) => sum + bucket.count, 0));
+  const loadedRecordTotal = timeline?.records_used ?? numericMeta(timeline?.view?.metadata?.record_count, buckets.reduce((sum, bucket) => sum + bucket.count, 0));
+  const sourceRecordTotal = paging.dayTotal ?? loadedRecordTotal;
   const recordCount = timeline?.records_used ?? 0;
   const timelineStatus = syncState === "syncing" || syncState === "error"
     ? syncStatus || status
@@ -2934,7 +2948,7 @@ function TimelineWorkbench({
           <div className="capture-stats">
             <button type="button" onClick={onSync} aria-label="Sync now">↵</button>
             <div><b>{stats.items}</b><span>今天</span></div>
-            <div><b>{sourceRecordTotal}</b><span>总计</span></div>
+            <div><b>{loadedRecordTotal}/{sourceRecordTotal}</b><span>已加载/总计</span></div>
           </div>
           <div className={`capture-sync-state ${syncState}`}>
             {live ? (syncState === "syncing" ? "Auto syncing" : syncState === "error" ? "Sync needs attention" : "Auto sync on") : "Auto sync paused"}
@@ -2948,7 +2962,7 @@ function TimelineWorkbench({
           </div>
           <p>{timeline?.view?.id ?? "刷新后会写入当前 timeline view"}</p>
           <div className="timeline-view-stats">
-            <Tag>{recordCount} records</Tag>
+            <Tag>{recordCount}/{sourceRecordTotal} records</Tag>
             <Tag>{timeline?.buckets.length ?? 0} buckets</Tag>
             <Tag>{detailMode === "debug" ? "raw" : "simple"}</Tag>
           </div>
@@ -3724,7 +3738,6 @@ function viewFamilyLabel(family: string) {
     "task.background_research": "Research Task",
     "draft.writing_continuation": "Writing Draft",
     "opportunity.tool": "Tool Opportunity",
-    "task.toolsmith_prototype": "Toolsmith Task",
     "draft.tool_prototype": "Tool Prototype",
     "tool.prototype_artifact": "Tool Artifact",
     answer: "AnswerView",
@@ -3818,7 +3831,6 @@ function viewTypePurpose(type: string) {
     "task.background_research": "delegated search",
     "draft.writing_continuation": "editable text",
     "opportunity.tool": "workflow improvement",
-    "task.toolsmith_prototype": "tool design task",
     "draft.tool_prototype": "prototype plan",
     "tool.prototype_artifact": "sandbox artifact",
   };
@@ -4150,6 +4162,7 @@ function pagingStateFromResponse(response: ActivityTimelineResponse, day = today
     loadedStart: oldest,
     loadedEnd: newest ?? day.end,
     pages: response.records_used > 0 ? 1 : 0,
+    dayTotal: response.records_used,
   };
 }
 
