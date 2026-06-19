@@ -130,6 +130,21 @@
 .focus-frame-strip .frame-button img{width:86px;height:52px}
 .focus-frame-strip .frame-preview-wrap>span,.focus-frame-strip .row-frame-count{display:none}
 .focus-inline-detail{grid-column:1/-1;margin-top:10px}
+.evidence-path{display:grid;gap:6px;border:1px solid #ecece9;background:#fff;border-radius:10px;padding:10px 12px}
+.evidence-path>span{color:#8c8c88;text-transform:uppercase;letter-spacing:.04em;font-size:10px;font-weight:800}
+.evidence-path div{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}
+.evidence-path b,.evidence-path a{max-width:100%;color:#333;background:#f7f7f5;border:1px solid #eeeeeb;border-radius:7px;padding:3px 7px;font-family:var(--mono);font-size:11px;font-weight:600;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.evidence-path a{color:#285f87;background:#f2f8ff;border-color:#dceaf5}
+.evidence-path i{color:#c6c6c2;font-style:normal}
+.evidence-text,.evidence-records{border:1px solid #ecece9;background:#fff;border-radius:10px;padding:9px 12px}
+.evidence-text summary,.evidence-records summary{cursor:pointer;color:#666;font-size:12px;font-weight:800}
+.evidence-text p{margin:8px 0 0;color:#454541;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
+.evidence-records div{display:grid;gap:6px;margin-top:8px}
+.evidence-records code{display:grid;grid-template-columns:minmax(120px,.24fr) minmax(160px,.36fr) minmax(0,1fr);gap:8px;align-items:center;background:#fbfbfa;border:1px solid #eeeeeb;border-radius:7px;padding:6px 8px;color:#555;font-family:var(--mono);font-size:11px;white-space:nowrap;overflow:hidden}
+.evidence-records code span{min-width:0;color:#8a8a86;overflow:hidden;text-overflow:ellipsis}
+.evidence-records code b{min-width:0;color:#444;font-weight:650;overflow:hidden;text-overflow:ellipsis}
+.evidence-records code em{min-width:0;color:#999;font-style:normal;overflow:hidden;text-overflow:ellipsis}
+.evidence-records strong{color:#999;font-size:12px}
 .timeline-empty-state{height:54vh;min-height:360px;display:grid;place-items:center;align-content:center;gap:12px;color:#8d8d89;text-align:center}
 .empty-clock{width:60px;height:60px;border-radius:20px;background:#fff;display:grid;place-items:center;color:#aaa;font-size:30px;box-shadow:0 1px 5px rgba(0,0,0,.035)}
 .timeline-empty-state b{font-size:18px;color:#6f6f6b}

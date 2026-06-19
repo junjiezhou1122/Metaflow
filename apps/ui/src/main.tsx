@@ -2824,12 +2824,17 @@ function TimelineWorkbench({
 }) {
   const rawItems = numericMeta(timeline?.view?.metadata?.item_count, buckets.reduce((sum, bucket) => sum + bucket.count, 0));
   const recordCount = timeline?.records_used ?? 0;
+  const timelineStatus = syncState === "syncing" || syncState === "error"
+    ? syncStatus || status
+    : stats.last !== "—"
+      ? `Live · latest ${stats.last}`
+      : syncStatus || status;
   return (
     <section className="timeline-workspace" aria-label="Timeline workspace">
       <div className="timeline-main-panel">
         <div className="timeline-greeting">
           <h2>早上好, Junjie</h2>
-          <span>{live ? "正在记录" : "已暂停"} · {syncStatus || status}</span>
+          <span>{live ? "正在记录" : "已暂停"} · {timelineStatus}</span>
         </div>
         <Timeline buckets={buckets} loading={loading} sourceFilter={sourceFilter} selectedItemId={selectedItemId} detailMode={detailMode} onSelect={onSelect} onOpenFrame={onOpenFrame} />
       </div>
@@ -3011,15 +3016,16 @@ function FocusSegmentRow({ segment, selected, onSelect, onOpenFrame }: { segment
         </div>
         {selected && (
           <section className="timeline-inline-detail focus-inline-detail" aria-label="Selected focus evidence">
-            {segment.url && <a className="url-card" href={segment.url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{segment.url}</a>}
+            <EvidencePath item={segment.items.at(-1) ?? segment.items[0]} title="Focus path" />
             {segment.frameIds.length > 0 && <FrameLauncher frameIds={segment.frameIds} title={segment.title} onSelect={onSelect} onOpenFrame={onOpenFrame} expanded />}
-            {segment.text && <p>{segment.text}</p>}
+            {segment.text && <EvidenceText title={evidenceTextTitle(segment.items)} text={segment.text} />}
             <div className="timeline-inline-facts">
               {inlineFact("source mix", segment.sources.join(", "))}
               {inlineFact("app", segment.app)}
               {inlineFact("domain", segment.domain)}
               {inlineFact("time", `${new Date(segment.start).toLocaleString()} - ${new Date(segment.end).toLocaleString()}`)}
             </div>
+            <EvidenceRecordList items={segment.items} />
           </section>
         )}
       </div>
@@ -3067,9 +3073,9 @@ function TimelineRow({ item, selected, detailMode, onSelect, onOpenFrame }: { it
         {showEvidence && (item.url || item.path || detailCode(item)) && <code>{item.url || item.path || detailCode(item)}</code>}
         {selected && (
           <section className="timeline-inline-detail" aria-label="Selected timeline evidence">
-            {webUrl && <a className="url-card" href={webUrl} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{webUrl}</a>}
+            <EvidencePath item={item} title="Observation path" />
             {frameIds.length > 0 && <FrameLauncher frameIds={frameIds} title={item.title} onSelect={onSelect} onOpenFrame={onOpenFrame} expanded />}
-            {aiSession ? <AiSessionDetail item={item} /> : item.text && <p>{item.text}</p>}
+            {aiSession ? <AiSessionDetail item={item} /> : item.text && <EvidenceText title={evidenceTextTitle([item])} text={item.text} />}
             <div className="timeline-inline-facts">
               {inlineFact("source", item.source)}
               {inlineFact("schema", item.schema)}
@@ -3078,11 +3084,84 @@ function TimelineRow({ item, selected, detailMode, onSelect, onOpenFrame }: { it
               {inlineFact("tool", stringStat(item, "tool"))}
               {inlineFact("time", new Date(item.observed_at).toLocaleString())}
             </div>
+            <EvidenceRecordList items={[item]} />
           </section>
         )}
       </div>
     </article>
   );
+}
+
+function EvidencePath({ item, title }: { item?: TimelineItem; title: string }) {
+  if (!item) return null;
+  const url = item.url ?? stringStat(item, "browser_url") ?? stringStat(item, "reported_url");
+  const path = item.path ?? stringStat(item, "source_path") ?? stringStat(item, "project_path");
+  const windowName = stringStat(item, "window_title") ?? stringStat(item, "window_name");
+  const steps = [
+    item.source,
+    item.schema,
+    item.app ?? item.domain,
+    windowName,
+    url ?? path,
+  ].filter((value): value is string => Boolean(value));
+  if (!steps.length) return null;
+  return (
+    <div className="evidence-path">
+      <span>{title}</span>
+      <div>
+        {steps.map((step, index) => (
+          <React.Fragment key={`${step}-${index}`}>
+            {index > 0 && <i>/</i>}
+            {index === steps.length - 1 && url ? (
+              <a href={url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{step}</a>
+            ) : (
+              <b>{step}</b>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EvidenceText({ title, text }: { title: string; text: string }) {
+  return (
+    <details className="evidence-text" open>
+      <summary>{title}</summary>
+      <p>{text}</p>
+    </details>
+  );
+}
+
+function EvidenceRecordList({ items }: { items: TimelineItem[] }) {
+  const rows = items.flatMap(item => {
+    const ids = item.record_ids?.length ? item.record_ids : item.event_ids ?? [];
+    return ids.map(id => ({ id, item }));
+  });
+  if (!rows.length) return null;
+  return (
+    <details className="evidence-records">
+      <summary>{rows.length} source record{rows.length === 1 ? "" : "s"}</summary>
+      <div>
+        {rows.slice(0, 24).map(({ id, item }, index) => (
+          <code key={`${id}-${index}`}>
+            <span>{item.schema ?? item.event_type ?? item.kind}</span>
+            <b>{timeOfDay(item.observed_at)} · {item.title}</b>
+            <em>{id}</em>
+          </code>
+        ))}
+        {rows.length > 24 && <strong>+{rows.length - 24} more records</strong>}
+      </div>
+    </details>
+  );
+}
+
+function evidenceTextTitle(items: TimelineItem[]) {
+  const hay = items.map(item => `${item.schema ?? ""} ${item.source} ${stringStat(item, "content_type") ?? ""}`).join(" ").toLowerCase();
+  if (hay.includes("audio")) return "Audio transcript";
+  if (hay.includes("ocr") || hay.includes("screenpipe")) return "Screen OCR text";
+  if (hay.includes("browser")) return "Page text";
+  return "Observation text";
 }
 
 function AiSessionDetail({ item }: { item: TimelineItem }) {
@@ -3714,7 +3793,8 @@ function focusSegmentsFromItems(items: TimelineItem[]): FocusSegment[] {
     const at = Date.parse(item.observed_at);
     const previous = groups.at(-1);
     const previousItem = previous?.at(-1);
-    if (previous && previousItem && key === focusIdentityKey(previousItem) && at - Date.parse(previousItem.observed_at) <= 8 * 60_000) {
+    const canMerge = !isScreenOcrItem(item) && previousItem && !isScreenOcrItem(previousItem);
+    if (previous && previousItem && canMerge && key === focusIdentityKey(previousItem) && at - Date.parse(previousItem.observed_at) <= 8 * 60_000) {
       previous.push(item);
     } else {
       groups.push([item]);
@@ -3741,6 +3821,8 @@ function focusSegmentFromGroup(group: TimelineItem[]): FocusSegment {
   const sources = top(sorted.map(item => sourceShortLabel(item)), 5);
   const subtitleParts = [
     readableDomain(domain),
+    isScreenOcrItem(last) ? stringStat(last, "window_title") ?? stringStat(last, "window_name") : undefined,
+    isScreenOcrItem(last) ? frameRangeLabel(frameIdsOf(last)) : undefined,
     urlPathLabel(last.url ?? first.url),
     durationMinutes !== undefined ? formatDuration(durationMinutes) : undefined,
     sorted.length > 1 ? `${sorted.length} records` : undefined,
@@ -3769,7 +3851,7 @@ function focusSegmentFromGroup(group: TimelineItem[]): FocusSegment {
 
 function isLowValueFocusSegment(segment: FocusSegment) {
   const title = segment.title.toLowerCase();
-  if (title === "screen ocr" && !segment.url && segment.samples <= 1) return true;
+  if (segment.items.some(isScreenOcrItem)) return false;
   if (title.includes("continued") && segment.samples <= 1) return true;
   return false;
 }
@@ -3788,11 +3870,18 @@ function focusIdentityKey(item: TimelineItem) {
 
 function bestFocusTitle(items: TimelineItem[]) {
   const candidates = [...items].reverse();
+  if (candidates.some(isScreenOcrItem)) return "Screen OCR";
   return candidates.find(item => item.url && item.title)?.title
     ?? candidates.find(item => item.schema?.includes("screenpipe_activity_summary") && item.title)?.title
     ?? candidates.find(item => !item.title.toLowerCase().includes("continued"))?.title
     ?? candidates[0]?.title
     ?? "Activity";
+}
+
+function isScreenOcrItem(item: TimelineItem) {
+  const contentType = stringStat(item, "content_type") ?? stringStat(item, "reported_content_type");
+  const hay = `${item.schema ?? ""} ${item.source} ${item.title} ${contentType ?? ""}`.toLowerCase();
+  return hay.includes("screenpipe") && (hay.includes("ocr") || hay.includes("screen ocr"));
 }
 
 function cleanFocusTitle(value?: string) {
