@@ -3044,8 +3044,11 @@ function TimelineWorkbench({
           </div>
           <div className="capture-stats">
             <button type="button" onClick={onSync} aria-label="Sync now">↵</button>
-            <div><b>{stats.items}</b><span>今天</span></div>
-            <div><b>{loadedRecordTotal}/{sourceRecordTotal}</b><span>已加载/总计</span></div>
+            <div><b>{stats.items.toLocaleString()}</b><span>已显示条目</span></div>
+            <div className="record-progress">
+              <b>{loadedRecordTotal.toLocaleString()} / {sourceRecordTotal.toLocaleString()}</b>
+              <span>已取回 / 全天记录</span>
+            </div>
           </div>
           <div className={`capture-sync-state ${syncState}`}>
             {live ? (syncState === "syncing" ? "Auto syncing" : syncState === "error" ? "Sync needs attention" : "Auto sync on") : "Auto sync paused"}
@@ -3059,7 +3062,7 @@ function TimelineWorkbench({
           </div>
           <p>{timeline?.view?.id ?? "刷新后会写入当前 timeline view"}</p>
           <div className="timeline-view-stats">
-            <Tag>{recordCount}/{sourceRecordTotal} records</Tag>
+            <Tag>{recordCount.toLocaleString()} / {sourceRecordTotal.toLocaleString()} 已取回</Tag>
             <Tag>{timeline?.buckets.length ?? 0} buckets</Tag>
             <Tag>{detailMode === "debug" ? "raw" : "simple"}</Tag>
           </div>
