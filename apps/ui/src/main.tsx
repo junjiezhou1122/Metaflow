@@ -11,6 +11,7 @@ const VIEW_REFRESH_POLL_MS = 15_000;
 const DEFAULT_BUCKET_MINUTES = 60;
 const DEFAULT_TIMELINE_MINUTES = 24 * 60;
 const TIMELINE_DAY_RECORD_LIMIT = 1_200;
+const TIMELINE_PAGE_MINUTES = 180;
 const FALLBACK_VIEW_TYPE_ORDER = [
   "state.surface", "work.focus_set", "project.current", "memory.daily", "memory.profile",
   "evidence", "visual_frame", "audio", "activity", "activity_block", "proposal", "resource", "intent", "workflow", "memory",
@@ -81,6 +82,15 @@ type SidebarItem = {
 };
 type FramePreview = { frameId: string | number; title?: string };
 type TimelineSyncState = "idle" | "syncing" | "error";
+type TimelinePagingState = {
+  hasMore: boolean;
+  loading: boolean;
+  cursorEnd?: string;
+  loadedStart?: string;
+  loadedEnd?: string;
+  pages: number;
+  error?: string;
+};
 type FocusSegment = {
   id: string;
   title: string;
@@ -137,7 +147,7 @@ const TIMELINE_WINDOWS = [
 const VIEW_FAMILIES_CACHE_KEY = "metaflow.viewFamilies.v1";
 const VIEW_TYPE_VIEWS_CACHE_KEY = "metaflow.viewTypeViews.v1";
 const TIMELINE_CACHE_KEY = "metaflow.timeline.v1";
-const TIMELINE_SIGNATURE_VERSION = "timeline-v3";
+const TIMELINE_SIGNATURE_VERSION = "timeline-v4";
 const SIDEBAR_COLLAPSED_CACHE_KEY = "metaflow.sidebar.collapsed.v1";
 let AMBIENT_VIEWS_MEMORY_CACHE: { views: ContextViewSummary[]; status: string } | null = null;
 let RUNTIME_SETTINGS_MEMORY_CACHE: { settings: RuntimeSettings; status: string } | null = null;
@@ -167,6 +177,7 @@ function App() {
   const [bucketMinutes, setBucketMinutes] = useState(DEFAULT_BUCKET_MINUTES);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [detailMode, setDetailMode] = useState<DetailMode>("activity");
+  const [timelinePaging, setTimelinePaging] = useState<TimelinePagingState>({ hasMore: true, loading: false, pages: 0 });
   const [activeTab, setActiveTab] = useState<ActiveTab>("home");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_CACHE_KEY) === "1");
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -182,6 +193,10 @@ function App() {
   const timelineSyncInFlightRef = useRef(false);
   const timelineWatermarkRef = useRef(initialTimelineCache?.watermark ?? "");
   const timelineWatermarkInFlightRef = useRef(false);
+
+  function resetTimelinePaging() {
+    setTimelinePaging({ hasMore: true, loading: false, pages: 0 });
+  }
 
   async function refresh(options: boolean | { quiet?: boolean; force?: boolean } = false) {
     const quiet = typeof options === "boolean" ? options : options.quiet ?? false;
@@ -203,7 +218,7 @@ function App() {
       const debugMode = detailMode === "debug";
       const sourceNeedsRawRecords = sourceFilter === "screenpipe" || sourceFilter === "runtime";
       const rawMode = debugMode || sourceNeedsRawRecords;
-      const range = todayRange();
+      const range = initialTimelineRangeForSource(sourceFilter);
       const rangeMinutes = timelineRangeMinutes(range);
       const next = await fetchActivityTimeline({
         minutes: rangeMinutes,
@@ -223,6 +238,7 @@ function App() {
       });
       if (seq !== refreshSeq.current) return;
       setTimeline(next);
+      setTimelinePaging(pagingStateFromResponse(next, todayRange()));
       timelineCacheMsRef.current = Date.now();
       timelineSignatureRef.current = requestSignature;
       const watermark = timelineWatermarkRef.current || timelineWatermarkFromResponse(next);
@@ -236,6 +252,56 @@ function App() {
     } finally {
       if (timelineInFlightSignatureRef.current === requestSignature) timelineInFlightSignatureRef.current = null;
       if (seq === refreshSeq.current && !quiet) setLoading(false);
+    }
+  }
+
+  async function loadMoreTimeline() {
+    if (!timeline || timelinePaging.loading || !timelinePaging.hasMore) return;
+    const day = todayRange();
+    const cursorEnd = timelinePaging.cursorEnd ?? oldestTimelineItemAt(timeline) ?? day.end;
+    const cursorMs = Date.parse(cursorEnd);
+    const dayStartMs = Date.parse(day.start);
+    if (!Number.isFinite(cursorMs) || !Number.isFinite(dayStartMs) || cursorMs <= dayStartMs) {
+      setTimelinePaging(current => ({ ...current, hasMore: false, loading: false }));
+      return;
+    }
+    const pageEnd = new Date(cursorMs - 1).toISOString();
+    const pageStart = new Date(Math.max(dayStartMs, cursorMs - TIMELINE_PAGE_MINUTES * 60_000)).toISOString();
+    const pageMinutes = timelineRangeMinutes({ start: pageStart, end: pageEnd });
+    setTimelinePaging(current => ({ ...current, loading: true, error: undefined }));
+    try {
+      const debugMode = detailMode === "debug";
+      const sourceNeedsRawRecords = sourceFilter === "screenpipe" || sourceFilter === "runtime";
+      const rawMode = debugMode || sourceNeedsRawRecords;
+      const next = await fetchActivityTimeline({
+        minutes: pageMinutes,
+        startTime: pageStart,
+        endTime: pageEnd,
+        limit: timelineUiRecordLimit(pageMinutes, sourceFilter, detailMode),
+        bucketMinutes,
+        includeLowLevelScreenpipe: rawMode,
+        includeRuntimeEvents: debugMode || sourceFilter === "runtime",
+        dedupe: sourceNeedsRawRecords ? false : !debugMode,
+        bucketItemLimit: rawMode ? 80 : 18,
+        summarizeHeartbeats: !rawMode,
+        sourceFilter,
+        mergeContinuous: sourceFilter !== "screenpipe",
+        mergeGapMinutes: rawMode ? 3 : 8,
+        write: false,
+      });
+      setTimeline(current => current ? mergeTimelineResponses(current, next) : next);
+      setTimelinePaging(current => ({
+        ...current,
+        loading: false,
+        hasMore: Date.parse(pageStart) > dayStartMs && next.records_used > 0,
+        cursorEnd: pageStart,
+        loadedStart: pageStart,
+        loadedEnd: current.loadedEnd ?? day.end,
+        pages: current.pages + 1,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setTimelinePaging(current => ({ ...current, loading: false, error: message }));
     }
   }
 
@@ -352,6 +418,7 @@ function App() {
   }
 
   async function showTodayTimeline() {
+    resetTimelinePaging();
     setTimelineSyncStatus("Loading today...");
     await refresh({ quiet: false, force: true });
   }
@@ -422,6 +489,12 @@ function App() {
     });
   }
 
+  function changeSourceFilter(filter: SourceFilter) {
+    resetTimelinePaging();
+    setSelectedItemId(null);
+    setSourceFilter(filter);
+  }
+
   return (
     <div className={shellClass}>
       <RuntimeSidebar activeTab={activeTab} collapsed={sidebarCollapsed} live={live} onNavigate={setActiveTab} onToggleCollapse={toggleSidebar} />
@@ -441,13 +514,13 @@ function App() {
                 {activeTab === "timeline" ? (
                   <>
                     <div className="timeline-window-switch" role="group" aria-label="Timeline window">
-                      <button className={detailMode === "activity" ? "active" : ""} type="button" onClick={() => setDetailMode("activity")}>事件</button>
+                      <button className={detailMode === "activity" ? "active" : ""} type="button" onClick={() => { resetTimelinePaging(); setDetailMode("activity"); }}>事件</button>
                       {TIMELINE_WINDOWS.slice(0, 3).map(option => (
-                        <button key={option.value} className={bucketMinutes === option.value ? "active" : ""} type="button" onClick={() => setBucketMinutes(option.value)}>{option.label}</button>
+                        <button key={option.value} className={bucketMinutes === option.value ? "active" : ""} type="button" onClick={() => { resetTimelinePaging(); setBucketMinutes(option.value); }}>{option.label}</button>
                       ))}
                     </div>
                     <button className="secondary today-button" type="button" onClick={showTodayTimeline} disabled={loading}>{loading ? "加载中" : "今天"}</button>
-                    <button className="secondary" onClick={() => setDetailMode(value => value === "debug" ? "activity" : "debug")}>{detailMode === "debug" ? "事件" : "原始"}</button>
+                    <button className="secondary" onClick={() => { resetTimelinePaging(); setDetailMode(value => value === "debug" ? "activity" : "debug"); }}>{detailMode === "debug" ? "事件" : "原始"}</button>
                     <button className="secondary" onClick={() => setLive(value => !value)}>{live ? "Live" : "Paused"}</button>
                     <button className="secondary" onClick={() => refresh(false)} disabled={loading}>{loading ? "Loading…" : "Reload"}</button>
                     <button onClick={syncNow} disabled={timelineSyncState === "syncing"}>{timelineSyncState === "syncing" ? "Auto syncing..." : "Sync now"}</button>
@@ -483,8 +556,10 @@ function App() {
             selectedItemId={selectedItemId}
             onSelect={(id) => setSelectedItemId(current => current === id ? null : id)}
             onOpenFrame={setPreviewFrame}
-            onSourceFilter={setSourceFilter}
+            onSourceFilter={changeSourceFilter}
             onSync={syncNow}
+            paging={timelinePaging}
+            onLoadMore={loadMoreTimeline}
           />
         ) : activeTab === "ambient" ? (
           <AmbientPanel />
@@ -2806,6 +2881,8 @@ function TimelineWorkbench({
   onOpenFrame,
   onSourceFilter,
   onSync,
+  paging,
+  onLoadMore,
 }: {
   timeline: ActivityTimelineResponse | null;
   buckets: TimelineBucket[];
@@ -2823,6 +2900,8 @@ function TimelineWorkbench({
   onOpenFrame: (preview: FramePreview) => void;
   onSourceFilter: (filter: SourceFilter) => void;
   onSync: () => void;
+  paging: TimelinePagingState;
+  onLoadMore: () => void;
 }) {
   const sourceRecordTotal = timeline?.records_used ?? numericMeta(timeline?.view?.metadata?.record_count, buckets.reduce((sum, bucket) => sum + bucket.count, 0));
   const recordCount = timeline?.records_used ?? 0;
@@ -2838,7 +2917,7 @@ function TimelineWorkbench({
           <h2>早上好, Junjie</h2>
           <span>{live ? "正在记录" : "已暂停"} · {timelineStatus}</span>
         </div>
-        <Timeline buckets={buckets} loading={loading} sourceFilter={sourceFilter} selectedItemId={selectedItemId} detailMode={detailMode} onSelect={onSelect} onOpenFrame={onOpenFrame} />
+        <Timeline buckets={buckets} loading={loading} sourceFilter={sourceFilter} selectedItemId={selectedItemId} detailMode={detailMode} paging={paging} onLoadMore={onLoadMore} onSelect={onSelect} onOpenFrame={onOpenFrame} />
       </div>
       <aside className="timeline-side-panel" aria-label="Timeline details">
         <section className="capture-card">
@@ -2890,7 +2969,7 @@ function TimelineWorkbench({
   );
 }
 
-function Timeline({ buckets, loading, sourceFilter, selectedItemId, detailMode, onSelect, onOpenFrame }: { buckets: TimelineBucket[]; loading: boolean; sourceFilter: SourceFilter; selectedItemId: string | null; detailMode: DetailMode; onSelect: (id: string) => void; onOpenFrame: (preview: FramePreview) => void }) {
+function Timeline({ buckets, loading, sourceFilter, selectedItemId, detailMode, paging, onLoadMore, onSelect, onOpenFrame }: { buckets: TimelineBucket[]; loading: boolean; sourceFilter: SourceFilter; selectedItemId: string | null; detailMode: DetailMode; paging: TimelinePagingState; onLoadMore: () => void; onSelect: (id: string) => void; onOpenFrame: (preview: FramePreview) => void }) {
   if (loading) return <TimelineSkeleton />;
   if (!buckets.length) return (
     <div className="timeline-empty-state">
@@ -2912,13 +2991,40 @@ function Timeline({ buckets, loading, sourceFilter, selectedItemId, detailMode, 
             onOpenFrame={onOpenFrame}
           />
         ))}
+        <TimelineLoadMore paging={paging} onLoadMore={onLoadMore} />
       </section>
     );
   }
   return (
     <section className="timeline-list" aria-label="Activity timeline">
       {buckets.map(bucket => <Bucket key={bucket.label} bucket={bucket} selectedItemId={selectedItemId} detailMode={detailMode} onSelect={onSelect} onOpenFrame={onOpenFrame} />)}
+      <TimelineLoadMore paging={paging} onLoadMore={onLoadMore} />
     </section>
+  );
+}
+
+function TimelineLoadMore({ paging, onLoadMore }: { paging: TimelinePagingState; onLoadMore: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || !paging.hasMore || paging.loading) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) onLoadMore();
+    }, { rootMargin: "520px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [paging.hasMore, paging.loading, onLoadMore]);
+  if (!paging.hasMore && !paging.error) return <div className="timeline-load-more done">已加载到今天开始</div>;
+  return (
+    <div className="timeline-load-more" ref={ref}>
+      {paging.loading ? (
+        <span>Loading earlier…</span>
+      ) : paging.error ? (
+        <button type="button" onClick={onLoadMore}>Retry earlier</button>
+      ) : (
+        <button type="button" onClick={onLoadMore}>Load earlier</button>
+      )}
+    </div>
   );
 }
 
@@ -4011,11 +4117,108 @@ function todayRange() {
   return { start: start.toISOString(), end: now.toISOString() };
 }
 
+function initialTimelineRangeForSource(sourceFilter: SourceFilter) {
+  const day = todayRange();
+  if (sourceFilter !== "screenpipe" && sourceFilter !== "runtime") return day;
+  const endMs = Date.parse(day.end);
+  const startMs = Date.parse(day.start);
+  if (!Number.isFinite(endMs) || !Number.isFinite(startMs)) return day;
+  return {
+    start: new Date(Math.max(startMs, endMs - TIMELINE_PAGE_MINUTES * 60_000)).toISOString(),
+    end: day.end,
+  };
+}
+
 function timelineRangeMinutes(range: { start: string; end: string }) {
   const start = Date.parse(range.start);
   const end = Date.parse(range.end);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 24 * 60;
   return Math.ceil((end - start) / 60_000);
+}
+
+function pagingStateFromResponse(response: ActivityTimelineResponse, day = todayRange()): TimelinePagingState {
+  const oldest = oldestTimelineItemAt(response);
+  const newest = newestTimelineItemAt(response);
+  const oldestMs = Date.parse(oldest ?? "");
+  const dayStartMs = Date.parse(day.start);
+  return {
+    hasMore: Boolean(oldest) && Number.isFinite(oldestMs) && Number.isFinite(dayStartMs) && oldestMs > dayStartMs + 1_000,
+    loading: false,
+    cursorEnd: oldest,
+    loadedStart: oldest,
+    loadedEnd: newest ?? day.end,
+    pages: response.records_used > 0 ? 1 : 0,
+  };
+}
+
+function oldestTimelineItemAt(response: ActivityTimelineResponse) {
+  return response.buckets
+    .flatMap(bucket => bucket.items)
+    .sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at))[0]?.observed_at;
+}
+
+function newestTimelineItemAt(response: ActivityTimelineResponse) {
+  return response.buckets
+    .flatMap(bucket => bucket.items)
+    .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))[0]?.observed_at;
+}
+
+function mergeTimelineResponses(current: ActivityTimelineResponse, next: ActivityTimelineResponse): ActivityTimelineResponse {
+  const buckets = mergeTimelineBuckets(current.buckets, next.buckets);
+  const itemCount = buckets.reduce((sum, bucket) => sum + bucket.items.length, 0);
+  return {
+    ...current,
+    records_used: current.records_used + next.records_used,
+    events_used: current.events_used + next.events_used,
+    buckets,
+    view: {
+      ...current.view,
+      summary: `${itemCount} loaded activity items across ${buckets.length} buckets.`,
+      metadata: {
+        ...(current.view.metadata ?? {}),
+        record_count: current.records_used + next.records_used,
+        item_count: itemCount,
+        paged: true,
+        pages_loaded: numericMeta(current.view.metadata?.pages_loaded, 1) + 1,
+      },
+      updated_at: next.view.updated_at ?? current.view.updated_at,
+    },
+  };
+}
+
+function mergeTimelineBuckets(a: TimelineBucket[], b: TimelineBucket[]) {
+  const byLabel = new Map<string, TimelineBucket>();
+  for (const bucket of [...a, ...b]) {
+    const key = `${bucket.start}|${bucket.end}|${bucket.label}`;
+    const existing = byLabel.get(key);
+    if (!existing) {
+      byLabel.set(key, { ...bucket, items: uniqueTimelineItems(bucket.items) });
+      continue;
+    }
+    const items = uniqueTimelineItems([...existing.items, ...bucket.items]);
+    byLabel.set(key, {
+      ...existing,
+      count: items.length,
+      items,
+      top_sources: top(items.map(item => item.source), 5),
+      top_apps: top(items.map(item => item.app).filter(Boolean) as string[], 5),
+      top_domains: top(items.map(item => item.domain).filter(Boolean) as string[], 5),
+      top_projects: top(items.map(item => item.project).filter(Boolean) as string[], 5),
+    });
+  }
+  return [...byLabel.values()].sort((left, right) => Date.parse(right.start) - Date.parse(left.start));
+}
+
+function uniqueTimelineItems(items: TimelineItem[]) {
+  const seen = new Set<string>();
+  return [...items]
+    .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))
+    .filter(item => {
+      const key = item.id || `${item.observed_at}:${item.source}:${item.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function timelineUiRecordLimit(minutes: number, sourceFilter: SourceFilter, detailMode: DetailMode) {
