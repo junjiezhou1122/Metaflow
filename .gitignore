@@ -1,6 +1,8 @@
 
 .DS_Store
 .env
+.netlify/
+apps/website/.netlify/
 .mcp.json
 .claude/settings.local.json
 .omc/
@@ -20,6 +22,7 @@ packages/ui/dist/
 packages/browser-extension/dist/
 packages/ui/node_modules/
 ui/dist/
+apps/website/dist/
 
 apps/mac-companion/.build/
 apps/mac-companion/build/
@@ -28,3 +31,6 @@ apps/mac-companion/build/
 # Local analysis reports
 orphan-report.json
 unused-runtime-symbols.json
+
+# Local Netlify folder
+.netlify

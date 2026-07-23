@@ -16,5 +16,6 @@ packages:
   - "packages/iii-runtime"
   - "packages/server"
   - "apps/ui"
+  - "apps/website"
   - "apps/chrome-acp"
   - "apps/chrome-acp/packages/*"

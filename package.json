@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "local-project:once": "node --experimental-sqlite --import tsx scripts/local-project-once.ts",
     "screenshot:once": "node --experimental-sqlite --import tsx scripts/screenshot-once.ts",
+    "mobile-screenshot:inbox": "node --experimental-sqlite --import tsx scripts/mobile-screenshot-inbox.ts",
     "agent-discovery:example": "node --experimental-sqlite --import tsx scripts/agent-discovery-example.ts",
     "screenpipe:recent": "node --experimental-sqlite --import tsx scripts/screenpipe-recent.ts",
     "tweet-save:example": "node --experimental-sqlite --import tsx scripts/tweet-save-example.ts",
@@ -38,6 +39,9 @@
     "ui:dev": "pnpm --dir apps/ui run dev",
     "ui:build": "pnpm --dir apps/ui run build",
     "ui:preview": "pnpm --dir apps/ui run preview",
+    "website:dev": "pnpm --dir apps/website run dev",
+    "website:build": "pnpm --dir apps/website run build",
+    "website:preview": "pnpm --dir apps/website run preview",
     "mac:build": "swift build --package-path apps/mac-companion",
     "mac:run": "swift run --package-path apps/mac-companion metaflow-mac",
     "test": "node --experimental-sqlite --import tsx --test tests/**/*.test.ts"
