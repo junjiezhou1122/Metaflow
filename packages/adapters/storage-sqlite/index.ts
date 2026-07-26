@@ -295,6 +295,13 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       for (const plan of plans) {
         if (plan.created) this.persistPlan(plan, transaction);
       }
+      transaction.phase = "persist_semantic_search";
+      const plannedViews = new Map(
+        plans.filter(plan => plan.created).map(plan => [viewKey(exactViewRef(plan.view)), plan.view]),
+      );
+      for (const plan of plans) {
+        if (plan.created) this.persistSemanticSearch(plan.view, plannedViews, transaction);
+      }
       transaction.phase = "persist_view_committed_event";
       this.persistViewCommittedEvent(plans, transaction, context);
       return {
@@ -2377,7 +2384,6 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
     transaction.phase = "persist_search_projection";
     try {
       this.insertSearchProjection(view, view.time.created_at);
-      this.semantic_search?.insert(view);
     } catch (error) {
       if (error instanceof ViewRepositoryError) throw error;
       throw this.problem(
@@ -2391,6 +2397,25 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       );
     }
     transaction.phase = previousPhase;
+  }
+
+  private persistSemanticSearch(
+    view: View,
+    plannedViews: ReadonlyMap<string, View>,
+    transaction: TransactionContext,
+  ): void {
+    try {
+      this.semantic_search?.insert(view, plannedViews);
+    } catch (error) {
+      if (error instanceof ViewRepositoryError) throw error;
+      throw this.problem(
+        "invalid_request",
+        `View ${view.id}@${view.revision} has an invalid semantic search materialization`,
+        transaction,
+        {},
+        error,
+      );
+    }
   }
 
   private insertRelation(view: View, relation: View["relations"][number]): void {
@@ -2951,7 +2976,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       );
 
       create table if not exists view_search_vectors_v1 (
-        vector_rowid integer primary key autoincrement,
+        vector_rowid integer not null check(vector_rowid > 0),
         embedding_view_id text not null,
         embedding_revision integer not null check(embedding_revision > 0),
         target_view_id text not null,
@@ -2971,7 +2996,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         foreign key (target_view_id, target_revision) references view_revisions_v1(id, revision)
           on delete cascade deferrable initially deferred,
         foreign key (profile_id, profile_revision) references view_search_vector_profiles_v1(profile_id, profile_revision)
-          deferrable initially deferred
+          deferrable initially deferred,
+        primary key (profile_id, profile_revision, vector_rowid)
       );
 
       create table if not exists view_search_reindex_runs_v1 (

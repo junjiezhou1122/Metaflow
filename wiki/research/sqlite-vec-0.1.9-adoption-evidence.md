@@ -25,7 +25,8 @@ semantic fallback.
 - macOS arm64 binary: `sqlite-vec-darwin-arm64@0.1.9`
 - runtime extension: `vec_version() = v0.1.9`
 - inspected extension commit from `vec_debug()`: `e9f598abfa0c06b328d8fe5da9c3760cce74be10`
-- local runtime: Node `v24.14.0`, SQLite `3.51.2`, macOS arm64, WAL
+- executable runtime contract: Node `24.x`; the recorded acceptance host was
+  Node `v24.14.0`, SQLite `3.51.2`, macOS arm64, WAL
 - lockfile also freezes the upstream-published Darwin x64, Linux x64/arm64,
   and Windows x64 optional binary packages at `0.1.9`; no install script builds
   an unpinned local extension.
@@ -46,8 +47,19 @@ semantic fallback.
    from committed embedding Views without calling an embedder;
 7. identical exact semantic result and evidence envelopes across in-process,
    CLI, HTTP, and the real MCP SDK surface;
-8. a production-only `pnpm deploy --prod --legacy` artifact contains the
-   pinned macOS binary and loads `v0.1.9` from the deployed dependency tree.
+8. `pnpm verify:semantic-deploy` creates a production-only
+   `pnpm deploy --prod --legacy` artifact, rejects dev dependencies, loads
+   `v0.1.9` from the current host's deployed binary package, and verifies that
+   the owning adapter ships the complete upstream MIT notice;
+9. two profiles may both use physical rowid `1` without cross-resolving, while
+   corrupted physical profile/target metadata fails both live query and reopen;
+10. embedding policy cannot weaken visibility, privacy, retention, model,
+    embedding/search flags, labels, or owner, and both same-batch target orders
+    retain atomic forward-reference and rollback behavior.
+
+The supported published binary tuples are Darwin arm64/x64, Linux arm64/x64,
+and Windows x64. The lockfile pins all five at `0.1.9`; an acceptance run proves
+only its reported current tuple, never unexecuted operating systems.
 
 The representative local fixture contains 512 exact targets and 512 strict
 32-dimensional embedding Derived Views. The acceptance run on 2026-07-27
@@ -57,12 +69,29 @@ The executable guard
 is intentionally generous across CI: under 10 seconds to index, under 2 seconds
 to query, and under 32 MiB.
 
+The independent-review repair run added three semantic regressions and passed
+Search `29/29`, View Store `12/12`, Privacy Forget/Capture `20/20`, the v1
+vertical, typecheck, dependency/package boundaries, frozen-lockfile install,
+and the production deploy verifier. The exact 48-file concurrent full-suite
+runner passed twice (`391` passed, one intentional live Screenpipe skip, zero
+failures on each run). The previously reported concurrent-worker
+`search-adapter.js` resolution error did not reproduce in either clean run, so
+no serialization or module-resolution fallback was added.
+
 ## Failure behavior
 
 A database with stored vector profiles refuses to reopen without the same
 semantic configuration. Extension/profile/version/dimension/metric/table
-incompatibility fails initialization. Invalid embedding provenance, policy,
+incompatibility or cross-profile physical metadata fails initialization.
+Invalid embedding provenance, policy,
 target location, digest, or vector fails the whole View transaction. An
 unconfigured `SearchService` still returns the existing explicit
 `semantic_not_configured` outcome under partial mode or fails `require_all`;
 it never substitutes another retriever.
+
+## License and source
+
+Metaflow redistributes sqlite-vec under the upstream MIT option. The complete
+notice is `packages/adapters/storage-sqlite/THIRD_PARTY_NOTICES.md`, copied from
+[`LICENSE-MIT`](https://github.com/asg017/sqlite-vec/blob/e9f598abfa0c06b328d8fe5da9c3760cce74be10/LICENSE-MIT)
+at exact `v0.1.9` source commit `e9f598abfa0c06b328d8fe5da9c3760cce74be10`.

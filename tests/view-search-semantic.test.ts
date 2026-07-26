@@ -9,6 +9,7 @@ import { SearchService, type QueryEmbeddingPort } from "@info/search";
 import {
   PrivacyForgetService,
   exactViewRef,
+  parseView,
   parseViewDraft,
   type ExactViewRef,
   type View,
@@ -31,13 +32,21 @@ const PROFILE: SqliteVecProfile = {
   dimension: 3,
   distance_metric: "cosine",
 };
+const SECOND_PROFILE: SqliteVecProfile = {
+  id: "embedding:fixture-v2",
+  revision: 1,
+  provider: "fixture",
+  model: "fixture-3d-second",
+  dimension: 3,
+  distance_metric: "cosine",
+};
 const CREATED_AT = "2026-07-27T08:00:00.000Z";
 
 test("pinned sqlite-vec loads on Node 24 and preserves scoped vectors across rollback and WAL reopen", async () => {
   assert.equal(process.versions.node.startsWith("24."), true, `expected Node 24, received ${process.versions.node}`);
   const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-lifecycle-"));
   const database = join(directory, "views.sqlite");
-  let repository = semanticRepository(database);
+  let repository: SqliteViewRepository | undefined = semanticRepository(database);
   try {
     const compatibility = repository.semantic_search!.compatibility;
     assert.equal(compatibility.package_version, SQLITE_VEC_PACKAGE_VERSION);
@@ -90,12 +99,13 @@ test("pinned sqlite-vec loads on Node 24 and preserves scoped vectors across rol
     assert.equal(await repository.get({ view_id: rollbackBad.id, revision: 1 }), undefined);
 
     repository.close();
+    repository = undefined;
     repository = semanticRepository(database);
     const reopened = await semanticSearch(repository, [first, firstEmbedding, second, secondEmbedding], [1, 0, 0]);
     assert.deepEqual(reopened.hits.map(hit => hit.ref), [exactViewRef(first), exactViewRef(second)]);
     assert.deepEqual(reopened.hits[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(firstEmbedding));
   } finally {
-    repository.close();
+    repository?.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -125,10 +135,171 @@ test("semantic startup rejects missing or incompatible profile configuration", (
   }
 });
 
+test("profile-scoped rowids cannot cross-resolve and metadata corruption fails query and reopen", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-profile-integrity-"));
+  const database = join(directory, "views.sqlite");
+  let repository: SqliteViewRepository | undefined = semanticRepository(database, [PROFILE, SECOND_PROFILE]);
+  try {
+    const firstTarget = await commit(repository, targetDraft("view:profile:first", "first profile target"));
+    const secondTarget = await commit(repository, targetDraft("view:profile:second", "second profile target"));
+    await commit(repository, embeddingDraft("view:profile:first-embedding", firstTarget, [1, 0, 0], PROFILE));
+    const secondEmbedding = await commit(
+      repository,
+      embeddingDraft("view:profile:second-embedding", secondTarget, [0, 1, 0], SECOND_PROFILE),
+    );
+
+    const scoped = await repository.semantic_search!.retrieve({
+      vector: { values: [0, 1, 0], dimension: 3, distance_metric: "cosine" },
+      profile: { id: SECOND_PROFILE.id, revision: SECOND_PROFILE.revision },
+      refs: [exactViewRef(firstTarget), exactViewRef(secondTarget)],
+      target: { envelope: false, internal: true, related_views: false },
+      candidate_limit: 10,
+    });
+    assert.deepEqual(scoped.map(candidate => candidate.ref), [exactViewRef(secondTarget)]);
+    assert.deepEqual(scoped[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(secondEmbedding));
+
+    const extensionPath = repository.semantic_search!.compatibility.extension_path;
+    const audit = new DatabaseSync(database, { allowExtension: true });
+    audit.loadExtension(extensionPath);
+    const mappings = audit.prepare(`
+      select profile_id, profile_revision, vector_rowid
+      from view_search_vectors_v1 order by profile_id
+    `).all() as Array<{ profile_id: string; profile_revision: number; vector_rowid: number }>;
+    assert.deepEqual(mappings.map(row => [row.profile_id, Number(row.vector_rowid)]), [
+      [PROFILE.id, 1],
+      [SECOND_PROFILE.id, 1],
+    ]);
+    const secondTable = audit.prepare(`
+      select table_name from view_search_vector_profiles_v1
+      where profile_id = ? and profile_revision = ?
+    `).get(SECOND_PROFILE.id, SECOND_PROFILE.revision) as { table_name: string };
+    audit.prepare(`delete from "${secondTable.table_name}" where rowid = 1`).run();
+    audit.prepare(`
+      insert into "${secondTable.table_name}" (
+        rowid, embedding, target_key, target_kind, profile_id, profile_revision
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(
+      1n,
+      new Float32Array([0, 1, 0]),
+      `${secondTarget.id}@${secondTarget.revision}`,
+      "representation",
+      PROFILE.id,
+      BigInt(PROFILE.revision),
+    );
+    audit.close();
+
+    await assert.rejects(
+      repository.semantic_search!.retrieve({
+        vector: { values: [0, 1, 0], dimension: 3, distance_metric: "cosine" },
+        profile: { id: SECOND_PROFILE.id, revision: SECOND_PROFILE.revision },
+        refs: [exactViewRef(secondTarget)],
+        target: { envelope: false, internal: true, related_views: false },
+        candidate_limit: 10,
+      }),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "vector_mapping_corrupt",
+    );
+    repository.close();
+    repository = undefined;
+    assert.throws(
+      () => semanticRepository(database, [PROFILE, SECOND_PROFILE]),
+      (error: unknown) => error instanceof Error && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "vector_mapping_corrupt",
+    );
+  } finally {
+    repository?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("embedding policies cannot weaken sensitive targets or cross owners", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-policy-"));
+  const repository = semanticRepository(join(directory, "views.sqlite"));
+  try {
+    const strictPolicy = {
+      ...semanticPolicy(),
+      privacy: "sensitive" as const,
+      labels: ["semantic-fixture", "sensitive-source"],
+    };
+    const target = await commit(repository, parseViewDraft({
+      ...targetDraft("view:policy:target", "sensitive target"),
+      policy: strictPolicy,
+    }));
+    const publicWeakening = parseViewDraft({
+      ...embeddingDraft("view:policy:public", target, [1, 0, 0]),
+      policy: {
+        ...semanticPolicy(),
+        visibility: "public",
+        privacy: "public",
+        labels: ["semantic-fixture"],
+      },
+    });
+    await assert.rejects(
+      repository.commit({ draft: publicWeakening, expected_revision: 0 }),
+      (error: unknown) => semanticErrorCode(error) === "embedding_invalid",
+    );
+    assert.equal(await repository.get({ view_id: publicWeakening.id, revision: 1 }), undefined);
+
+    const crossOwner = parseViewDraft({
+      ...embeddingDraft("view:policy:cross-owner", target, [1, 0, 0]),
+      policy: { ...strictPolicy, owner: "user:other" },
+    });
+    await assert.rejects(
+      repository.commit({ draft: crossOwner, expected_revision: 0 }),
+      (error: unknown) => semanticErrorCode(error) === "embedding_invalid",
+    );
+    assert.equal(await repository.get({ view_id: crossOwner.id, revision: 1 }), undefined);
+  } finally {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("semantic projection preserves both same-batch forward-reference orders and rollback", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-forward-reference-"));
+  const repository = semanticRepository(join(directory, "views.sqlite"));
+  try {
+    const firstTarget = parseView({ ...targetDraft("view:batch:first-target", "embedding first target"), revision: 1 });
+    const firstEmbedding = embeddingDraft("view:batch:first-embedding", firstTarget, [1, 0, 0]);
+    await repository.commitBatch([
+      { draft: firstEmbedding, expected_revision: 0 },
+      { draft: targetDraft(firstTarget.id, "embedding first target"), expected_revision: 0 },
+    ]);
+    const secondTarget = parseView({ ...targetDraft("view:batch:second-target", "target first target"), revision: 1 });
+    const secondEmbedding = embeddingDraft("view:batch:second-embedding", secondTarget, [0, 1, 0]);
+    await repository.commitBatch([
+      { draft: targetDraft(secondTarget.id, "target first target"), expected_revision: 0 },
+      { draft: secondEmbedding, expected_revision: 0 },
+    ]);
+    const hits = await repository.semantic_search!.retrieve({
+      vector: { values: [1, 0, 0], dimension: 3, distance_metric: "cosine" },
+      profile: { id: PROFILE.id, revision: PROFILE.revision },
+      refs: [exactViewRef(firstTarget), exactViewRef(secondTarget)],
+      target: { envelope: false, internal: true, related_views: false },
+      candidate_limit: 10,
+    });
+    assert.deepEqual(hits.map(hit => hit.ref), [exactViewRef(firstTarget), exactViewRef(secondTarget)]);
+
+    const rollbackTarget = parseView({ ...targetDraft("view:batch:rollback-target", "rollback target"), revision: 1 });
+    const invalidEmbedding = parseViewDraft({
+      ...embeddingDraft("view:batch:rollback-embedding", rollbackTarget, [0, 0, 1]),
+      policy: { ...semanticPolicy(), owner: "user:other" },
+    });
+    await assert.rejects(repository.commitBatch([
+      { draft: invalidEmbedding, expected_revision: 0 },
+      { draft: targetDraft(rollbackTarget.id, "rollback target"), expected_revision: 0 },
+    ]));
+    assert.equal(await repository.get(exactViewRef(rollbackTarget)), undefined);
+    assert.equal(await repository.get({ view_id: invalidEmbedding.id, revision: 1 }), undefined);
+  } finally {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Privacy Forget and durable reindex remove vector evidence and repair mapping orphans without embedding", async () => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-forget-"));
   const database = join(directory, "views.sqlite");
-  let repository = semanticRepository(database);
+  let repository: SqliteViewRepository | undefined = semanticRepository(database);
   try {
     const forgottenTarget = await commit(repository, targetDraft("view:semantic:forgotten", "forgotten semantic location"));
     const retainedTarget = await commit(repository, targetDraft("view:semantic:retained", "retained semantic location"));
@@ -137,15 +308,28 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
 
     const extensionPath = repository.semantic_search!.compatibility.extension_path;
     repository.close();
+    repository = undefined;
     const audit = new DatabaseSync(database, { allowExtension: true });
     audit.loadExtension(extensionPath);
-    const profile = audit.prepare("select table_name from view_search_vector_profiles_v1").get() as { table_name: string };
+    const profile = audit.prepare(`
+      select table_name, profile_id, profile_revision from view_search_vector_profiles_v1
+    `).get() as { table_name: string; profile_id: string; profile_revision: number };
     const retainedMapping = audit.prepare(`
       select vector_rowid from view_search_vectors_v1 where embedding_view_id = ?
     `).get(retainedEmbedding.id) as { vector_rowid: number };
     audit.prepare("delete from view_search_vectors_v1 where vector_rowid = ?").run(BigInt(retainedMapping.vector_rowid));
-    audit.prepare(`insert into "${profile.table_name}" (rowid, embedding, target_key, target_kind) values (?, ?, ?, ?)`)
-      .run(9_999_999n, new Float32Array([0.2, 0.2, 0.6]), "view:orphan@1", "representation");
+    audit.prepare(`
+      insert into "${profile.table_name}" (
+        rowid, embedding, target_key, target_kind, profile_id, profile_revision
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(
+      9_999_999n,
+      new Float32Array([0.2, 0.2, 0.6]),
+      "view:orphan@1",
+      "representation",
+      profile.profile_id,
+      BigInt(profile.profile_revision),
+    );
     audit.close();
 
     repository = semanticRepository(database);
@@ -196,11 +380,12 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
     assert.deepEqual(remaining.hits.map(hit => hit.ref), [exactViewRef(retainedTarget)]);
 
     repository.close();
+    repository = undefined;
     repository = semanticRepository(database);
     const reopened = await semanticSearch(repository, [retainedTarget, retainedEmbedding], [0, 1, 0]);
     assert.deepEqual(reopened.hits.map(hit => hit.ref), [exactViewRef(retainedTarget)]);
   } finally {
-    repository.close();
+    repository?.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -389,6 +574,12 @@ function semanticPolicy() {
     allow_local_search: true,
     labels: ["semantic-fixture"],
   };
+}
+
+function semanticErrorCode(error: unknown): unknown {
+  return error instanceof Error && error.cause instanceof Error && "code" in error.cause
+    ? error.cause.code
+    : undefined;
 }
 
 async function semanticSearch(
