@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { ExactViewRefSchema, IdentifierSchema, TimestampSchema, compileViewSearchMatchExpression } from "@info/view";
+import { ExactViewRefSchema, IdentifierSchema, TimestampSchema } from "@info/view/schema";
+import { compileViewSearchMatchExpression } from "@info/view/search-match";
 
 export const SEARCH_CONTRACT_VERSION = 1 as const;
 export const SEARCH_MAX_SCOPE_NODES = 1_000;

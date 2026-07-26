@@ -1,0 +1,37 @@
+{
+  "name": "@info/view-explorer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5190",
+    "build": "tsc --noEmit && vite build && node scripts/check-bundle.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 5191",
+    "test": "node --import tsx --test src/*.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@info/search": "workspace:*",
+    "@info/view": "workspace:*",
+    "@vitejs/plugin-react": "6.0.4",
+    "graphology": "0.26.0",
+    "graphology-layout-forceatlas2": "0.10.1",
+    "graphology-layout-noverlap": "0.4.2",
+    "lucide-react": "1.27.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sigma": "3.0.3",
+    "vite": "8.1.5",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0",
+    "@types/node": "22.19.15",
+    "@types/pngjs": "6.0.5",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "pngjs": "7.0.0",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  }
+}
