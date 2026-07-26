@@ -103,13 +103,27 @@ Screenpipe skip and zero failures. View Store passed `12/12`, Privacy
 Forget/Capture `20/20`, and deploy, vertical, typecheck, dependency boundaries,
 23 boundary regressions, and frozen-lockfile installation also passed.
 
+The payload-integrity repair additionally treats each committed embedding
+vector as canonical IEEE-754 float32 little-endian bytes. Startup and live
+retrieval compare the bounded physical `vec0` blob directly with bytes derived
+from the exact committed View, without trusting mapping metadata or a mutable
+digest. Replacing `[1,0,0]` with `[0,0,1]` now latches
+`reindex_required`, blocks semantic mutation and stale replay across reopen,
+and a new durable reindex restores the exact bytes without changing View refs.
+The regression also corrupts mapping path/digest and vector payload together;
+both metadata and payload mismatches remain observable before repair.
+The final Node `v24.14.0` run passed semantic `17/17`, the 49-file suite with
+`406` passed and one intentional live Screenpipe skip, deploy, View Store
+`12/12`, Privacy Forget/Capture `20/20`, vertical, typecheck, dependency and
+test boundaries, and frozen-lockfile installation.
+
 ## Failure behavior
 
 A database with stored vector profiles refuses to reopen without the same
 semantic configuration. Extension/profile/version/dimension/metric/table
 incompatibility or cross-profile physical metadata fails initialization.
-Missing mappings, missing physical rows, loss of both rows, and physical
-orphans instead open in an explicit
+Missing mappings, missing physical rows, loss of both rows, physical orphans,
+and physical payload mismatches instead open in an explicit
 `reindex_required` maintenance state so only a new durable reindex can proceed.
 Invalid embedding provenance, policy,
 target location, digest, or vector fails the whole View transaction. An
