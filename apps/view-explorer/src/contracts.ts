@@ -18,6 +18,13 @@ import {
 export const EXPLORER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const EXPLORER_MAX_NODES = 2_000;
 export const EXPLORER_MAX_EDGES = 10_000;
+export const EXPLORER_DEFAULT_EDGE_TYPES = [
+  "derived_from",
+  "member_of",
+  "references",
+  "application_member",
+  "application_composition",
+] as const;
 
 const OperationErrorSchema = z.object({
   code: z.string().trim().min(1).max(240),

@@ -2,12 +2,7 @@
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import noverlap from "graphology-layout-noverlap";
-
-type LayoutRequest = {
-  id: number;
-  nodes: Array<{ key: string; x: number; y: number; size: number }>;
-  edges: Array<{ key: string; source: string; target: string }>;
-};
+import { LAYOUT_PROTOCOL_VERSION, type LayoutRequest, type LayoutResponse } from "./layout-protocol.js";
 
 self.onmessage = (event: MessageEvent<LayoutRequest>) => {
   const request = event.data;
@@ -18,7 +13,14 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
       if (edge.source !== edge.target && !graph.hasEdge(edge.key)) graph.addDirectedEdgeWithKey(edge.key, edge.source, edge.target);
     }
     if (graph.order <= 1) {
-      self.postMessage({ id: request.id, ok: true, positions: graph.reduceNodes((positions, key, attributes) => ({ ...positions, [key]: { x: attributes.x, y: attributes.y } }), {}) });
+      const response: LayoutResponse = {
+        protocol_version: LAYOUT_PROTOCOL_VERSION,
+        generation: request.generation,
+        request_id: request.request_id,
+        ok: true,
+        positions: graph.mapNodes((key, attributes) => ({ key, x: Number(attributes.x), y: Number(attributes.y) })),
+      };
+      self.postMessage(response);
       return;
     }
     const iterations = graph.order > 1_000 ? 18 : graph.order > 100 ? 28 : 45;
@@ -28,9 +30,23 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
     });
     for (const [key, position] of Object.entries(forcePositions)) graph.mergeNodeAttributes(key, position);
     const positions = noverlap(graph, { maxIterations: 32, settings: { margin: 4, ratio: 1.1, expansion: 1.08, gridSize: 20 } });
-    self.postMessage({ id: request.id, ok: true, positions });
+    const response: LayoutResponse = {
+      protocol_version: LAYOUT_PROTOCOL_VERSION,
+      generation: request.generation,
+      request_id: request.request_id,
+      ok: true,
+      positions: request.nodes.map(node => ({ key: node.key, x: positions[node.key]!.x, y: positions[node.key]!.y })),
+    };
+    self.postMessage(response);
   } catch (error) {
-    self.postMessage({ id: request.id, ok: false, message: error instanceof Error ? error.message : "Layout worker failed" });
+    const response: LayoutResponse = {
+      protocol_version: LAYOUT_PROTOCOL_VERSION,
+      generation: request.generation,
+      request_id: request.request_id,
+      ok: false,
+      message: error instanceof Error ? error.message : "Layout worker failed",
+    };
+    self.postMessage(response);
   }
 };
 

@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  EXPLORER_DEFAULT_EDGE_TYPES,
   EXPLORER_MAX_EDGES,
   EXPLORER_MAX_NODES,
   parseExactRef,
@@ -28,14 +29,24 @@ import {
 import { createFixtureTransport, parseFixtureSize } from "./fixtures.js";
 import { type CameraState, mergeProjection } from "./graph-projection.js";
 import { ExplorerClientError, ViewExplorerOperationClient } from "./operation-client.js";
+import { ExplorerRequestCoordinator } from "./request-coordinator.js";
 import { VirtualNodeList } from "./node-list.js";
 
 const SigmaSurface = lazy(() => import("./sigma-surface.js"));
-const EDGE_TYPES = ["derived_from", "member_of", "references", "application_member"] as const;
 type Direction = ViewGraphProjectionRequest["direction"];
 type Drawer = "filters" | "details" | undefined;
 type VisitedItem = { key: string; name: string; camera: CameraState };
 type UiFailure = { code: string; message: string; operation?: string };
+type HistoryMode = "push" | "replace" | "none";
+type LoadProjectionOptions = {
+  direction: Direction;
+  depth: number;
+  edgeTypes: string[];
+  selected?: string;
+  historyMode: HistoryMode;
+  recordVisited?: boolean;
+  requireSelection?: boolean;
+};
 
 export function ViewExplorer() {
   const initial = useMemo(readUrlState, []);
@@ -57,12 +68,12 @@ export function ViewExplorer() {
   const [failure, setFailure] = useState<UiFailure>();
   const [layout, setLayout] = useState<"idle" | "running" | "ready" | "failed">("idle");
   const [layoutMessage, setLayoutMessage] = useState<string>();
+  const [layoutFailureCode, setLayoutFailureCode] = useState("graph_layout_failed");
   const [visited, setVisited] = useState<VisitedItem[]>([]);
   const [cameraTarget, setCameraTarget] = useState<(CameraState & { nonce: number }) | undefined>(initial.camera ? { ...initial.camera, nonce: 0 } : undefined);
   const cameraRef = useRef<CameraState>(initial.camera ?? { x: 0.5, y: 0.5, ratio: 1, angle: 0 });
   const searchRef = useRef<HTMLInputElement>(null);
-  const requestSerial = useRef(0);
-  const projectionAbortRef = useRef<AbortController | undefined>(undefined);
+  const requestsRef = useRef(new ExplorerRequestCoordinator());
 
   useEffect(() => {
     if (!fixtureTransport) return;
@@ -80,46 +91,86 @@ export function ViewExplorer() {
       return [];
     }))].sort();
   }, [projection, selectedKey]);
-  const availableEdgeTypes = useMemo(() => [...new Set([...EDGE_TYPES, ...(projection?.edges.map(edge => edge.type) ?? [])])].sort(), [projection]);
+  const availableEdgeTypes = useMemo(() => [...new Set([...EXPLORER_DEFAULT_EDGE_TYPES, ...(projection?.edges.map(edge => edge.type) ?? [])])].sort(), [projection]);
+  const relationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of projection?.edges ?? []) counts.set(edge.type, (counts.get(edge.type) ?? 0) + 1);
+    return [...counts].sort(([left], [right]) => left.localeCompare(right));
+  }, [projection]);
 
-  const loadProjection = useCallback(async (requestedRoot: ExactViewRef, nextDirection = direction, nextDepth = depth, nextEdges = edgeTypes) => {
-    const serial = ++requestSerial.current;
-    projectionAbortRef.current?.abort(new DOMException("Projection superseded", "AbortError"));
-    const abort = new AbortController();
-    projectionAbortRef.current = abort;
+  const commitProjection = useCallback((result: ViewGraphProjectionResult, requestedRoot: ExactViewRef, options: LoadProjectionOptions) => {
+    const selectedNode = options.selected ? result.nodes.find(node => refKey(node.ref) === options.selected) : undefined;
+    if (options.requireSelection && !selectedNode) {
+      throw new ExplorerNavigationError("Exact Search result was absent from its graph projection", "projection_missing_selected");
+    }
+    const nextSelected = selectedNode ? refKey(selectedNode.ref) : undefined;
+    setProjection(result);
+    setRoot(requestedRoot);
+    setDirection(options.direction);
+    setDepth(options.depth);
+    setEdgeTypes(options.edgeTypes);
+    setPendingEdgeTypes(options.edgeTypes);
+    setSelectedKey(nextSelected);
+    if (nextSelected) {
+      setFocusKey(nextSelected);
+      setFocusNonce(value => value + 1);
+      if (options.recordVisited) {
+        setVisited(items => items.some(item => item.key === nextSelected)
+          ? items
+          : [...items.slice(-7), { key: nextSelected, name: selectedNode!.name, camera: cameraRef.current }]);
+      }
+    } else {
+      setFocusKey(undefined);
+    }
+    if (options.historyMode !== "none") {
+      updateUrl({ root: requestedRoot, selected: nextSelected, direction: options.direction, depth: options.depth, edgeTypes: options.edgeTypes, camera: cameraRef.current }, options.historyMode);
+    }
+  }, []);
+
+  const loadProjection = useCallback(async (requestedRoot: ExactViewRef, options: LoadProjectionOptions) => {
+    const request = requestsRef.current.begin("projection");
     setLoading(true);
     setFailure(undefined);
     try {
       const result = await client.project({
         roots: [requestedRoot],
-        direction: nextDirection,
-        edge_types: nextEdges,
-        max_depth: nextDepth,
+        direction: options.direction,
+        edge_types: options.edgeTypes,
+        max_depth: options.depth,
         max_nodes: EXPLORER_MAX_NODES,
         max_edges: EXPLORER_MAX_EDGES,
-      }, abort.signal);
-      if (requestSerial.current !== serial) return;
-      setProjection(result);
-      setRoot(requestedRoot);
-      updateUrl({ root: requestedRoot, selected: selectedKey, direction: nextDirection, depth: nextDepth, edgeTypes: nextEdges, camera: cameraRef.current }, "replace");
+      }, request.controller.signal);
+      if (!requestsRef.current.isCurrent(request.token, request.controller)) return;
+      commitProjection(result, requestedRoot, options);
     } catch (error) {
-      if (requestSerial.current !== serial) return;
-      setFailure(toFailure(error));
+      if (requestsRef.current.isCurrent(request.token, request.controller)) setFailure(toFailure(error));
     } finally {
-      if (requestSerial.current === serial) setLoading(false);
+      requestsRef.current.finish("projection", request.controller);
+      if (requestsRef.current.isCurrent(request.token)) setLoading(false);
     }
-  }, [client, depth, direction, edgeTypes, selectedKey]);
+  }, [client, commitProjection]);
 
   useEffect(() => {
-    if (root) void loadProjection(root);
-    return () => projectionAbortRef.current?.abort(new DOMException("Explorer disposed", "AbortError"));
-  }, []);
+    const initialRoot = initial.root ?? (initial.fixture ? { view_id: "view:fixture:0000", revision: 1 } : undefined);
+    if (initialRoot) void loadProjection(initialRoot, {
+      direction: initial.direction,
+      depth: initial.depth,
+      edgeTypes: initial.edgeTypes,
+      selected: initial.selected,
+      historyMode: "replace",
+      recordVisited: Boolean(initial.selected),
+      requireSelection: Boolean(initial.selected),
+    });
+    return () => requestsRef.current.dispose();
+  }, [initial, loadProjection]);
 
   useEffect(() => {
     if (!selectedNode) { setView(undefined); return; }
     const abort = new AbortController();
     setView(undefined);
-    void client.getView(selectedNode.ref, abort.signal).then(setView).catch(error => {
+    void client.getView(selectedNode.ref, abort.signal).then(nextView => {
+      if (!abort.signal.aborted) setView(nextView);
+    }).catch(error => {
       if (!abort.signal.aborted) setFailure(toFailure(error));
     });
     return () => abort.abort();
@@ -128,17 +179,42 @@ export function ViewExplorer() {
   useEffect(() => {
     const pop = () => {
       const state = readUrlState();
+      const projectionConfigChanged = state.direction !== direction
+        || state.depth !== depth
+        || !sameStrings(state.edgeTypes, edgeTypes);
       setSelectedKey(state.selected);
       setDirection(state.direction);
       setDepth(state.depth);
       setEdgeTypes(state.edgeTypes);
       setPendingEdgeTypes(state.edgeTypes);
       if (state.camera) setCameraTarget({ ...state.camera, nonce: Date.now() });
-      if (state.root && (!root || refKey(state.root) !== refKey(root))) void loadProjection(state.root, state.direction, state.depth, state.edgeTypes);
+      if (!state.root) {
+        requestsRef.current.supersede("History navigation returned to the explorer entry surface");
+        setRoot(undefined);
+        setProjection(undefined);
+        setSelectedKey(undefined);
+        return;
+      }
+      if (!root || !projection || refKey(state.root) !== refKey(root) || projectionConfigChanged) {
+        void loadProjection(state.root, {
+          direction: state.direction,
+          depth: state.depth,
+          edgeTypes: state.edgeTypes,
+          selected: state.selected,
+          historyMode: "none",
+          recordVisited: false,
+          requireSelection: Boolean(state.selected),
+        });
+        return;
+      }
+      requestsRef.current.supersede("History selection superseded active explorer work");
+      setSelectedKey(state.selected);
+      setFocusKey(state.selected);
+      setFocusNonce(value => value + 1);
     };
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
-  }, [loadProjection, root]);
+  }, [depth, direction, edgeTypes, loadProjection, projection, root]);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -154,6 +230,8 @@ export function ViewExplorer() {
   function selectNode(key: string, camera = cameraRef.current, historyMode: "push" | "replace" = "push"): void {
     const node = projection?.nodes.find(candidate => refKey(candidate.ref) === key);
     if (!node) return;
+    requestsRef.current.supersede("Exact View selection superseded active explorer work");
+    setLoading(false);
     setSelectedKey(key);
     setFocusKey(key);
     setFocusNonce(value => value + 1);
@@ -172,8 +250,10 @@ export function ViewExplorer() {
     if (!normalized) return;
     const local = projection?.nodes.find(node => `${node.name} ${node.schema.name} ${refKey(node.ref)}`.toLowerCase().includes(normalized));
     if (local) { selectNode(refKey(local.ref)); return; }
-    const abort = new AbortController();
+    const search = requestsRef.current.begin("search");
+    let projectionController: AbortController | undefined;
     setLoading(true);
+    setFailure(undefined);
     try {
       const response = await client.search({
         contract_version: 1,
@@ -184,40 +264,69 @@ export function ViewExplorer() {
         fusion: { strategy: "rrf@1", k: 60, weights: { keyword: 1 } },
         failure_mode: "require_all",
         page: { limit: 20 },
-      }, abort.signal);
+      }, search.controller.signal);
+      if (!requestsRef.current.isCurrent(search.token, search.controller)) return;
       const hit = response.hits[0];
       if (!hit) { setFailure({ code: "search_no_results", message: "No authorized exact View matched this search." }); return; }
-      setRoot(hit.ref);
-      setSelectedKey(refKey(hit.ref));
-      await loadProjection(hit.ref);
+      projectionController = requestsRef.current.attach(search.token, "projection");
+      const result = await client.project({
+        roots: [hit.ref],
+        direction,
+        edge_types: edgeTypes,
+        max_depth: depth,
+        max_nodes: EXPLORER_MAX_NODES,
+        max_edges: EXPLORER_MAX_EDGES,
+      }, projectionController.signal);
+      if (!requestsRef.current.isCurrent(search.token, projectionController)) return;
+      commitProjection(result, hit.ref, {
+        direction,
+        depth,
+        edgeTypes,
+        selected: refKey(hit.ref),
+        historyMode: "push",
+        recordVisited: true,
+        requireSelection: true,
+      });
     } catch (error) {
-      setFailure(toFailure(error));
+      if (requestsRef.current.isCurrent(search.token)) setFailure(toFailure(error));
     } finally {
-      setLoading(false);
+      requestsRef.current.finish("search", search.controller);
+      if (projectionController) requestsRef.current.finish("projection", projectionController);
+      if (requestsRef.current.isCurrent(search.token)) setLoading(false);
     }
   }
 
   async function expandSelected(): Promise<void> {
     if (!selectedNode || !projection) return;
-    const abort = new AbortController();
+    const expand = requestsRef.current.begin("expand");
+    const currentProjection = projection;
     setLoading(true);
+    setFailure(undefined);
     try {
-      const incoming = await client.project({ roots: [selectedNode.ref], direction: "both", edge_types: edgeTypes, max_depth: 1, max_nodes: 500, max_edges: 2_000 }, abort.signal);
-      setProjection(mergeProjection(projection, incoming));
+      const incoming = await client.project({ roots: [selectedNode.ref], direction: "both", edge_types: edgeTypes, max_depth: 1, max_nodes: 500, max_edges: 2_000 }, expand.controller.signal);
+      if (!requestsRef.current.isCurrent(expand.token, expand.controller)) return;
+      setProjection(mergeProjection(currentProjection, incoming));
       setFocusKey(selectedKey);
       setFocusNonce(value => value + 1);
     } catch (error) {
-      setFailure(toFailure(error));
+      if (requestsRef.current.isCurrent(expand.token, expand.controller)) setFailure(toFailure(error));
     } finally {
-      setLoading(false);
+      requestsRef.current.finish("expand", expand.controller);
+      if (requestsRef.current.isCurrent(expand.token)) setLoading(false);
     }
   }
 
   function applyFilters(): void {
     if (!root || pendingEdgeTypes.length === 0) return;
-    setEdgeTypes(pendingEdgeTypes);
     setDrawer(undefined);
-    void loadProjection(root, direction, depth, pendingEdgeTypes);
+    void loadProjection(root, {
+      direction,
+      depth,
+      edgeTypes: pendingEdgeTypes,
+      selected: selectedKey,
+      historyMode: "replace",
+      recordVisited: false,
+    });
   }
 
   if (!root) {
@@ -247,7 +356,7 @@ export function ViewExplorer() {
           <fieldset className="filter-group"><legend>Relation types</legend>{availableEdgeTypes.map(type => <label key={type} className="check-row"><input type="checkbox" checked={pendingEdgeTypes.includes(type)} onChange={() => setPendingEdgeTypes(current => current.includes(type) ? current.filter(value => value !== type) : [...current, type])} /><span className={`edge-swatch edge-${edgeFamily(type)}`} /><span title={type}>{type}</span></label>)}</fieldset>
           <button type="button" className="command primary" disabled={pendingEdgeTypes.length === 0 || loading} onClick={applyFilters}><Filter size={15} />Apply projection</button>
           <section className="diagnostics" aria-label="Projection diagnostics"><h2>Boundaries</h2><Diagnostic active={Boolean(projection?.truncation.truncated)} label={projection?.truncation.truncated ? `Truncated: ${projection.truncation.reasons.join(", ")}` : "Within requested limits"} /><Diagnostic active={Boolean(projection?.frontier.length)} label={`${projection?.frontier.length ?? 0} frontier Views`} /><Diagnostic active={Boolean(projection?.redacted_boundary)} label={projection?.redacted_boundary ? "Redacted boundary present" : "No redacted boundary"} /></section>
-          <section className="legend" aria-label="Graph legend"><h2>Visual grammar</h2><span><i className="edge-line provenance" />Provenance</span><span><i className="edge-line composition" />Composition</span><span><i className="edge-line reference" />Reference</span><span><i className="edge-line application" />Application</span></section>
+          <section className="legend" aria-label="Graph legend"><h2>Visual grammar</h2><span><i className="edge-line provenance" />Provenance</span><span><i className="edge-line composition" />Composition</span><span><i className="edge-line reference" />Reference</span><span><i className="edge-line application" />Application member / composition</span></section>
         </div>
       </aside>
 
@@ -263,14 +372,14 @@ export function ViewExplorer() {
               forceWebglFailure={Boolean(initial.fixture && initial.forceWebglFailure)}
               onSelect={selectNode}
               onCameraChange={camera => { cameraRef.current = camera; updateUrl({ root, selected: selectedKey, direction, depth, edgeTypes, camera }, "replace"); }}
-              onLayoutState={(state, message) => { setLayout(state); setLayoutMessage(message); }}
+              onLayoutState={(state, message, code) => { setLayout(state); setLayoutMessage(message); setLayoutFailureCode(code ?? "graph_layout_failed"); }}
             />
           </Suspense>
         ) : <div className="graph-loading" role="status">Loading projection</div>}
         <div className="canvas-stats" aria-hidden="true"><span>{projection?.nodes.length ?? 0} Views</span><span>{projection?.edges.length ?? 0} relations</span></div>
         {loading && <div className="busy-indicator" role="status">Updating</div>}
         {failure && <FailureBanner failure={failure} dismiss={() => setFailure(undefined)} />}
-        {layout === "failed" && <FailureBanner failure={{ code: "graph_layout_failed", message: layoutMessage ?? "Layout worker failed" }} dismiss={() => setLayout("idle")} />}
+        {layout === "failed" && <FailureBanner failure={{ code: layoutFailureCode, message: layoutMessage ?? "Layout worker failed" }} dismiss={() => setLayout("idle")} />}
       </section>
 
       <aside className={`right-panel panel ${drawer === "details" ? "mobile-open" : ""}`} aria-label="Exact View details">
@@ -279,11 +388,11 @@ export function ViewExplorer() {
       </aside>
 
       <footer className="companion">
-        <div className="history-strip"><History size={15} aria-hidden="true" /><span className="history-label">Visited</span>{visited.length === 0 ? <span className="muted">None</span> : visited.map(item => <button type="button" key={item.key} onClick={() => { setCameraTarget({ ...item.camera, nonce: Date.now() }); selectNode(item.key, item.camera); }} title={item.key}>{item.name}</button>)}</div>
+        <div className="history-strip"><History size={15} aria-hidden="true" /><span className="history-label">Visited</span>{visited.length === 0 ? <span className="muted">None</span> : visited.map(item => <button type="button" key={item.key} onClick={() => { setCameraTarget({ ...item.camera, nonce: Date.now() }); selectNode(item.key, item.camera); }} title={item.key}>{item.name}</button>)}<div className="relation-summary" aria-label="Relations in projection">{relationCounts.map(([type, count]) => <span key={type}>{type}: {count}</span>)}</div></div>
         {projection && <VirtualNodeList nodes={projection.nodes} selectedKey={selectedKey} onSelect={key => selectNode(key)} />}
       </footer>
 
-      <div className="sr-status" role="status" aria-live="polite">{projection ? `${projection.nodes.length} Views and ${projection.edges.length} relations. ${projection.truncation.truncated ? `Projection truncated by ${projection.truncation.reasons.join(", ")}.` : "Projection complete within requested limits."}` : "Loading projection."}</div>
+      <div className="sr-status" role="status" aria-live="polite">{projection ? `${projection.nodes.length} Views and ${projection.edges.length} relations. Relation types: ${relationCounts.map(([type, count]) => `${type}: ${count}`).join(", ") || "none"}. ${projection.truncation.truncated ? `Projection truncated by ${projection.truncation.reasons.join(", ")}.` : "Projection complete within requested limits."}` : "Loading projection."}</div>
     </main>
   );
 }
@@ -314,27 +423,40 @@ function FailureBanner(props: { failure: UiFailure; dismiss(): void }) { return 
 
 function toFailure(error: unknown): UiFailure {
   if (error instanceof ExplorerClientError) return { code: error.code, message: error.message, operation: error.operation };
+  if (error instanceof ExplorerNavigationError) return { code: error.code, message: error.message };
   if (error instanceof Error) return { code: "explorer_failed", message: error.message };
   return { code: "explorer_failed", message: "The explorer failed without a valid error value." };
 }
 
 function edgeFamily(type: string): string {
   if (type.includes("derived") || type.includes("provenance")) return "provenance";
-  if (type.includes("member")) return type.includes("application") ? "application" : "composition";
+  if (type.startsWith("application_")) return "application";
+  if (type.includes("member")) return "composition";
   return "reference";
 }
 
 function formatTime(value: string): string { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)); }
 
+function sameStrings(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function readUrlState() {
   const params = new URLSearchParams(location.search);
-  const edgeTypes = (params.get("edges")?.split(",").filter(Boolean) ?? [...EDGE_TYPES]).slice(0, 32);
+  const edgeTypes = (params.get("edges")?.split(",").filter(Boolean) ?? [...EXPLORER_DEFAULT_EDGE_TYPES]).slice(0, 32);
   const directionValue = params.get("direction");
   const direction: Direction = directionValue === "incoming" || directionValue === "outgoing" || directionValue === "both" ? directionValue : "both";
   const depthValue = Number(params.get("depth") ?? 2);
   const cameraValues = ["cx", "cy", "ratio", "angle"].map(key => Number(params.get(key)));
   const camera = cameraValues.every(Number.isFinite) && cameraValues[2]! > 0 ? { x: cameraValues[0]!, y: cameraValues[1]!, ratio: cameraValues[2]!, angle: cameraValues[3]! } : undefined;
-  return { fixture: parseFixtureSize(params.get("fixture")), root: parseExactRef(params.get("root") ?? ""), selected: parseExactRef(params.get("selected") ?? "") ? params.get("selected")! : undefined, direction, depth: Number.isInteger(depthValue) ? Math.max(0, Math.min(5, depthValue)) : 2, edgeTypes: edgeTypes.length ? edgeTypes : [...EDGE_TYPES], camera, forceWebglFailure: params.get("webgl") === "off" };
+  return { fixture: parseFixtureSize(params.get("fixture")), root: parseExactRef(params.get("root") ?? ""), selected: parseExactRef(params.get("selected") ?? "") ? params.get("selected")! : undefined, direction, depth: Number.isInteger(depthValue) ? Math.max(0, Math.min(5, depthValue)) : 2, edgeTypes: edgeTypes.length ? edgeTypes : [...EXPLORER_DEFAULT_EDGE_TYPES], camera, forceWebglFailure: params.get("webgl") === "off" };
+}
+
+class ExplorerNavigationError extends Error {
+  constructor(message: string, readonly code: "projection_missing_selected") {
+    super(message);
+    this.name = "ExplorerNavigationError";
+  }
 }
 
 function updateUrl(input: { root?: ExactViewRef; selected?: string; direction: Direction; depth: number; edgeTypes: string[]; camera: CameraState }, mode: "push" | "replace"): void {

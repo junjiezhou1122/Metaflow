@@ -3,6 +3,11 @@ import Graph from "graphology";
 import Sigma from "sigma";
 import { refKey, type ViewGraphProjectionResult } from "./contracts.js";
 import { deterministicPosition, type CameraState } from "./graph-projection.js";
+import {
+  LAYOUT_PROTOCOL_VERSION,
+  validateLayoutResponse,
+  type LayoutRequest,
+} from "./layout-protocol.js";
 
 const SCHEMA_COLORS = ["#137a65", "#4263a9", "#a54835", "#9b6a17", "#7a4f91", "#39767d"];
 const EDGE_COLORS: Record<string, string> = {
@@ -10,7 +15,10 @@ const EDGE_COLORS: Record<string, string> = {
   member_of: "#4878b7",
   references: "#7b6d61",
   application_member: "#2d8b72",
+  application_composition: "#2d8b72",
 };
+
+type LayoutFailureCode = "graph_layout_worker_start_failed" | "graph_layout_worker_failed" | "graph_layout_protocol_failed";
 
 type SigmaSurfaceProps = {
   projection: ViewGraphProjectionResult;
@@ -22,7 +30,13 @@ type SigmaSurfaceProps = {
   forceWebglFailure?: boolean;
   onSelect(key: string, camera: CameraState): void;
   onCameraChange(camera: CameraState): void;
-  onLayoutState(state: "running" | "ready" | "failed", message?: string): void;
+  onLayoutState(state: "running" | "ready" | "failed", message?: string, code?: LayoutFailureCode): void;
+};
+
+type ActiveLayoutWorker = {
+  worker: Worker;
+  onMessage: (event: MessageEvent<unknown>) => void;
+  onError: (event: ErrorEvent) => void;
 };
 
 type DebugState = {
@@ -31,6 +45,7 @@ type DebugState = {
   workersCreated: number;
   workersTerminated: number;
   camera?: CameraState;
+  focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
   graph?: { nodes: number; edges: number; firstNode?: { x: number; y: number }; display?: unknown; dimensions?: unknown; graphDimensions?: unknown };
 };
 
@@ -38,17 +53,19 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | undefined>(undefined);
   const rendererRef = useRef<Sigma | undefined>(undefined);
-  const workerRef = useRef<Worker | undefined>(undefined);
-  const layoutIdRef = useRef(0);
+  const workerRef = useRef<ActiveLayoutWorker | undefined>(undefined);
+  const layoutGenerationRef = useRef(0);
   const hasRenderedProjectionRef = useRef(false);
   const selectedRef = useRef(props.selectedKey);
   const onSelectRef = useRef(props.onSelect);
   const onCameraRef = useRef(props.onCameraChange);
+  const onLayoutRef = useRef(props.onLayoutState);
   const [failure, setFailure] = useState<string>();
 
   selectedRef.current = props.selectedKey;
   onSelectRef.current = props.onSelect;
   onCameraRef.current = props.onCameraChange;
+  onLayoutRef.current = props.onLayoutState;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -57,17 +74,17 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
       setFailure("graph_webgl_unavailable");
       return;
     }
-    const canvas = document.createElement("canvas");
-    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
-    if (!gl) {
-      setFailure("graph_webgl_unavailable");
-      return;
-    }
-    gl.getExtension("WEBGL_lose_context")?.loseContext();
-    const graph = new Graph({ multi: true, type: "directed", allowSelfLoops: false });
-    graphRef.current = graph;
+    let graph: Graph;
     let renderer: Sigma;
     try {
+      const canvas = document.createElement("canvas");
+      const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+      if (!gl) {
+        setFailure("graph_webgl_unavailable");
+        return;
+      }
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      graph = new Graph({ multi: true, type: "directed", allowSelfLoops: false });
       renderer = new Sigma(graph, container, {
         allowInvalidContainer: false,
         renderEdgeLabels: false,
@@ -95,6 +112,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
       reportDebugError(error);
       return;
     }
+    graphRef.current = graph;
     rendererRef.current = renderer;
     debug().sigmaCreated += 1;
     const camera = renderer.getCamera();
@@ -108,9 +126,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     renderer.on("clickNode", click);
     camera.on("updated", cameraUpdated);
     return () => {
-      workerRef.current?.terminate();
-      if (workerRef.current) debug().workersTerminated += 1;
-      workerRef.current = undefined;
+      disposeWorker(workerRef);
       camera.off("updated", cameraUpdated);
       renderer.off("clickNode", click);
       renderer.kill();
@@ -124,6 +140,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     const graph = graphRef.current;
     const renderer = rendererRef.current;
     if (!graph || !renderer) return;
+    disposeWorker(workerRef);
     graph.clear();
     const total = props.projection.nodes.length;
     props.projection.nodes.forEach((node, index) => {
@@ -166,41 +183,63 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
       dimensions: renderer.getDimensions(),
       graphDimensions: renderer.getGraphDimensions(),
     };
-    workerRef.current?.terminate();
-    if (workerRef.current) debug().workersTerminated += 1;
-    const worker = new Worker(new URL("./layout.worker.ts", import.meta.url), { type: "module", name: "metaflow-view-layout" });
-    workerRef.current = worker;
-    debug().workersCreated += 1;
-    const layoutId = ++layoutIdRef.current;
-    props.onLayoutState("running");
-    worker.onmessage = (event: MessageEvent<{ id: number; ok: boolean; positions?: Record<string, { x: number; y: number }>; message?: string }>) => {
-      if (event.data.id !== layoutId || workerRef.current !== worker) return;
-      if (!event.data.ok || !event.data.positions) {
-        props.onLayoutState("failed", event.data.message ?? "Layout worker failed");
-        finishWorker(workerRef, worker);
-        return;
-      }
-      for (const [key, position] of Object.entries(event.data.positions)) {
-        if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) {
-          props.onLayoutState("failed", "Layout worker returned a non-finite position");
-          finishWorker(workerRef, worker);
-          return;
-        }
-        if (graph.hasNode(key)) graph.mergeNodeAttributes(key, position);
-      }
-      renderer.refresh();
-      props.onLayoutState("ready");
-      finishWorker(workerRef, worker);
-    };
-    worker.onerror = event => {
-      props.onLayoutState("failed", event.message || "Layout worker failed");
-      finishWorker(workerRef, worker);
-    };
-    worker.postMessage({
-      id: layoutId,
+
+    const generation = ++layoutGenerationRef.current;
+    const requestId = `layout-${generation}`;
+    const nodeKeys = new Set(graph.nodes());
+    const request: LayoutRequest = {
+      protocol_version: LAYOUT_PROTOCOL_VERSION,
+      generation,
+      request_id: requestId,
       nodes: graph.mapNodes((key, attributes) => ({ key, x: Number(attributes.x), y: Number(attributes.y), size: Number(attributes.size) })),
       edges: graph.mapEdges((key, _attributes, source, target) => ({ key, source, target })),
-    });
+    };
+    onLayoutRef.current("running");
+    let worker: Worker | undefined;
+    try {
+      worker = new Worker(new URL("./layout.worker.ts", import.meta.url), { type: "module", name: "metaflow-view-layout" });
+      debug().workersCreated += 1;
+      let active: ActiveLayoutWorker;
+      const fail = (code: LayoutFailureCode, message: string) => {
+        if (workerRef.current !== active) return;
+        onLayoutRef.current("failed", message, code);
+        disposeWorker(workerRef, active);
+      };
+      const onMessage = (event: MessageEvent<unknown>) => {
+        if (workerRef.current !== active) return;
+        let result;
+        try {
+          result = validateLayoutResponse(event.data, { generation, request_id: requestId, node_keys: nodeKeys });
+        } catch (error) {
+          fail("graph_layout_protocol_failed", error instanceof Error ? error.message : "Layout worker response validation failed");
+          return;
+        }
+        if (result.status === "stale") return;
+        if (result.status === "failed") {
+          fail("graph_layout_worker_failed", result.message);
+          return;
+        }
+        for (const position of result.positions) graph.mergeNodeAttributes(position.key, { x: position.x, y: position.y });
+        renderer.refresh();
+        if (selectedRef.current) focusExactNode(renderer, selectedRef.current);
+        onLayoutRef.current("ready");
+        disposeWorker(workerRef, active);
+      };
+      const onError = (event: ErrorEvent) => fail("graph_layout_worker_failed", event.message || "Layout worker failed");
+      active = { worker, onMessage, onError };
+      workerRef.current = active;
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+      worker.postMessage(request);
+    } catch (error) {
+      if (workerRef.current?.worker === worker) disposeWorker(workerRef);
+      else if (worker) {
+        worker.terminate();
+        debug().workersTerminated += 1;
+      }
+      onLayoutRef.current("failed", error instanceof Error ? error.message : "Layout worker failed to start", "graph_layout_worker_start_failed");
+    }
+    return () => disposeWorker(workerRef);
   }, [props.projection]);
 
   useEffect(() => {
@@ -209,11 +248,8 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
 
   useEffect(() => {
     const renderer = rendererRef.current;
-    const graph = graphRef.current;
-    if (!renderer || !graph || !props.focusNodeKey || !graph.hasNode(props.focusNodeKey)) return;
-    const attributes = graph.getNodeAttributes(props.focusNodeKey);
-    const duration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
-    renderer.getCamera().animate({ x: Number(attributes.x), y: Number(attributes.y), ratio: 0.18 }, { duration });
+    if (!renderer || !props.focusNodeKey) return;
+    focusExactNode(renderer, props.focusNodeKey);
   }, [props.focusKey]);
 
   useEffect(() => {
@@ -225,6 +261,25 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     return <div className="graph-failure" role="alert" data-error-code={failure}><strong>Graph rendering unavailable</strong><span>{failure}</span><p>This browser did not provide the WebGL surface required by Sigma.</p></div>;
   }
   return <div ref={containerRef} className="sigma-container" data-testid="sigma-surface" aria-hidden="true" />;
+}
+
+function focusExactNode(renderer: Sigma, key: string): boolean {
+  const display = renderer.getNodeDisplayData(key);
+  if (!display || !Number.isFinite(display.x) || !Number.isFinite(display.y)) return false;
+  const duration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
+  const target = { x: display.x, y: display.y, ratio: 0.18, angle: renderer.getCamera().getState().angle };
+  renderer.getCamera().animate(target, { duration });
+  const viewport = renderer.framedGraphToViewport(display, { cameraState: target });
+  const dimensions = renderer.getDimensions();
+  debug().focusedNode = {
+    key,
+    x: viewport.x,
+    y: viewport.y,
+    width: dimensions.width,
+    height: dimensions.height,
+    visible: viewport.x >= 0 && viewport.x <= dimensions.width && viewport.y >= 0 && viewport.y <= dimensions.height,
+  };
+  return true;
 }
 
 function schemaColor(schema: string): string {
@@ -247,9 +302,11 @@ function reportDebugError(error: unknown): void {
   window.dispatchEvent(new CustomEvent("metaflow:explorer-error", { detail: { code: "graph_webgl_unavailable", message: error instanceof Error ? error.message : String(error) } }));
 }
 
-function finishWorker(reference: { current: Worker | undefined }, worker: Worker): void {
-  if (reference.current !== worker) return;
-  worker.terminate();
-  reference.current = undefined;
+function disposeWorker(reference: { current: ActiveLayoutWorker | undefined }, candidate = reference.current): void {
+  if (!candidate) return;
+  if (reference.current === candidate) reference.current = undefined;
+  candidate.worker.removeEventListener("message", candidate.onMessage);
+  candidate.worker.removeEventListener("error", candidate.onError);
+  candidate.worker.terminate();
   debug().workersTerminated += 1;
 }
