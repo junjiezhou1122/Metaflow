@@ -11,9 +11,13 @@ updated: 2026-07-27T00:00:00+08:00
 
 # Metaflow v1-next Search Implementation
 
-> Status: implementation recommendation, not an accepted package boundary.
-> This document preserves `search_projection@1` and the current View Store as
-> authority. It does not authorize a second document, graph, or vector truth.
+> Status: the issue 66 Search boundary and issue 67 pinned sqlite-vec adoption
+> are accepted and implemented. This document preserves the decision evidence;
+> exact executable results live in
+> [[research/sqlite-vec-0.1.9-adoption-evidence|sqlite-vec 0.1.9 Adoption
+> Evidence]]. `search_projection@1` and exact committed Views remain authority;
+> the accepted mapping plus `vec0` projection is rebuildable index state, not a
+> second document, graph, or vector truth.
 
 ## Executive decision
 

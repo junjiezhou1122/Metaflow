@@ -105,6 +105,29 @@ import {
   insertSqliteSearchUnits,
   sqliteSearchUnitsMatch,
 } from "./search-index.js";
+import {
+  SQLITE_VEC_EXTENSION_VERSION,
+  SqliteVecSemanticSearch,
+  SqliteVecSemanticSearchError,
+  type SqliteVecProfile,
+} from "./semantic-search.js";
+
+export {
+  SQLITE_VEC_EMBEDDING_REPRESENTATION_KIND,
+  SQLITE_VEC_EMBEDDING_SCHEMA_NAME,
+  SQLITE_VEC_EXTENSION_VERSION,
+  SQLITE_VEC_MINIMUM_SQLITE_VERSION,
+  SQLITE_VEC_PACKAGE_VERSION,
+  SqliteVecEmbeddingJsonSchema,
+  SqliteVecEmbeddingViewSchema,
+  SqliteVecProfileSchema,
+  SqliteVecSemanticSearch,
+  SqliteVecSemanticSearchError,
+  sqliteVecSourceDigest,
+  type SqliteVecCompatibilityEvidence,
+  type SqliteVecProfile,
+  type SqliteVecReindexCounts,
+} from "./semantic-search.js";
 
 type HeadRow = { revision: number };
 type ViewRow = { view_json: string };
@@ -201,6 +224,9 @@ export type SqliteViewRepositoryOptions = {
   busy_timeout_ms?: number;
   now?: () => string;
   event_id_factory?: (transactionId: string) => string;
+  semantic_search?: {
+    profiles: SqliteVecProfile[];
+  };
 };
 
 export class SqliteViewRepository implements ViewRepository, ExecutionRepository, CaptureRuntimeRepository, ForgetRepository, ViewCommittedOutbox {
@@ -208,6 +234,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
   private readonly now: () => string;
   private readonly eventIdFactory: (transactionId: string) => string;
   readonly search: SqliteViewSearchAdapter;
+  readonly semantic_search?: SqliteVecSemanticSearch;
 
   constructor(
     dbPath = process.env.METAFLOW_VIEW_DB_PATH ?? process.env.CONTEXT_DB_PATH ?? "data/context.sqlite",
@@ -220,11 +247,17 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       this.db = new DatabaseSync(dbPath, {
         enableForeignKeyConstraints: true,
         timeout: options.busy_timeout_ms ?? 5_000,
+        allowExtension: options.semantic_search !== undefined,
       });
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA synchronous = NORMAL");
       this.db.exec("PRAGMA foreign_keys = ON");
       this.migrate();
+      if (options.semantic_search) {
+        this.semantic_search = SqliteVecSemanticSearch.initialize(this.db, options.semantic_search.profiles);
+      } else {
+        SqliteVecSemanticSearch.assertUnconfiguredDatabase(this.db);
+      }
       this.search = new SqliteViewSearchAdapter(this.db);
     } catch (error) {
       if (error instanceof ViewRepositoryError) throw error;
@@ -1098,11 +1131,22 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       return this.withTransaction(transaction, () => {
         transaction.phase = "rebuild_projection";
         const counts = this.rebuildSearchProjection(input.requested_at);
+        const semantic = this.semantic_search
+          ? this.semantic_search.rebuild(this.readAllStoredViews())
+          : undefined;
         const report = ReindexViewSearchReportSchema.parse({
           run_id: input.run_id,
           status: "succeeded",
           projection_version: VIEW_SEARCH_PROJECTION_IMPLEMENTATION_VERSION,
           ...counts,
+          ...(semantic ? {
+            semantic: {
+              adapter: "sqlite-vec",
+              extension_version: SQLITE_VEC_EXTENSION_VERSION,
+              profiles: this.semantic_search!.compatibility.profiles.length,
+              ...semantic,
+            },
+          } : {}),
           started_at: input.requested_at,
           completed_at: new Date().toISOString(),
         });
@@ -2333,11 +2377,14 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
     transaction.phase = "persist_search_projection";
     try {
       this.insertSearchProjection(view, view.time.created_at);
+      this.semantic_search?.insert(view);
     } catch (error) {
       if (error instanceof ViewRepositoryError) throw error;
       throw this.problem(
         "invalid_request",
-        `View ${view.id}@${view.revision} has an invalid search projection`,
+        error instanceof SqliteVecSemanticSearchError
+          ? `View ${view.id}@${view.revision} has an invalid semantic search materialization`
+          : `View ${view.id}@${view.revision} has an invalid search projection`,
         transaction,
         {},
         error,
@@ -2890,6 +2937,43 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         tokenize = 'unicode61 remove_diacritics 2'
       );
 
+      create table if not exists view_search_vector_profiles_v1 (
+        profile_id text not null,
+        profile_revision integer not null check(profile_revision > 0),
+        provider text not null,
+        model text not null,
+        dimension integer not null check(dimension > 0 and dimension <= 4096),
+        distance_metric text not null check(distance_metric in ('cosine', 'l2')),
+        table_name text not null unique,
+        extension_version text not null,
+        created_at text not null,
+        primary key (profile_id, profile_revision)
+      );
+
+      create table if not exists view_search_vectors_v1 (
+        vector_rowid integer primary key autoincrement,
+        embedding_view_id text not null,
+        embedding_revision integer not null check(embedding_revision > 0),
+        target_view_id text not null,
+        target_revision integer not null check(target_revision > 0),
+        target_kind text not null check(target_kind in ('envelope', 'representation')),
+        target_path text not null,
+        target_key text not null,
+        profile_id text not null,
+        profile_revision integer not null check(profile_revision > 0),
+        dimension integer not null check(dimension > 0 and dimension <= 4096),
+        distance_metric text not null check(distance_metric in ('cosine', 'l2')),
+        source_digest text not null,
+        indexed_at text not null,
+        unique(embedding_view_id, embedding_revision),
+        foreign key (embedding_view_id, embedding_revision) references view_revisions_v1(id, revision)
+          on delete cascade deferrable initially deferred,
+        foreign key (target_view_id, target_revision) references view_revisions_v1(id, revision)
+          on delete cascade deferrable initially deferred,
+        foreign key (profile_id, profile_revision) references view_search_vector_profiles_v1(profile_id, profile_revision)
+          deferrable initially deferred
+      );
+
       create table if not exists view_search_reindex_runs_v1 (
         run_id text primary key,
         status text not null check(status in ('running', 'succeeded', 'failed')),
@@ -3045,6 +3129,9 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       create index if not exists idx_view_materializations_v1_view on view_materializations_v1(view_id, revision, role);
       create index if not exists idx_view_search_projection_v1_schema on view_search_projection_v1(schema_name, schema_version);
       create index if not exists idx_view_search_units_v2_ref on view_search_units_v2(view_id, revision, ordinal, expanded_path);
+      create index if not exists idx_view_search_vectors_v1_target on view_search_vectors_v1(target_view_id, target_revision, profile_id, profile_revision);
+      create index if not exists idx_view_search_vectors_v1_embedding on view_search_vectors_v1(embedding_view_id, embedding_revision);
+      create index if not exists idx_view_search_vectors_v1_profile on view_search_vectors_v1(profile_id, profile_revision, target_key, target_kind);
       create index if not exists idx_view_search_reindex_runs_v1_status on view_search_reindex_runs_v1(status, started_at);
       create index if not exists idx_view_commit_outbox_v1_poll on view_commit_outbox_v1(status, available_at, sequence);
       create index if not exists idx_view_commit_outbox_v1_lease on view_commit_outbox_v1(status, lease_expires_at, sequence);
@@ -3215,6 +3302,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       "view_search_fts_v1",
       "view_search_units_v2",
       "view_search_unit_fts_v2",
+      "view_search_vector_profiles_v1",
+      "view_search_vectors_v1",
       "view_search_schema_versions_v1",
       "view_search_reindex_runs_v1",
       "view_commit_outbox_v1",
@@ -3378,15 +3467,16 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
   }
 
   private deleteSearchProjection(ref: ExactViewRef): number {
+    const semanticRemoved = this.semantic_search?.delete(ref) ?? 0;
     deleteSqliteSearchUnits(this.db, ref);
     const row = this.db.prepare(`
       select search_rowid, view_id, revision, projection_digest
       from view_search_projection_v1 where view_id = ? and revision = ?
     `).get(ref.view_id, ref.revision) as SearchProjectionRow | undefined;
-    if (!row) return 0;
+    if (!row) return semanticRemoved;
     this.db.prepare("delete from view_search_fts_v1 where rowid = ?").run(Number(row.search_rowid));
     this.db.prepare("delete from view_search_projection_v1 where search_rowid = ?").run(Number(row.search_rowid));
-    return 1;
+    return 1 + semanticRemoved;
   }
 
   private resetSearchProjection(indexedAt: string): void {
@@ -3467,6 +3557,11 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
     `).run();
     removed += Number(orphanUnitFts.changes);
     return { scanned: rows.length, indexed, excluded, unchanged, removed };
+  }
+
+  private readAllStoredViews(): View[] {
+    const rows = this.db.prepare("select view_json from view_revisions_v1 order by id, revision").all() as ViewRow[];
+    return rows.map(row => this.parseStoredJson(row.view_json));
   }
 }
 

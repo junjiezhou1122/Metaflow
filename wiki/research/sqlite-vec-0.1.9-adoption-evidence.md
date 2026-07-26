@@ -1,0 +1,68 @@
+---
+name: research/sqlite-vec-0.1.9-adoption-evidence
+title: sqlite-vec 0.1.9 Adoption Evidence
+desc: Exact issue 67 gate evidence for the pinned Node 24 SQLite semantic Search adapter.
+category: implementation-evidence
+tags: [search, sqlite, sqlite-vec, vector, privacy-forget, reindex]
+sources: [source-inspection, executable-tests, package-artifact]
+created: 2026-07-27T09:00:00+08:00
+updated: 2026-07-27T09:00:00+08:00
+---
+
+# sqlite-vec 0.1.9 Adoption Evidence
+
+## Decision
+
+The issue 67 adoption gate passed for exact-pinned `sqlite-vec@0.1.9`. The
+production integration is limited to `packages/adapters/storage-sqlite`; there
+is no LanceDB, in-memory cosine, remote vector service, document embedder, or
+semantic fallback.
+
+## Exact artifact
+
+- npm package: `sqlite-vec@0.1.9`
+- package integrity: `sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA==`
+- macOS arm64 binary: `sqlite-vec-darwin-arm64@0.1.9`
+- runtime extension: `vec_version() = v0.1.9`
+- inspected extension commit from `vec_debug()`: `e9f598abfa0c06b328d8fe5da9c3760cce74be10`
+- local runtime: Node `v24.14.0`, SQLite `3.51.2`, macOS arm64, WAL
+- lockfile also freezes the upstream-published Darwin x64, Linux x64/arm64,
+  and Windows x64 optional binary packages at `0.1.9`; no install script builds
+  an unpinned local extension.
+
+## Executed gates
+
+`pnpm test:view-search-semantic` proves:
+
+1. exact package path and extension version load through Node 24 `node:sqlite`;
+2. required vector functions, SQLite minimum version, FTS5, WAL, exact profile,
+   provider/model, dimension, metric, and persisted table declaration;
+3. same-connection FTS, relation, and prefiltered `vec0` retrieval;
+4. `BEGIN IMMEDIATE` rollback leaves no View, mapping, or vector from a failed
+   two-embedding batch;
+5. deletion, Privacy Forget downstream closure, and WAL reopen remove governed
+   target and embedding evidence while unrelated results survive;
+6. durable idempotent reindex repairs missing mappings and orphan `vec0` rows
+   from committed embedding Views without calling an embedder;
+7. identical exact semantic result and evidence envelopes across in-process,
+   CLI, HTTP, and the real MCP SDK surface;
+8. a production-only `pnpm deploy --prod --legacy` artifact contains the
+   pinned macOS binary and loads `v0.1.9` from the deployed dependency tree.
+
+The representative local fixture contains 512 exact targets and 512 strict
+32-dimensional embedding Derived Views. The acceptance run on 2026-07-27
+measured 1,086.58 ms for atomic embedding commits, 51.62 ms for a prefiltered
+semantic query, and 10,990,288 bytes across the SQLite database and active WAL.
+The executable guard
+is intentionally generous across CI: under 10 seconds to index, under 2 seconds
+to query, and under 32 MiB.
+
+## Failure behavior
+
+A database with stored vector profiles refuses to reopen without the same
+semantic configuration. Extension/profile/version/dimension/metric/table
+incompatibility fails initialization. Invalid embedding provenance, policy,
+target location, digest, or vector fails the whole View transaction. An
+unconfigured `SearchService` still returns the existing explicit
+`semantic_not_configured` outcome under partial mode or fails `require_all`;
+it never substitutes another retriever.

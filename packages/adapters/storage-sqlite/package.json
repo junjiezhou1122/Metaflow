@@ -10,6 +10,8 @@
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
     "@info/search": "workspace:*",
-    "@info/view": "workspace:*"
+    "@info/view": "workspace:*",
+    "sqlite-vec": "0.1.9",
+    "zod": "^3.25.76"
   }
 }

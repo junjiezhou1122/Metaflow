@@ -106,6 +106,17 @@ export const ReindexViewSearchReportSchema = z.object({
   excluded: z.number().int().nonnegative(),
   unchanged: z.number().int().nonnegative(),
   removed: z.number().int().nonnegative(),
+  semantic: z.object({
+    adapter: z.literal("sqlite-vec"),
+    extension_version: IdentifierSchema,
+    profiles: z.number().int().positive(),
+    scanned: z.number().int().nonnegative(),
+    indexed: z.number().int().nonnegative(),
+    excluded: z.number().int().nonnegative(),
+    removed: z.number().int().nonnegative(),
+    orphans_repaired: z.number().int().nonnegative(),
+    missing_rows_repaired: z.number().int().nonnegative(),
+  }).strict().optional(),
   started_at: TimestampSchema,
   completed_at: TimestampSchema,
 }).strict();

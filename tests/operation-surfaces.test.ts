@@ -38,7 +38,11 @@ import {
   createOperationMcpServer,
   operationMcpToolName,
 } from "@info/operation-surfaces";
-import { SqliteViewRepository } from "@info/storage-sqlite";
+import {
+  SqliteVecEmbeddingViewSchema,
+  SqliteViewRepository,
+  sqliteVecSourceDigest,
+} from "@info/storage-sqlite";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
 
 type Surface = {
@@ -53,7 +57,7 @@ const policy = {
   privacy: "private" as const,
   retention: "normal" as const,
   allow_external_model: false,
-  allow_embedding: false,
+  allow_embedding: true,
   labels: ["operation-conformance"],
 };
 
@@ -121,6 +125,84 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
       assert.deepEqual(new Set(mcp.toolNames), new Set(OPERATION_NAMES.map(operationMcpToolName)));
     } finally {
       await Promise.all([...surfaces, ...forbiddenGraphSurfaces].map(surface => surface.close()));
+    }
+  });
+});
+
+test("in-process, CLI, HTTP, and real MCP return identical sqlite-vec semantic evidence", async () => {
+  await withHarness(async harness => {
+    const captured = await harness.service.execute(captureRequest("semantic-shared"), context("request:semantic-seed"));
+    const sourceRef = captureRef(captured);
+    const source = await harness.views.get(sourceRef);
+    assert.ok(source);
+    const text = (source.representation.form === "inline" && typeof source.representation.value === "object"
+      && source.representation.value !== null && !Array.isArray(source.representation.value))
+      ? source.representation.value.text
+      : undefined;
+    assert.equal(typeof text, "string");
+    const embedding = (await harness.views.commit({
+      draft: parseViewDraft({
+        id: "view:operation-semantic-embedding",
+        name: "Operation surface semantic embedding",
+        purpose: "Prove the same exact semantic evidence crosses every operation surface",
+        schema: SqliteVecEmbeddingViewSchema,
+        role: "derived",
+        time: { created_at: "2026-07-26T14:00:03.000Z" },
+        representation: {
+          form: "inline",
+          kind: "metaflow.search.embedding",
+          media_type: "application/json",
+          value: {
+            contract_version: 1,
+            target: {
+              ref: sourceRef,
+              location: { kind: "representation", path: "/representation/value/text" },
+              source_digest: sqliteVecSourceDigest(text),
+            },
+            profile: {
+              id: "embedding:operation-fixture",
+              revision: 1,
+              provider: "fixture",
+              model: "operation-3d",
+              dimension: 3,
+              distance_metric: "cosine",
+            },
+            vector: [1, 0, 0],
+          },
+        },
+        materialization: {
+          primary: { id: "canonical-json", format: "json", media_type: "application/json", location: { kind: "inline" } },
+        },
+        relations: [{ type: "embedding_of", target: sourceRef }],
+        provenance: {
+          inputs: [sourceRef],
+          operator_run_id: "run:operation-semantic-embedding",
+          actor: "fixture:operation-embedder",
+        },
+        policy,
+      }),
+      expected_revision: 0,
+    })).view;
+    const surfaces = await createSurfaces(harness, () => context("request:semantic-equivalent"));
+    try {
+      const responses = await Promise.all(surfaces.map(surface => surface.call("view.search", {
+        request: semanticSearchRequest(sourceRef, exactViewRef(embedding)),
+      })));
+      for (const response of responses.slice(1)) assert.deepEqual(response, responses[0]);
+      const response = responses[0];
+      assert.equal(response.ok, true);
+      if (response.ok) {
+        const hits = (response.data as { hits: Array<{ ref: unknown; matches: Array<{ semantic_evidence_ref?: unknown }> }> }).hits;
+        assert.deepEqual(hits.map(hit => hit.ref), [sourceRef]);
+        assert.deepEqual(hits[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(embedding));
+      }
+      const missing = await harness.service.execute({
+        operation: "view.get",
+        input: { ref: { view_id: "view:semantic:missing", revision: 1 } },
+      }, context("request:semantic:missing"));
+      assert.equal(missing.ok, false);
+    } finally {
+      await Promise.all(surfaces.map(surface => surface.close()));
     }
   });
 });
@@ -361,7 +443,18 @@ type Harness = {
 async function withHarness(run: (harness: Harness) => Promise<void>): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-operation-surfaces-"));
   const database = join(directory, "metaflow.sqlite");
-  const views = new SqliteViewRepository(database);
+  const views = new SqliteViewRepository(database, {
+    semantic_search: {
+      profiles: [{
+        id: "embedding:operation-fixture",
+        revision: 1,
+        provider: "fixture",
+        model: "operation-3d",
+        dimension: 3,
+        distance_metric: "cosine",
+      }],
+    },
+  });
   const transformations = new SqliteTransformationRepository(database);
   const clock = deterministicClock();
   const capture = new ConnectorRuntime(views, new CaptureIngress({ repository: views, now: clock }), { now: clock });
@@ -397,6 +490,12 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     scope_source: views.search,
     descriptors: views.search,
     keyword: views.search,
+    semantic: views.semantic_search,
+    query_embedding: {
+      async embed() {
+        return { values: [1, 0, 0], dimension: 3, distance_metric: "cosine" };
+      },
+    },
     observer: { async record() {} },
     now: clock,
   });
@@ -448,6 +547,23 @@ function graphRequest(ref: { view_id: string; revision: number }) {
     max_depth: 0,
     max_nodes: 10,
     max_edges: 10,
+  };
+}
+
+function semanticSearchRequest(
+  target: { view_id: string; revision: number },
+  evidence: { view_id: string; revision: number },
+) {
+  return {
+    contract_version: 1 as const,
+    query: { text: "operation semantic fixture" },
+    scope: { kind: "exact_views" as const, refs: [target, evidence] },
+    target: { envelope: false, internal: true, related_views: false },
+    modes: ["semantic" as const],
+    semantic: { embedding_profile: { id: "embedding:operation-fixture", revision: 1 } },
+    fusion: { strategy: "rrf@1" as const, k: 60 as const, weights: { semantic: 1 } },
+    failure_mode: "require_all" as const,
+    page: { limit: 10 },
   };
 }
 

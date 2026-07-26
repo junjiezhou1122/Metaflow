@@ -48,6 +48,21 @@ Node's built-in `node:sqlite` driver.
   atomic transaction, exact replay returns its frozen report, missing FTS rows
   are repaired, and a failed run retains structured status while the previous
   index remains queryable.
+- Semantic Search is an explicit startup capability backed only by exact-pinned
+  `sqlite-vec@0.1.9` (`vec_version() = v0.1.9`). Startup verifies the loadable
+  package path, Node SQLite/FTS ABI, WAL, exact profile/provider/model,
+  dimension, metric, and physical `vec0` table declaration. A stored profile
+  cannot reopen without the same configuration.
+- Only strict `metaflow.search.embedding@1` Derived Views are projected. Each
+  mapping freezes its exact target View/location, normalized source digest,
+  exact embedding evidence ref, provider/model profile, dimension, metric,
+  Transformation Run, and inherited policy. Query scope refs and target kinds
+  are prefiltered by `vec0` before distances can affect ranks.
+- Vector mapping and `vec0` insertion share the View `BEGIN IMMEDIATE`
+  transaction. Privacy Forget deletes mappings and vector rows before governed
+  payloads, and durable reindex reconstructs only from committed embedding
+  Views while reporting and removing missing/orphan physical state without
+  invoking an embedder.
 - durable SQLite rejects `do_not_store` and `session` retention.
 - schema upgrades run in a versioned `BEGIN IMMEDIATE` transaction. Legacy
   head and idempotency tables are rebuilt with current checks and foreign keys,

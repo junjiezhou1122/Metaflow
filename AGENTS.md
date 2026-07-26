@@ -79,14 +79,22 @@ but there is no separate canonical Worker domain layer.
   Browser, Screenpipe, III, Agent Operator, Trigger, Delivery, and
   Materialization ports.
 - `packages/adapters/storage-sqlite`: durable View and Run state plus the
-  transactional View-commit outbox and local FTS projection. It persists a
+  transactional View-commit outbox, local FTS projection, and the accepted
+  pinned `sqlite-vec@0.1.9` semantic projection. It persists a
   `ViewCommitted` event and any Schema-declared search document in the same
   transaction as newly created View revisions, retains bounded expanded JSON
   Pointer evidence in per-scalar FTS units, resolves exact relation layers, and
-  publishes events only after commit; it never invokes Automation or III
-  directly. The existing Search read adapter also implements the View-owned
-  deterministic paged graph relation and authorized-summary port on the same
-  SQLite connection; it does not own authorization or projection semantics.
+  indexes only strict committed embedding Derived Views whose exact target,
+  location, source digest, profile, model, dimension, metric, provenance, and
+  policy pass startup and commit checks. Vector mappings and `vec0` rows share
+  commit, rollback, Privacy Forget, reopen, and durable reindex/orphan-repair
+  transactions with View and FTS state. Missing/incompatible extension,
+  profile, ABI, or persisted vector state fails without a cosine or remote
+  fallback. It publishes events only after commit and never invokes Automation
+  or III directly. The existing Search read adapter also implements the
+  View-owned deterministic paged graph relation and authorized-summary port on
+  the same SQLite connection; it does not own authorization or projection
+  semantics.
 - `packages/adapters/automation-execution`: maps resolved Automation roles into
   exact Execution invocation bindings and projects Execution Agent events back
   into the Automation trace. It also implements the canonical reactive-cascade
@@ -292,11 +300,17 @@ Operations.
   closed rather than make an old exact reference resolve to new content.
 - Fetching, decoding, or enriching a reference creates a new View through a
   Transformation; it never backfills the Raw View.
-- Search indexes only fields explicitly named by the immutable
+- Deterministic keyword Search indexes only fields explicitly named by the immutable
   `Schema.search_projection@1` contract. The projection is deterministic code,
   never OCR, transcription, summarization, model inference, or embedding.
   `policy.allow_local_search=false` is a hard exclusion that policy inheritance
   and Connector adaptation may not weaken.
+- Semantic Search projects only strict committed
+  `metaflow.search.embedding@1` Derived Views through exact-pinned
+  `sqlite-vec@0.1.9`. Search never computes document embeddings. Every mapping
+  freezes the exact target/location, source digest, embedding evidence ref,
+  provider/model profile, dimension, metric, and policy; configured exact scope
+  and target-kind filters execute inside KNN before distance affects rank.
 - Same-purpose evolution creates a new immutable revision; a new purpose forks
   a new View identity. Stale base revisions fail rather than overwrite.
 - View Store `get` requires an exact revision. Moving-head access is explicit
