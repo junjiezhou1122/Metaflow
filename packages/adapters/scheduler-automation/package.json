@@ -1,0 +1,14 @@
+{
+  "name": "@info/scheduler-automation-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/automation": "workspace:*",
+    "@info/view": "workspace:*",
+    "cron-parser": "^5.4.0"
+  }
+}

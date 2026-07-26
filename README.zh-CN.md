@@ -53,7 +53,7 @@ Metaflow 由七层组成：
 apps/
   chrome-acp/          Chrome ACP 浏览器 agent surface
   ui/                  React 检查界面
-  mac-companion/       macOS companion app
+  mac/                  macOS companion app
 packages/
   core/                Store、schema、生命周期、plugin registry、View 查询
   server/              HTTP runtime

@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "type": "OCR",
+      "content": {
+        "frame_id": 42,
+        "text": "Metaflow keeps exact Raw View evidence.",
+        "timestamp": "2026-07-26T12:00:00Z",
+        "file_path": "/screenpipe/data/monitor-1.mp4",
+        "offset_index": 17,
+        "app_name": "Google Chrome",
+        "window_name": "Metaflow architecture",
+        "tags": ["project:metaflow"],
+        "frame": null,
+        "frame_name": "monitor-1",
+        "browser_url": "https://example.com/metaflow",
+        "focused": true,
+        "device_name": "Built-in Display",
+        "text_source": "accessibility"
+      }
+    }
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1 }
+}

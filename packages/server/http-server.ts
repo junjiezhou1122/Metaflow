@@ -23,6 +23,8 @@ import { ingestFeedback } from "@info/runtime/feedback.js";
 import { collectViewProvenance } from "@info/runtime/view-provenance.js";
 import { filterViewsByQuery } from "@info/core";
 import { rankViewsForSurfacing } from "@info/core";
+import { SqliteViewRepository } from "@info/storage-sqlite";
+import type { ViewRepository } from "@info/view";
 import { VIEW_FAMILY_DEFINITIONS, VIEW_FAMILY_ORDER, manualViewFamilies, viewFamilyDefinition } from "@info/views/catalog.js";
 import type { ContextArtifact, ContextPackRequest, ContextQuery, ContextRecord, ContextView, StoredContextRecord, StoredRuntimeEvent } from "@info/core";
 import {
@@ -50,7 +52,41 @@ const FRAME_CACHE_MAX = 80;
 const FRAME_CACHE_TTL_MS = 5 * 60_000;
 const frameImageCache = new Map<string, { contentType: string; bytes: Uint8Array; expiresAt: number }>();
 
-export function createContextHttpHandler(store: ContextStore) {
+export type BrowserAutomationHttpController = {
+  submit(input: unknown): Promise<unknown>;
+  listDeliveries?(input: { after?: string; limit?: number }): Promise<unknown> | unknown;
+  interact?(input: unknown): Promise<unknown>;
+};
+
+export type BrowserCaptureHttpController = {
+  submit(input: unknown): Promise<unknown>;
+};
+
+export type MacAutomationHttpController = {
+  submit(input: unknown): Promise<unknown>;
+  listDeliveries?(input: { after?: string; limit?: number }): Promise<unknown> | unknown;
+  interact?(input: unknown): Promise<unknown>;
+  listBrowserContextRequests?(): Promise<unknown> | unknown;
+  respondBrowserContext?(input: unknown): Promise<unknown> | unknown;
+};
+
+export type InboxAutomationHttpController = {
+  listDeliveries(input: { after?: string; limit?: number }): Promise<unknown> | unknown;
+  interact(input: unknown): Promise<unknown>;
+};
+
+export function createContextHttpHandler(store: ContextStore, options: {
+  viewRepository?: ViewRepository;
+  browserCapture?: BrowserCaptureHttpController;
+  browserAutomation?: BrowserAutomationHttpController;
+  macAutomation?: MacAutomationHttpController;
+  inboxAutomation?: InboxAutomationHttpController;
+} = {}) {
+  let viewRepository = options.viewRepository;
+  const resolveViewRepository = () => {
+    if (!viewRepository) viewRepository = new SqliteViewRepository();
+    return viewRepository;
+  };
   return async (req: any, res: any) => {
   const requestStartedAt = Date.now();
   const requestUrl = req.url ?? "";
@@ -66,6 +102,235 @@ export function createContextHttpHandler(store: ContextStore) {
 
     if (req.method === "GET" && url.pathname === "/health") {
       return send(res, 200, { ok: true });
+    }
+
+    const exactViewMatch = url.pathname.match(/^\/context\/v1\/views\/([^/]+)$/);
+    if (req.method === "GET" && exactViewMatch) {
+      const revision = Number(url.searchParams.get("revision"));
+      if (!Number.isInteger(revision) || revision < 1) {
+        return send(res, 400, { ok: false, code: "exact_view_revision_required", error: "A positive exact View revision is required" });
+      }
+      const viewId = decodeURIComponent(exactViewMatch[1]!);
+      try {
+        const view = await resolveViewRepository().get({ view_id: viewId, revision });
+        if (!view) {
+          return send(res, 404, { ok: false, code: "exact_view_not_found", error: `View is missing: ${viewId}@${revision}` });
+        }
+        return send(res, 200, { ok: true, view });
+      } catch (error) {
+        console.error(JSON.stringify({
+          component: "view-http",
+          event: "view.exact_read_failed",
+          view_id: viewId,
+          revision,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        return send(res, 500, { ok: false, code: "exact_view_read_failed", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (url.pathname === "/capture/v1/browser-events" && req.method === "POST") {
+      if (!options.browserCapture) {
+        return send(res, 503, { ok: false, code: "browser_capture_unavailable", error: "Browser Capture is not configured" });
+      }
+      try {
+        const result = await options.browserCapture.submit(await readJson(req));
+        return send(res, browserCaptureSuccessStatus(result), { ok: true, result });
+      } catch (error) {
+        const status = browserCaptureHttpStatus(error);
+        console[status >= 500 ? "error" : "warn"](JSON.stringify({
+          component: "browser-capture-http",
+          event: "browser_capture.submit_failed",
+          status,
+          code: errorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        }));
+        return send(res, status, {
+          ok: false,
+          code: errorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/browser-signals" && req.method === "POST") {
+      if (!options.browserAutomation) {
+        return send(res, 503, { ok: false, code: "browser_automation_unavailable", error: "Browser Automation is not configured" });
+      }
+      try {
+        const result = await options.browserAutomation.submit(await readJson(req));
+        return send(res, 200, { ok: true, result });
+      } catch (error) {
+        const status = browserAutomationHttpStatus(error);
+        console[status >= 500 ? "error" : "warn"](JSON.stringify({
+          component: "browser-automation-http",
+          event: "browser_automation.submit_failed",
+          status,
+          code: errorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        }));
+        return send(res, status, {
+          ok: false,
+          code: errorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/browser-deliveries" && req.method === "GET") {
+      if (!options.browserAutomation?.listDeliveries) {
+        return send(res, 503, { ok: false, code: "browser_delivery_unavailable", error: "Browser Delivery is not configured" });
+      }
+      try {
+        const limitValue = url.searchParams.get("limit");
+        const limit = limitValue === null ? undefined : Number(limitValue);
+        const deliveries = await options.browserAutomation.listDeliveries({
+          after: url.searchParams.get("after") ?? undefined,
+          limit,
+        });
+        return send(res, 200, { ok: true, deliveries });
+      } catch (error) {
+        return send(res, 400, { ok: false, code: "invalid_browser_delivery_query", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/browser-interactions" && req.method === "POST") {
+      if (!options.browserAutomation?.interact) {
+        return send(res, 503, { ok: false, code: "browser_feedback_unavailable", error: "Browser feedback is not configured" });
+      }
+      try {
+        const result = await options.browserAutomation.interact(await readJson(req));
+        return send(res, 200, { ok: true, result });
+      } catch (error) {
+        const code = errorCode(error);
+        const status = code === "unknown_delivery" ? 404 : code === "trace_failed" ? 500 : 400;
+        return send(res, status, {
+          ok: false,
+          code,
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/macos/voice-signals" && req.method === "POST") {
+      if (!options.macAutomation) {
+        return send(res, 503, { ok: false, code: "macos_automation_unavailable", error: "macOS Automation is not configured" });
+      }
+      try {
+        const result = await options.macAutomation.submit(await readJson(req));
+        return send(res, 200, { ok: true, result });
+      } catch (error) {
+        const status = macAutomationHttpStatus(error);
+        console[status >= 500 ? "error" : "warn"](JSON.stringify({
+          component: "macos-automation-http",
+          event: "macos_automation.submit_failed",
+          status,
+          code: errorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        }));
+        return send(res, status, {
+          ok: false,
+          code: errorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/macos/deliveries" && req.method === "GET") {
+      if (!options.macAutomation?.listDeliveries) {
+        return send(res, 503, { ok: false, code: "macos_delivery_unavailable", error: "macOS Delivery is not configured" });
+      }
+      try {
+        const limitValue = url.searchParams.get("limit");
+        const limit = limitValue === null ? undefined : Number(limitValue);
+        const deliveries = await options.macAutomation.listDeliveries({
+          after: url.searchParams.get("after") ?? undefined,
+          limit,
+        });
+        return send(res, 200, { ok: true, deliveries });
+      } catch (error) {
+        return send(res, 400, { ok: false, code: "invalid_macos_delivery_query", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/macos/interactions" && req.method === "POST") {
+      if (!options.macAutomation?.interact) {
+        return send(res, 503, { ok: false, code: "macos_feedback_unavailable", error: "macOS feedback is not configured" });
+      }
+      try {
+        const result = await options.macAutomation.interact(await readJson(req));
+        return send(res, 200, { ok: true, result });
+      } catch (error) {
+        const code = errorCode(error);
+        const status = code === "unknown_delivery" ? 404 : code === "trace_failed" ? 500 : 400;
+        return send(res, status, {
+          ok: false,
+          code,
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/macos/browser-context-requests" && req.method === "GET") {
+      if (!options.macAutomation?.listBrowserContextRequests) {
+        return send(res, 503, { ok: false, code: "browser_context_bridge_unavailable", error: "Browser context bridge is not configured" });
+      }
+      return send(res, 200, { ok: true, requests: await options.macAutomation.listBrowserContextRequests() });
+    }
+
+    if (url.pathname === "/automation/v1/macos/browser-context-responses" && req.method === "POST") {
+      if (!options.macAutomation?.respondBrowserContext) {
+        return send(res, 503, { ok: false, code: "browser_context_bridge_unavailable", error: "Browser context bridge is not configured" });
+      }
+      try {
+        return send(res, 200, { ok: true, result: await options.macAutomation.respondBrowserContext(await readJson(req)) });
+      } catch (error) {
+        return send(res, 400, { ok: false, code: "browser_context_response_rejected", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/inbox/deliveries" && req.method === "GET") {
+      if (!options.inboxAutomation) {
+        return send(res, 503, { ok: false, code: "inbox_delivery_unavailable", error: "Inbox Delivery is not configured" });
+      }
+      try {
+        const limitValue = url.searchParams.get("limit");
+        const limit = limitValue === null ? undefined : Number(limitValue);
+        const deliveries = await options.inboxAutomation.listDeliveries({
+          after: url.searchParams.get("after") ?? undefined,
+          limit,
+        });
+        return send(res, 200, { ok: true, deliveries });
+      } catch (error) {
+        return send(res, 400, { ok: false, code: "invalid_inbox_delivery_query", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (url.pathname === "/automation/v1/inbox/interactions" && req.method === "POST") {
+      if (!options.inboxAutomation) {
+        return send(res, 503, { ok: false, code: "inbox_feedback_unavailable", error: "Inbox feedback is not configured" });
+      }
+      try {
+        const result = await options.inboxAutomation.interact(await readJson(req));
+        return send(res, 200, { ok: true, result });
+      } catch (error) {
+        const code = errorCode(error);
+        const status = code === "unknown_delivery" ? 404 : code === "trace_failed" ? 500 : 400;
+        return send(res, status, {
+          ok: false,
+          code,
+          error: error instanceof Error ? error.message : String(error),
+          details: errorDetails(error),
+        });
+      }
     }
 
     const frameMatch = url.pathname.match(/^\/screenpipe\/frames\/([^/]+)$/);
@@ -1683,6 +1948,81 @@ function sqliteTimestampToIso(value?: string): string | undefined {
 
 export function createContextHttpServer(store = new ContextStore()) {
   return createServer(createContextHttpHandler(store));
+}
+
+function browserAutomationHttpStatus(error: unknown): 400 | 409 | 422 | 500 {
+  switch (errorCode(error)) {
+    case "invalid_browser_event":
+      return 400;
+    case "required_evidence_not_stored":
+      return 422;
+    case "idempotency_conflict":
+    case "source_identity_conflict":
+      return 409;
+    default:
+      return 500;
+  }
+}
+
+function browserCaptureSuccessStatus(result: unknown): 200 | 201 | 202 {
+  if (!result || typeof result !== "object") return 200;
+  const submission = result as {
+    status?: unknown;
+    replayed?: unknown;
+    captured_views?: Array<{ created?: unknown }>;
+  };
+  if (submission.status === "skipped") return 202;
+  if (submission.replayed !== true && submission.captured_views?.some(view => view.created === true)) return 201;
+  return 200;
+}
+
+function browserCaptureHttpStatus(error: unknown): 400 | 409 | 429 | 500 {
+  switch (errorCode(error)) {
+    case "invalid_browser_capture_event":
+    case "capture_validation_failed":
+    case "connector_mismatch":
+    case "unsupported_delivery":
+      return 400;
+    case "idempotency_conflict":
+    case "source_identity_conflict":
+    case "checkpoint_conflict":
+    case "connection_paused":
+      return 409;
+    case "backpressure":
+      return 429;
+    default:
+      return 500;
+  }
+}
+
+function macAutomationHttpStatus(error: unknown): 400 | 403 | 409 | 422 | 504 | 500 {
+  switch (errorCode(error)) {
+    case "invalid_macos_event":
+      return 400;
+    case "accessibility_denied":
+      return 403;
+    case "asr_failed":
+    case "unknown_agent":
+      return 422;
+    case "idempotency_conflict":
+    case "source_identity_conflict":
+      return 409;
+    case "browser_context_failed":
+      return 504;
+    default:
+      return 500;
+  }
+}
+
+function errorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "internal_error";
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code ? code : "internal_error";
+}
+
+function errorDetails(error: unknown): unknown {
+  if (!error || typeof error !== "object") return undefined;
+  return (error as { details?: unknown }).details;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

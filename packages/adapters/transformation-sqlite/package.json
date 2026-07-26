@@ -1,0 +1,13 @@
+{
+  "name": "@info/transformation-sqlite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/transformation": "workspace:*",
+    "@info/view": "workspace:*"
+  }
+}

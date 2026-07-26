@@ -1,0 +1,16 @@
+{
+  "status": "healthy",
+  "status_code": 200,
+  "last_frame_timestamp": "2026-07-26T12:00:00Z",
+  "last_audio_timestamp": "2026-07-26T11:59:58Z",
+  "frame_status": "ok",
+  "audio_status": "ok",
+  "message": "screenpipe is healthy",
+  "verbose_instructions": null,
+  "device_status_details": null,
+  "vision_db_write_stalled": false,
+  "audio_db_write_stalled": false,
+  "drm_content_paused": false,
+  "schedule_paused": false,
+  "version": "0.4.30"
+}

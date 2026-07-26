@@ -8,11 +8,15 @@
     "./*.js": "./*.ts"
   },
   "dependencies": {
+    "@info/browser-capture-adapter": "workspace:*",
+    "@info/capture": "workspace:*",
     "@info/core": "workspace:*",
     "@info/sensors": "workspace:*",
     "@info/views": "workspace:*",
     "@info/programs": "workspace:*",
     "@info/runtime": "workspace:*",
+    "@info/storage-sqlite": "workspace:*",
+    "@info/view": "workspace:*",
     "@agentclientprotocol/sdk": "^0.22.1",
     "iii-sdk": "latest"
   }

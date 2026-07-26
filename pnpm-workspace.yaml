@@ -1,21 +1,14 @@
-# Metaflow workspace.
-# Backend @info/* packages + the two Application surfaces.
-# See docs/workspace-restructure-plan.md.
+# Canonical Metaflow v1 workspace. Legacy v0 sources remain in the repository
+# as migration evidence but are intentionally not installable workspace owners.
 packages:
-  - "packages/ambient-layer"
-  - "packages/scheduled-batch"
-  - "packages/core"
-  - "packages/sensors"
-  - "packages/views"
-  - "packages/view-system"
-  - "packages/capabilities"
-  - "packages/programs"
-  - "packages/runtime"
-  - "packages/processor-runtime"
-  - "packages/ambient-layer"
-  - "packages/iii-runtime"
-  - "packages/server"
-  - "apps/ui"
+  - "packages/view"
+  - "packages/view-package"
+  - "packages/transformation"
+  - "packages/execution"
+  - "packages/automation"
+  - "packages/capture"
+  - "packages/operations"
+  - "packages/adapters/*"
+  - "view-packages/*"
+  - "apps/ambient-daemon"
   - "apps/website"
-  - "apps/chrome-acp"
-  - "apps/chrome-acp/packages/*"

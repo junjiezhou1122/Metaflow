@@ -1,0 +1,8 @@
+{
+  "name": "@info/view",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@info/runtime": "workspace:*"
+  }
+}

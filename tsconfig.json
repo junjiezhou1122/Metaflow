@@ -10,6 +10,16 @@
     "resolveJsonModule": true,
     "outDir": "dist"
   },
-  "include": ["packages/**/*.ts", "scripts/**/*.ts"],
-  "exclude": ["apps/**", "packages/*/node_modules/**"]
+  "include": [
+    "packages/view/**/*.ts",
+    "packages/transformation/**/*.ts",
+    "packages/execution/**/*.ts",
+    "packages/automation/**/*.ts",
+    "packages/capture/**/*.ts",
+    "packages/operations/**/*.ts",
+    "packages/adapters/**/*.ts",
+    "apps/ambient-daemon/**/*.ts",
+    "scripts/v1/**/*.ts"
+  ],
+  "exclude": ["node_modules", "packages/*/node_modules/**"]
 }

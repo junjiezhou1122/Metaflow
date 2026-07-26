@@ -1,8 +1,0 @@
-{
-  "eval_epoch": 1,
-  "experiment_id": "exp_0013",
-  "reason": "accidentally allocated; using pre-allocated exp_0012",
-  "score": null,
-  "status": "discarded",
-  "timestamp": "2026-06-18T08:11:25+00:00"
-}

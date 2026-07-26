@@ -1,4 +1,3 @@
-// @info/capabilities — reusable agent-execution powers (the agent-runtime
-// adapter: ACP stdio, Claude-Code CLI-JSON, mock, MCP/info-context providers,
-// view-output formatter). Zero coupling to the rest of the runtime.
-export * from "./agent-runtime/index.js";
+// @info/capabilities remains a compatibility facade. The generic agent
+// adapter boundary now lives under packages/adapters/agent-runtime.
+export * from "../adapters/agent-runtime/index.js";

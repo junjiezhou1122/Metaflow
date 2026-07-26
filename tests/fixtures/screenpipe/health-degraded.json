@@ -1,0 +1,16 @@
+{
+  "status": "degraded",
+  "status_code": 503,
+  "last_frame_timestamp": null,
+  "last_audio_timestamp": null,
+  "frame_status": "unknown",
+  "audio_status": "unknown",
+  "message": "health check timed out before producing a snapshot",
+  "verbose_instructions": null,
+  "device_status_details": null,
+  "vision_db_write_stalled": false,
+  "audio_db_write_stalled": false,
+  "drm_content_paused": false,
+  "schedule_paused": false,
+  "version": "0.4.30"
+}

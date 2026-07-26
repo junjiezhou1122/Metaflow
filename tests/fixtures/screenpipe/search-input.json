@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "type": "Input",
+      "content": {
+        "id": 91,
+        "timestamp": "2026-07-26T12:00:02Z",
+        "event_type": "clipboard",
+        "app_name": "Google Chrome",
+        "window_title": "Metaflow architecture",
+        "browser_url": "https://example.com/metaflow",
+        "text_content": "View Algebra",
+        "x": null,
+        "y": null,
+        "key_code": null,
+        "modifiers": null,
+        "element_role": "AXTextArea",
+        "element_name": "Prompt",
+        "frame_id": 42
+      }
+    }
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1 }
+}

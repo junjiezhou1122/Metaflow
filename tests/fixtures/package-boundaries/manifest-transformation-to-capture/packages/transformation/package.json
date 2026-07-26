@@ -1,0 +1,8 @@
+{
+  "name": "@info/transformation",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@info/capture": "workspace:*"
+  }
+}

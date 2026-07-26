@@ -1,0 +1,14 @@
+{
+  "name": "@info/view",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./schema": "./schema.ts"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "zod": "^3.24.4"
+  }
+}

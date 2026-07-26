@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleAlert,
   CircleCheck,
+  Clock3,
   RotateCcw,
   ExternalLink,
   Globe,
   Loader2,
   RefreshCw,
   Sparkles,
+  X,
 } from "lucide-react";
 import {
   Badge,
@@ -63,6 +65,41 @@ type AgentTaskItemActionResponse = {
   error?: string;
   action?: "cancel" | "retry";
   task_id?: string;
+};
+
+type ExactViewRef = { view_id: string; revision: number };
+
+type BrowserDeliveryCard = {
+  delivery_id: string;
+  rendered_at: string;
+  request: {
+    id: string;
+    phase: "accepted" | "progress" | "result" | "failure";
+    urgency: "glance" | "interrupt" | "background";
+    actions: Array<"accept" | "dismiss" | "later" | "cancel" | "retry" | "correct">;
+    run_id?: string;
+    views: ExactViewRef[];
+  };
+};
+
+type BrowserDeliveryResponse = {
+  ok: boolean;
+  deliveries?: BrowserDeliveryCard[];
+  error?: string;
+};
+
+type ExactAmbientView = {
+  id: string;
+  revision: number;
+  name: string;
+  purpose: string;
+  representation: { value?: unknown };
+};
+
+type ExactAmbientViewResponse = {
+  ok: boolean;
+  view?: ExactAmbientView;
+  error?: string;
 };
 
 const PREFIX_LABEL: Record<string, string> = {
@@ -147,6 +184,17 @@ function detailRowsOf(view: AmbientView): Array<[string, string]> {
   return rows.slice(0, 5);
 }
 
+function exactViewSummary(view: ExactAmbientView | undefined): string {
+  const value = view?.representation.value;
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return view?.purpose ?? "";
+  const record = value as Record<string, unknown>;
+  for (const field of ["summary", "analysis", "text", "content"]) {
+    if (typeof record[field] === "string" && record[field].trim()) return record[field].trim();
+  }
+  return view?.purpose ?? "";
+}
+
 // Resolve the local info web UI origin. The default is the Vite dev server
 // (apps/ui); operators that run the UI elsewhere can override the URL via
 // chrome.storage.local["infoWebOrigin"]. We read it lazily so a settings
@@ -178,6 +226,10 @@ function sourceUrlOf(view: AmbientView): string | undefined {
 
 export function TasksView() {
   const [views, setViews] = useState<AmbientView[]>([]);
+  const [deliveries, setDeliveries] = useState<BrowserDeliveryCard[]>([]);
+  const [deliveryViews, setDeliveryViews] = useState<Record<string, ExactAmbientView>>({});
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const [activeDeliveryId, setActiveDeliveryId] = useState<string | null>(null);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -206,6 +258,37 @@ export function TasksView() {
     // activeFilters empty means "no prefix" → all view types.
     return Array.from(activeFilters);
   }, [activeFilters]);
+
+  const loadDeliveries = useCallback(async () => {
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: "poll-ambient-deliveries",
+        limit: 30,
+      })) as BrowserDeliveryResponse;
+      if (!response?.ok) {
+        setDeliveryError(response?.error ?? "Failed to load Ambient deliveries");
+        return;
+      }
+      const cards = response.deliveries ?? [];
+      const loaded: Record<string, ExactAmbientView> = {};
+      await Promise.all(cards.map(async card => {
+        const ref = card.request.views[0];
+        if (!ref) return;
+        const exact = (await chrome.runtime.sendMessage({
+          type: "get-ambient-exact-view",
+          view_id: ref.view_id,
+          revision: ref.revision,
+        })) as ExactAmbientViewResponse;
+        if (!exact?.ok || !exact.view) throw new Error(exact?.error ?? `Failed to read ${ref.view_id}@${ref.revision}`);
+        loaded[card.delivery_id] = exact.view;
+      }));
+      setDeliveries(cards);
+      setDeliveryViews(loaded);
+      setDeliveryError(null);
+    } catch (e) {
+      setDeliveryError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   const load = useCallback(
     async (mode: "replace" | "append" = "replace") => {
@@ -251,19 +334,48 @@ export function TasksView() {
   useEffect(() => {
     setCursor(undefined);
     void load("replace");
+    void loadDeliveries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFilters]);
+  }, [activeFilters, loadDeliveries]);
 
   useEffect(() => {
     if (refreshTimer.current) window.clearInterval(refreshTimer.current);
     refreshTimer.current = window.setInterval(() => {
       void load("replace");
+      void loadDeliveries();
     }, 8000);
     return () => {
       if (refreshTimer.current) window.clearInterval(refreshTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFilters]);
+  }, [activeFilters, loadDeliveries]);
+
+  const runDeliveryAction = useCallback(async (
+    card: BrowserDeliveryCard,
+    action: "accept" | "dismiss" | "later",
+  ) => {
+    setActiveDeliveryId(card.delivery_id);
+    setDeliveryError(null);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "ambient-delivery-interaction",
+        request_id: card.request.id,
+        delivery_id: card.delivery_id,
+        action,
+        ...(action === "later" ? { snooze_until: new Date(Date.now() + 15 * 60_000).toISOString() } : {}),
+        metadata: { source: "chrome-sidepanel" },
+      });
+      if (!response?.ok) {
+        setDeliveryError(response?.error ?? `Ambient ${action} failed`);
+        return;
+      }
+      await loadDeliveries();
+    } catch (e) {
+      setDeliveryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActiveDeliveryId(null);
+    }
+  }, [loadDeliveries]);
 
   const triggerAmbient = useCallback(async () => {
     setTriggering(true);
@@ -347,14 +459,14 @@ export function TasksView() {
           <Sparkles className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium">Agent Work Queue</h2>
           <Badge variant="secondary" className="text-[10px]">
-            {views.length}
+            {views.length + deliveries.length}
           </Badge>
         </div>
         <div className="flex items-center gap-1">
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => void load("replace")}
+            onClick={() => { void load("replace"); void loadDeliveries(); }}
             disabled={loading}
             title="Refresh"
           >
@@ -449,6 +561,12 @@ export function TasksView() {
           {lastTaskMessage}
         </div>
       )}
+      {deliveryError && (
+        <div className="px-3 py-2 text-xs text-destructive flex items-center gap-1.5 border-b">
+          <CircleAlert className="h-3.5 w-3.5" />
+          {deliveryError}
+        </div>
+      )}
 
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-2">
@@ -458,7 +576,44 @@ export function TasksView() {
             </Card>
           )}
 
-          {!loading && !error && views.length === 0 && (
+          {deliveries.map(card => {
+            const view = deliveryViews[card.delivery_id];
+            const summary = exactViewSummary(view);
+            const busy = activeDeliveryId === card.delivery_id;
+            return (
+              <Card key={card.delivery_id} className="border-primary/30 bg-primary/5">
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <Badge variant="outline" className="text-[10px]">Ambient {card.request.phase}</Badge>
+                    <span className="ml-auto text-[10px] text-muted-foreground">{timeAgo(card.rendered_at)}</span>
+                  </div>
+                  <div className="mt-2 text-sm font-medium leading-snug">{view?.name ?? "Ambient result"}</div>
+                  {summary && <p className="mt-1 text-xs leading-relaxed text-muted-foreground line-clamp-4">{summary}</p>}
+                  <div className="mt-3 flex items-center justify-end gap-1">
+                    {card.request.actions.includes("dismiss") && (
+                      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void runDeliveryAction(card, "dismiss")}>
+                        <X className="h-3 w-3 mr-1" />Dismiss
+                      </Button>
+                    )}
+                    {card.request.actions.includes("later") && (
+                      <Button size="sm" variant="outline" disabled={busy} onClick={() => void runDeliveryAction(card, "later")}>
+                        <Clock3 className="h-3 w-3 mr-1" />Later
+                      </Button>
+                    )}
+                    {card.request.actions.includes("accept") && (
+                      <Button size="sm" disabled={busy} onClick={() => void runDeliveryAction(card, "accept")}>
+                        {busy ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CircleCheck className="h-3 w-3 mr-1" />}
+                        Accept
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+
+          {!loading && !error && views.length === 0 && deliveries.length === 0 && (
             <div className="text-center text-xs text-muted-foreground py-12">
               <Sparkles className="h-5 w-5 mx-auto mb-2 opacity-50" />
               <p>No agent work items yet.</p>

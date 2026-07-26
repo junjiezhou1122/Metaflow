@@ -1,0 +1,16 @@
+{
+  "status": "healthy",
+  "status_code": 200,
+  "last_frame_timestamp": null,
+  "last_audio_timestamp": null,
+  "frame_status": "ok",
+  "audio_status": "ok",
+  "message": "future screenpipe",
+  "verbose_instructions": null,
+  "device_status_details": null,
+  "vision_db_write_stalled": false,
+  "audio_db_write_stalled": false,
+  "drm_content_paused": false,
+  "schedule_paused": false,
+  "version": "0.5.0"
+}

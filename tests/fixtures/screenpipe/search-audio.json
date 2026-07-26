@@ -1,0 +1,26 @@
+{
+  "data": [
+    {
+      "type": "Audio",
+      "content": {
+        "chunk_id": 7,
+        "transcription": "我们继续设计 View。",
+        "text": "我们继续设计 View。",
+        "timestamp": "2026-07-26T12:00:01Z",
+        "file_path": "/screenpipe/data/audio-7.wav",
+        "offset_index": 3,
+        "tags": [],
+        "device_name": "MacBook Microphone",
+        "device_type": "Input",
+        "speaker": { "id": 1, "name": "Junjie", "metadata": "{}" },
+        "speaker_label": "Junjie",
+        "speaker_source": "speaker_id",
+        "speaker_confidence": 0.96,
+        "speaker_provisional": false,
+        "start_time": 1.2,
+        "end_time": 3.8
+      }
+    }
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1 }
+}

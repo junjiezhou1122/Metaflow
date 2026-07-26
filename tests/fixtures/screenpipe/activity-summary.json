@@ -1,0 +1,22 @@
+{
+  "apps": [
+    { "name": "Google Chrome", "frame_count": 12, "minutes": 4.5, "first_seen": "2026-07-26T12:00:00Z", "last_seen": "2026-07-26T12:05:00Z" }
+  ],
+  "windows": [
+    { "app_name": "Google Chrome", "window_name": "Metaflow", "browser_url": "https://example.com/metaflow", "minutes": 4.5, "frame_count": 12 }
+  ],
+  "key_texts": [
+    { "text": "View Algebra", "app_name": "Google Chrome", "window_name": "Metaflow", "timestamp": "2026-07-26T12:04:00Z" }
+  ],
+  "edited_files": [],
+  "audio_summary": { "segment_count": 1, "speakers": [{ "name": "Junjie", "segment_count": 1 }], "top_transcriptions": [] },
+  "total_frames": 12,
+  "total_active_minutes": 4.5,
+  "time_range": { "start": "2026-07-26T12:00:00Z", "end": "2026-07-26T12:05:00Z" },
+  "data_status": "ok",
+  "query_status": "not_requested",
+  "recording": { "recent_capture": true },
+  "memories": [],
+  "snippets": [],
+  "guidance": { "searched_endpoints": ["/activity-summary"], "next_best_query": null }
+}

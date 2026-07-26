@@ -1,0 +1,64 @@
+import { spawnSync } from "node:child_process";
+
+export const ACTIVE_V1_TEST_FILES = [
+  "tests/agent-execution-adapter.test.ts",
+  "tests/agent-runtime-adapter.test.ts",
+  "tests/ambient-agent-integration.test.ts",
+  "tests/ambient-direct-assist.test.ts",
+  "tests/ambient-daemon-vertical.test.ts",
+  "tests/ambient-mcp-http.test.ts",
+  "tests/automation-context.test.ts",
+  "tests/automation-delivery.test.ts",
+  "tests/automation-execution-adapter.test.ts",
+  "tests/automation-sqlite.test.ts",
+  "tests/automation-trace.test.ts",
+  "tests/automation-v1.test.ts",
+  "tests/browser-automation-extension.test.ts",
+  "tests/browser-automation-http.test.ts",
+  "tests/browser-automation.test.ts",
+  "tests/browser-capture.test.ts",
+  "tests/capture-runtime.test.ts",
+  "tests/committed-view-trigger.test.ts",
+  "tests/connector-kit.test.ts",
+  "tests/execution-runtime.test.ts",
+  "tests/failure-repair.test.ts",
+  "tests/feedback-evolution.test.ts",
+  "tests/macos-ambient-vertical.test.ts",
+  "tests/metaflow-v1-vertical.test.ts",
+  "tests/operation-surfaces.test.ts",
+  "tests/package-boundaries.test.ts",
+  "tests/privacy-forget.test.ts",
+  "tests/reactive-cascade.test.ts",
+  "tests/scheduled-summary-vertical.test.ts",
+  "tests/scheduler-automation.test.ts",
+  "tests/screenpipe-capture.test.ts",
+  "tests/transformation-contract.test.ts",
+  "tests/iii-runtime.test.ts",
+  "tests/v0-migration-boundaries.test.ts",
+  "tests/view-access-policy.test.ts",
+  "tests/view-contract.test.ts",
+  "tests/view-commit-events.test.ts",
+  "tests/view-operators.test.ts",
+  "tests/view-package.test.ts",
+  "tests/view-query-time-range.test.ts",
+  "tests/view-search-projection.test.ts",
+  "tests/view-store.test.ts",
+  "tests/view-v1.test.ts",
+] as const;
+
+if (process.argv[1]?.endsWith("run-tests.ts")) {
+  console.info(JSON.stringify({ component: "v1-test-runner", event: "suite.started", files: ACTIVE_V1_TEST_FILES.length }));
+  const result = spawnSync(process.execPath, [
+    "--experimental-sqlite",
+    "--import",
+    "tsx",
+    "--test",
+    ...ACTIVE_V1_TEST_FILES,
+  ], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  if (result.signal) throw new Error(`Active v1 test process terminated by ${result.signal}`);
+  process.exitCode = result.status ?? 1;
+}

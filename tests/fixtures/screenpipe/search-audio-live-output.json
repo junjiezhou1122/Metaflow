@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "type": "Audio",
+      "content": {
+        "chunk_id": -7,
+        "transcription": "system audio from a live stream",
+        "text": "system audio from a live stream",
+        "timestamp": "2026-07-26T12:00:03Z",
+        "file_path": "/screenpipe/data/live-output.wav",
+        "offset_index": 0,
+        "tags": [],
+        "device_name": "MacBook Speakers",
+        "device_type": "Output",
+        "speaker": null,
+        "speaker_label": null,
+        "speaker_source": "live",
+        "speaker_confidence": null,
+        "speaker_provisional": false,
+        "start_time": 0.0,
+        "end_time": 2.4,
+        "source": "live"
+      }
+    }
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1 }
+}

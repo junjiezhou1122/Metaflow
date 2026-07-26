@@ -1,5 +1,36 @@
+import {
+  browserAutomationEndpoint,
+  browserDeliveriesEndpoint,
+  browserExactViewEndpoint,
+  browserInteractionEndpoint,
+  buildBrowserAutomationEvent,
+  buildBrowserDeliveryInteraction,
+  type BrowserDeliveryAction,
+} from "./ambient/browser-trigger";
+import {
+  browserCaptureEndpoint,
+  buildBrowserCaptureEvent,
+  deliverBrowserCaptureEvent,
+  SerializedBrowserCaptureOutbox,
+  type BrowserCaptureEventPayload,
+  type BrowserCaptureOutbox,
+  type BrowserCaptureTransportFailure,
+} from "./browser-capture";
+import {
+  browserNavigationIdentity,
+  browserPolicyForUrl,
+  classifyBrowserAttention,
+  parsePersistedBrowserTabStates,
+  resolveBrowserVisitState,
+  type PersistedBrowserTabState,
+} from "./browser-capture-state";
+
+const LEGACY_DEFAULT_ENDPOINTS = new Set([
+  "http://localhost:3111/context/ingest",
+  "http://localhost:3111/context/v1/observations",
+]);
 const DEFAULT_SETTINGS = {
-  endpoint: "http://localhost:3111/context/ingest",
+  endpoint: "http://localhost:3111",
   captureStream: true,
   heartbeatSeconds: 15,
   snapshotOnVisit: true,
@@ -31,86 +62,184 @@ type PageContext = {
   metadata?: Record<string, unknown>;
   text_quality?: Record<string, unknown>;
   search?: { engine?: string; query?: string; searched_at?: string };
+  dom?: {
+    github_repository?: boolean;
+    repository_owner?: string;
+    repository_name?: string;
+    markers?: Record<string, unknown>;
+  };
 };
 
-type TabState = {
-  tabId: number;
-  windowId?: number;
-  url: string;
-  domain: string;
-  visitId: string;
-  openedAt: string;
-  startedAt: number;
-  activatedAt: number;
-  visitRecorded: boolean;
-  snapshotCount: number;
-  lastSnapshotAt: number;
+type TabState = PersistedBrowserTabState & {
   settings: InfoSettings;
-  title?: string;
-  privacy?: Record<string, unknown>;
 };
 
 const tabState = new Map<number, TabState>();
-const HEARTBEAT_MAX_TABS = 4;
-const RECENT_MEANINGFUL_TAB_TTL_MS = 30 * 60_000;
+const BROWSER_CAPTURE_OUTBOX_KEY = "infoCaptureDeadLetters";
+const BROWSER_TAB_STATE_KEY = "metaflow.browser_capture.tab_state.v1";
+const BROWSER_CAPTURE_HEARTBEAT_ALARM = "metaflow.browser_capture.heartbeat";
+const MAC_BROWSER_CONTEXT_ALARM = "metaflow.browser_context.poll";
+let tabStateReady: Promise<void> | undefined;
 
-type RememberedTab = {
-  tabId: number;
-  windowId?: number;
-  url: string;
-  title?: string;
-  rememberedAt: number;
-};
-
-let lastMeaningfulTab: RememberedTab | null = null;
+let macBrowserContextPollRunning = false;
 
 export async function installInfoCaptureDefaults() {
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   const existing = await chrome.storage.local.get(keys);
-  await chrome.storage.local.set({ ...DEFAULT_SETTINGS, ...existing });
+  const migrated = typeof existing.endpoint === "string" && LEGACY_DEFAULT_ENDPOINTS.has(existing.endpoint)
+    ? { ...existing, endpoint: DEFAULT_SETTINGS.endpoint }
+    : existing;
+  await chrome.storage.local.set({ ...DEFAULT_SETTINGS, ...migrated });
 }
 
 export function startInfoCapture() {
+  void ensureTabStateLoaded();
+  void configureInfoCaptureAlarms();
+
   chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+    await ensureTabStateLoaded();
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
     if (tab?.id && tab.url) {
-      rememberMeaningfulTab(tab);
       getTabState(tab.id, tab.url, { markActivated: true });
       await ensureVisit(tab, "tab_activated");
     }
   });
 
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    await ensureTabStateLoaded();
     if (changeInfo.status === "complete" || changeInfo.url) {
       if (tab?.id && tab.url) {
-        rememberMeaningfulTab(tab);
         await ensureVisit(tab, "page_loaded");
       }
     }
   });
 
   chrome.tabs.onRemoved.addListener(async (tabId) => {
+    await ensureTabStateLoaded();
     const state = tabState.get(tabId);
     if (state) {
-      await sendLifecycleEvent(state, "tab_closed").catch(() => undefined);
+      await sendLifecycleEvent(state, "tab_closed").catch(error => {
+        reportCaptureTaskFailure("tab_closed", error, { tab_id: tabId, visit_id: state.visitId });
+      });
       tabState.delete(tabId);
+      await persistTabStates();
     }
-    if (lastMeaningfulTab?.tabId === tabId) lastMeaningfulTab = null;
   });
 
-  setInterval(async () => {
-    const settings = await getSettings();
-    if (!settings.captureStream) return;
-    const tabs = await getHeartbeatTabs();
-    for (const tab of tabs) {
-      if (!tab?.id || !tab.url) continue;
-      await ensureVisit(tab, "heartbeat_tick");
-      await captureHeartbeat(tab).catch(() => undefined);
+  chrome.webNavigation.onCommitted.addListener(details => {
+    void captureNavigation(details, "navigation_committed").catch(error => {
+      reportCaptureTaskFailure("navigation_committed", error, { tab_id: details.tabId, url: details.url });
+    });
+  });
+  chrome.webNavigation.onHistoryStateUpdated.addListener(details => {
+    void captureNavigation(details, "navigation_history_state").catch(error => {
+      reportCaptureTaskFailure("navigation_history_state", error, { tab_id: details.tabId, url: details.url });
+    });
+  });
+
+  chrome.alarms.onAlarm.addListener(alarm => {
+    if (alarm.name === BROWSER_CAPTURE_HEARTBEAT_ALARM) {
+      void runBrowserCaptureHeartbeat().catch(error => {
+        reportCaptureTaskFailure("heartbeat_alarm", error, { alarm: alarm.name });
+      });
     }
-  }, DEFAULT_SETTINGS.heartbeatSeconds * 1000);
+    if (alarm.name === MAC_BROWSER_CONTEXT_ALARM) void runMacBrowserContextPoll();
+  });
+}
+
+async function configureInfoCaptureAlarms() {
+  const settings = await getSettings();
+  await chrome.alarms.create(BROWSER_CAPTURE_HEARTBEAT_ALARM, {
+    periodInMinutes: Math.max(0.5, settings.heartbeatSeconds / 60),
+  });
+  await chrome.alarms.create(MAC_BROWSER_CONTEXT_ALARM, { periodInMinutes: 0.5 });
+}
+
+async function runBrowserCaptureHeartbeat() {
+  const settings = await getSettings();
+  if (!settings.captureStream) return;
+  for (const tab of await getHeartbeatTabs()) {
+    if (!tab.id || !tab.url) continue;
+    await ensureVisit(tab, "heartbeat_tick");
+    await captureHeartbeat(tab);
+  }
+}
+
+function runMacBrowserContextPoll() {
+  if (macBrowserContextPollRunning) return;
+  macBrowserContextPollRunning = true;
+  void pollMacBrowserContextRequests()
+    .catch(error => console.error("[metaflow-ambient] Browser DOM bridge poll failed", error))
+    .finally(() => { macBrowserContextPollRunning = false; });
+}
+
+async function pollMacBrowserContextRequests() {
+  const settings = await getSettings();
+  const response = await fetch(macBrowserContextRequestsEndpoint(settings.endpoint));
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ok === false) {
+    throw new Error(`Browser DOM request poll failed: HTTP ${response.status} ${JSON.stringify(body)}`);
+  }
+  const requests = Array.isArray(body.requests) ? body.requests : [];
+  for (const request of requests) {
+    const requestId = requiredMessageText(request?.request_id, "request_id");
+    try {
+      const tab = await getActiveTab();
+      if (!tab?.id || tab.windowId === undefined || !tab.url) throw new Error("no active Browser tab");
+      const page = await collectFromTab(tab.id);
+      if (!page.text?.trim() || !page.url || !page.title) throw new Error("active tab did not expose complete DOM context");
+      await postMacBrowserContextResponse(settings.endpoint, {
+        request_id: requestId,
+        status: "captured",
+        captured_at: new Date().toISOString(),
+        tab_id: tab.id,
+        window_id: tab.windowId,
+        url: page.url,
+        title: page.title,
+        text: page.text,
+        ...(page.selected_text ? { selected_text: page.selected_text } : {}),
+        dom: page.dom ?? {},
+        metadata: page.metadata ?? {},
+      });
+    } catch (error) {
+      await postMacBrowserContextResponse(settings.endpoint, {
+        request_id: requestId,
+        status: "failed",
+        code: "browser_dom_capture_failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
+async function postMacBrowserContextResponse(endpoint: string, body: Record<string, unknown>) {
+  const response = await fetch(macBrowserContextResponsesEndpoint(endpoint), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.ok === false) {
+    throw new Error(`Browser DOM response rejected: HTTP ${response.status} ${JSON.stringify(result)}`);
+  }
+}
+
+function macBrowserContextRequestsEndpoint(endpoint: string): string {
+  const url = new URL(endpoint);
+  url.pathname = "/automation/v1/macos/browser-context-requests";
+  url.search = "";
+  return url.toString();
+}
+
+function macBrowserContextResponsesEndpoint(endpoint: string): string {
+  const url = new URL(endpoint);
+  url.pathname = "/automation/v1/macos/browser-context-responses";
+  url.search = "";
+  return url.toString();
 }
 
 export async function handleInfoCaptureMessage(message: any, sender: chrome.runtime.MessageSender) {
+  await ensureTabStateLoaded();
   if (message?.type === "context.capture.browser_attention") {
     const tab = sender.tab ?? await getActiveTab();
     return sendBrowserAttention(message.payload, message.kind, tab);
@@ -129,10 +258,19 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   }
   if (message?.type === "ambient-current-page") {
     const tab = await getActiveTab();
-    return captureAmbientRequest(tab, message.reason || "Explore current page with Browser Ambient");
+    return submitBrowserAutomation({ ...message, reason_kind: "manual" }, tab);
   }
   if (message?.type === "feedback-view") {
     return postViewFeedback(message);
+  }
+  if (message?.type === "poll-ambient-deliveries") {
+    return pollBrowserDeliveries(message);
+  }
+  if (message?.type === "ambient-delivery-interaction") {
+    return postBrowserDeliveryInteraction(message);
+  }
+  if (message?.type === "get-ambient-exact-view") {
+    return getAmbientExactView(message);
   }
   if (message?.type === "poll-context-views") {
     return pollContextViews(message);
@@ -158,11 +296,12 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   if (message?.type === "agent-task-action") {
     return updateAgentTask(message);
   }
-  if (message?.type === "trigger-ambient") {
-    // Fire-and-forget ambient request for the current tab. Used by both
-    // the side-panel "Analyze" button and the silent dwell trigger.
-    const tab = await getActiveTab();
-    return captureAmbientRequest(tab, message.reason || "Ambient analysis requested");
+  if (message?.type === "trigger-ambient" || message?.type === "automation.browser.signal") {
+    const tab = sender.tab ?? await getActiveTab();
+    return submitBrowserAutomation(
+      message?.type === "trigger-ambient" ? { ...message, reason_kind: "manual" } : message,
+      tab,
+    );
   }
   if (message?.type === "youtube-comprehension-gap") {
     // Ingest a single comprehension gap record produced by the YouTube
@@ -176,8 +315,12 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
     const state = getTabState(tab.id, tab.url);
     state.windowId = tab.windowId;
     state.settings = await getSettings();
-    const page = await collectFromTab(tab.id).catch(() => basicPageFromTab(tab));
-    const record = baseRecord({
+    const page = await collectFromTab(tab.id).catch(error => {
+      reportCaptureTaskFailure("youtube_gap_page_context", error, { tab_id: tab.id, url: tab.url });
+      return basicPageFromTab(tab);
+    });
+    updateTabStateFromPage(state, page, state.settings);
+    const record = legacyContextRecord({
       schemaName: "observation.youtube.comprehension_gap",
       page,
       state,
@@ -190,7 +333,7 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
         visit_id: state.visitId,
       },
     });
-    return postRecord(record, { process: true, cascadeViews: true });
+    return postLegacyRecord(record, { process: true, cascadeViews: true });
   }
   if (message?.type === "youtube-observation") {
     const tab = sender.tab ?? await getActiveTab();
@@ -203,45 +346,72 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   }
   if (message?.type === "update-info-capture-settings") {
     await chrome.storage.local.set(message.settings ?? {});
+    await configureInfoCaptureAlarms();
     return { ok: true, settings: await getSettings() };
+  }
+  if (message?.type === "retry-browser-capture") {
+    return retryBrowserCaptureFailure(requiredMessageText(message.failure_id, "failure_id"));
+  }
+  if (message?.type === "list-browser-capture-failures") {
+    return { ok: true, failures: await listBrowserCaptureFailures() };
   }
   return undefined;
 }
 
-async function ensureVisit(tab: chrome.tabs.Tab, reason: string) {
+async function ensureVisit(tab: chrome.tabs.Tab, reason: string, options: { allow_snapshot?: boolean } = {}) {
   if (!tab.id || !tab.url) return undefined;
   if (!shouldCaptureBrowserTab(tab)) return undefined;
-  rememberMeaningfulTab(tab);
   const settings = await getSettings();
-  const state = getTabState(tab.id, tab.url);
-  state.windowId = tab.windowId;
+  const state = getTabState(tab.id, tab.url, { windowId: tab.windowId });
   state.settings = settings;
+  let page: PageContext | undefined;
+  const loadPage = async () => {
+    if (!page) {
+      page = await collectFromTab(tab.id!).catch(error => {
+        reportCaptureTaskFailure("visit_page_context", error, { tab_id: tab.id, url: tab.url });
+        return basicPageFromTab(tab);
+      });
+      updateTabStateFromPage(state, page, settings);
+    }
+    return page;
+  };
   if (!state.visitRecorded && settings.captureStream) {
-    state.visitRecorded = true;
-    const page = await collectFromTab(tab.id).catch(() => basicPageFromTab(tab));
-    await sendVisit(page, state, reason);
-    if (page.search?.query) await sendSearchQuery(page, state).catch(() => undefined);
-    if (settings.snapshotOnVisit) await sendSnapshot(page, state, "initial_visit_snapshot", false).catch(() => undefined);
+    const currentPage = await loadPage();
+    const visit = await sendVisit(currentPage, state, reason);
+    if (visit.ok || visit.failure) {
+      state.visitRecorded = true;
+      await persistTabStates();
+    }
+    if (currentPage.search?.query) {
+      await sendSearchQuery(currentPage, state).catch(error => {
+        reportCaptureTaskFailure("search_query", error, { tab_id: tab.id, url: tab.url });
+      });
+    }
   }
+  if (settings.captureStream
+    && settings.snapshotOnVisit
+    && !state.initialSnapshotRecorded
+    && options.allow_snapshot !== false) {
+    const snapshot = await sendSnapshot(await loadPage(), state, "initial_visit_snapshot", false);
+    if (snapshot.ok || snapshot.failure) state.initialSnapshotRecorded = true;
+  }
+  await persistTabStates();
   return state;
 }
 
 async function captureHeartbeat(tab: chrome.tabs.Tab) {
   if (!tab.id || !tab.url) return { ok: false, error: "no active tab" };
   if (!shouldCaptureBrowserTab(tab)) return { ok: true, skipped: "ignored tab" };
-  const state = getTabState(tab.id, tab.url);
-  state.windowId = tab.windowId;
+  const state = getTabState(tab.id, tab.url, { windowId: tab.windowId });
   state.settings = await getSettings();
   const page = await collectFromTab(tab.id);
-  const record = baseRecord({
-    schemaName: "observation.browser_page_heartbeat",
-    page,
-    state,
-    contentText: undefined,
-    acquisitionMode: "passive",
-    reason: "periodic active tab heartbeat",
-    importance: 0.2,
-    payload: {
+  updateTabStateFromPage(state, page, state.settings);
+  const occurredAt = page.observed_at ?? new Date().toISOString();
+  return submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "interaction", "interaction_heartbeat", occurredAt),
+    page: browserPage(page),
+    content: {},
+    facts: jsonFacts({
       visit_id: state.visitId,
       dwell_seconds: Math.round((Date.now() - state.startedAt) / 1000),
       active_seconds: Math.round((Date.now() - state.activatedAt) / 1000),
@@ -249,107 +419,220 @@ async function captureHeartbeat(tab: chrome.tabs.Tab) {
       scroll_events: page.scroll_events,
       selection_count: page.selection_count,
       selected_text_length: page.selected_text?.length ?? 0,
-      visible: true,
-    },
+      attention_evidence: "chrome_focused_window_active_tab",
+    }),
   });
-  return postRecord(record);
 }
 
 async function captureSnapshot(tab: chrome.tabs.Tab | undefined, reason: string, manual: boolean, manualSaveReason?: string) {
   if (!tab?.id || !tab.url) return { ok: false, error: "no active tab" };
   await ensureVisit(tab, "snapshot_requested");
-  const state = getTabState(tab.id, tab.url);
-  state.windowId = tab.windowId;
+  const state = getTabState(tab.id, tab.url, { windowId: tab.windowId });
   state.settings = await getSettings();
   const page = await collectFromTab(tab.id);
+  updateTabStateFromPage(state, page, state.settings);
   return sendSnapshot(page, state, reason, manual, manualSaveReason);
 }
 
-async function captureAmbientRequest(tab: chrome.tabs.Tab | undefined, reason: string) {
-  if (!tab?.id || !tab.url) return { ok: false, error: "no active tab" };
-  await ensureVisit(tab, "ambient_requested");
+async function submitBrowserAutomation(message: any, tab: chrome.tabs.Tab | undefined) {
+  if (!tab?.id || !tab.url) return { ok: false, error: "no active tab", code: "browser_tab_missing" };
+  if (!shouldCaptureBrowserTab(tab)) return { ok: false, error: "tab is excluded from Browser Capture", code: "browser_tab_excluded" };
+  const settings = await getSettings();
   const state = getTabState(tab.id, tab.url);
   state.windowId = tab.windowId;
-  state.settings = await getSettings();
+  state.settings = settings;
   const page = await collectFromTab(tab.id);
-  const record = baseRecord({
-    schemaName: "observation.browser_ambient_requested",
-    page,
-    state,
-    contentText: page.text,
-    acquisitionMode: "manual",
-    reason,
-    importance: 0.98,
-    payload: {
+  const privacy = privacyForUrl(page.url ?? tab.url, settings);
+  const now = new Date().toISOString();
+  let event;
+  try {
+    event = buildBrowserAutomationEvent({
+      message,
+      tab: { id: tab.id, windowId: tab.windowId, url: tab.url, title: tab.title },
+      page,
       visit_id: state.visitId,
-      canonical_url: page.metadata?.canonical_url,
-      selected_text: page.selected_text,
-      selected_text_length: page.selected_text?.length ?? 0,
-      scroll_depth: page.scroll_depth,
-      scroll_events: page.scroll_events,
-      selection_count: page.selection_count,
-      dwell_seconds: Math.round((Date.now() - state.startedAt) / 1000),
-      metadata: page.metadata,
-      text_quality: page.text_quality,
-      search: page.search,
-      request: { kind: "ambient_explore", button_clicked: true, requested_at: new Date().toISOString() },
-    },
-  });
-  return postRecord(record, { process: true, cascadeViews: true });
+      started_at_ms: state.startedAt,
+      privacy,
+      now,
+      id_factory: () => crypto.randomUUID(),
+    });
+  } catch (error) {
+    const failure = error instanceof Error ? error.message : String(error);
+    await recordAutomationFailure({ event_id: message.event_id, navigation_id: message.navigation_id, url: page.url ?? tab.url }, browserAutomationEndpoint(settings.endpoint), failure);
+    return { ok: false, status: 0, code: "browser_event_build_failed", error: failure };
+  }
+  const endpoint = browserAutomationEndpoint(settings.endpoint);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.ok === false) {
+      await recordAutomationFailure(event, endpoint, `HTTP ${response.status}`, body);
+      return { ok: false, status: response.status, endpoint, event_id: event.event_id, ...body };
+    }
+    return { ok: true, status: response.status, endpoint, event_id: event.event_id, ...body };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await recordAutomationFailure(event, endpoint, message);
+    return { ok: false, status: 0, endpoint, event_id: event.event_id, error: message };
+  }
+}
+
+async function pollBrowserDeliveries(message: any) {
+  const settings = await getSettings();
+  let endpoint: string;
+  try {
+    endpoint = browserDeliveriesEndpoint(settings.endpoint, {
+      after: typeof message.after === "string" ? message.after : undefined,
+      limit: message.limit === undefined ? undefined : Number(message.limit),
+    });
+  } catch (error) {
+    return { ok: false, status: 0, code: "browser_delivery_query_invalid", error: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    const response = await fetch(endpoint);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.ok === false) {
+      await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
+      return { ok: false, status: response.status, endpoint, ...body };
+    }
+    return { ok: true, status: response.status, endpoint, ...body };
+  } catch (error) {
+    const failure = error instanceof Error ? error.message : String(error);
+    await recordAutomationFailure({}, endpoint, failure);
+    return { ok: false, status: 0, endpoint, error: failure };
+  }
+}
+
+async function postBrowserDeliveryInteraction(message: any) {
+  const settings = await getSettings();
+  const endpoint = browserInteractionEndpoint(settings.endpoint);
+  let interaction;
+  try {
+    interaction = buildBrowserDeliveryInteraction({
+      request_id: requiredMessageText(message.request_id, "request_id"),
+      delivery_id: requiredMessageText(message.delivery_id, "delivery_id"),
+      action: browserDeliveryAction(message.action),
+      snooze_until: typeof message.snooze_until === "string" ? message.snooze_until : undefined,
+      correction: typeof message.correction === "string" ? message.correction : undefined,
+      metadata: message.metadata && typeof message.metadata === "object" && !Array.isArray(message.metadata) ? message.metadata : {},
+      now: new Date().toISOString(),
+      id_factory: () => crypto.randomUUID(),
+    });
+  } catch (error) {
+    return { ok: false, status: 0, code: "browser_interaction_invalid", error: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(interaction),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.ok === false) {
+      await recordAutomationFailure(interaction, endpoint, `HTTP ${response.status}`, body);
+      return { ok: false, status: response.status, endpoint, interaction_id: interaction.id, ...body };
+    }
+    return { ok: true, status: response.status, endpoint, interaction_id: interaction.id, ...body };
+  } catch (error) {
+    const failure = error instanceof Error ? error.message : String(error);
+    await recordAutomationFailure(interaction, endpoint, failure);
+    return { ok: false, status: 0, endpoint, interaction_id: interaction.id, error: failure };
+  }
+}
+
+async function getAmbientExactView(message: any) {
+  const settings = await getSettings();
+  let endpoint: string;
+  try {
+    endpoint = browserExactViewEndpoint(settings.endpoint, {
+      view_id: requiredMessageText(message.view_id, "view_id"),
+      revision: Number(message.revision),
+    });
+  } catch (error) {
+    return { ok: false, status: 0, code: "exact_view_ref_invalid", error: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    const response = await fetch(endpoint);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.ok === false) {
+      await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
+      return { ok: false, status: response.status, endpoint, ...body };
+    }
+    return { ok: true, status: response.status, endpoint, view: body.view };
+  } catch (error) {
+    const failure = error instanceof Error ? error.message : String(error);
+    await recordAutomationFailure({}, endpoint, failure);
+    return { ok: false, status: 0, endpoint, error: failure };
+  }
+}
+
+function requiredMessageText(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${field} is required`);
+  return value.trim();
+}
+
+function browserDeliveryAction(value: unknown): BrowserDeliveryAction {
+  if (value === "accept" || value === "dismiss" || value === "later" || value === "cancel" || value === "retry" || value === "correct") {
+    return value;
+  }
+  throw new Error(`unsupported Browser Delivery action: ${String(value)}`);
 }
 
 async function sendVisit(page: PageContext, state: TabState, reason: string) {
-  return postRecord(baseRecord({
-    schemaName: "observation.browser_page_visit",
-    page,
-    state,
-    contentText: undefined,
-    acquisitionMode: "passive",
-    reason,
-    importance: 0.15,
-    payload: {
+  const tab = await chrome.tabs.get(state.tabId);
+  const occurredAt = page.observed_at ?? state.openedAt;
+  return submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "navigation", "navigation_opened", occurredAt),
+    navigation: {
+      navigation_id: state.visitId,
+      transition: "opened",
+      ...(state.documentId ? { document_id: state.documentId } : {}),
+      frame_id: state.frameId ?? 0,
+    },
+    page: browserPage(page),
+    content: {},
+    facts: jsonFacts({
       visit_id: state.visitId,
       tab_id: state.tabId,
       window_id: state.windowId,
       opened_at: state.openedAt,
       transition_reason: reason,
       metadata: page.metadata,
-    },
-  }));
+    }),
+  });
 }
 
 async function sendSearchQuery(page: PageContext, state: TabState) {
   if (!page.search?.query) return { ok: false, error: "no search query" };
-  return postRecord(baseRecord({
-    schemaName: "observation.browser_search_query",
-    page,
-    state,
-    contentText: page.search.query,
-    acquisitionMode: "passive",
-    reason: `search query on ${page.search.engine}`,
-    importance: 0.65,
-    payload: {
+  const tab = await chrome.tabs.get(state.tabId);
+  const occurredAt = page.search.searched_at ?? page.observed_at ?? new Date().toISOString();
+  return submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "interaction", "interaction_search", occurredAt),
+    page: browserPage(page),
+    content: {},
+    facts: jsonFacts({
       visit_id: state.visitId,
       engine: page.search.engine,
       query: page.search.query,
       searched_at: page.search.searched_at,
       canonical_url: page.metadata?.canonical_url,
       metadata: page.metadata,
-    },
-  }));
+    }),
+  });
 }
 
 async function sendSnapshot(page: PageContext, state: TabState, reason: string, manual: boolean, manualSaveReason?: string) {
-  const schemaName = manual ? "observation.browser_page_saved" : "observation.browser_page_snapshot";
-  const result = await postRecord(baseRecord({
-    schemaName,
-    page,
-    state,
-    contentText: page.text,
-    acquisitionMode: manual ? "manual" : "passive",
-    reason,
-    importance: manual ? 0.95 : 0.35,
-    payload: {
+  const tab = await chrome.tabs.get(state.tabId);
+  const occurredAt = page.observed_at ?? new Date().toISOString();
+  const result = await submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "page", manual ? "page_saved" : "page_snapshot", occurredAt, manual ? crypto.randomUUID() : undefined),
+    page: browserPage(page),
+    content: compactContent({ text: page.text, selected_text: page.selected_text }),
+    facts: jsonFacts({
       visit_id: state.visitId,
       canonical_url: page.metadata?.canonical_url,
       selected_text: page.selected_text,
@@ -363,38 +646,47 @@ async function sendSnapshot(page: PageContext, state: TabState, reason: string, 
       text_quality: page.text_quality,
       search: page.search,
       manual_save_reason: manualSaveReason,
+      user_intent: manual ? "save_current_page" : undefined,
       reader_enrichment: manual,
-    },
-  }));
+    }),
+  });
   if (result.ok) {
     state.snapshotCount += 1;
     state.lastSnapshotAt = Date.now();
+    await persistTabStates();
   }
   return result;
 }
 
 async function sendBrowserAttention(payload: any, kind: string, tab?: chrome.tabs.Tab) {
   if (!payload?.selected_text) return { ok: false, error: "missing selected_text" };
+  if (!tab?.id || !tab.url) return { ok: false, error: "no active tab" };
+  await ensureVisit(tab, `browser_text_${kind}`);
   const settings = await getSettings();
-  const privacy = privacyForUrl(payload.url, settings);
-  const schemaName = kind === "copied" ? "observation.browser_text_copied" : "observation.browser_text_selected";
-  return postRecord({
-    schema: { name: schemaName, version: 1 },
-    source: { type: "browser", connector: "chrome-acp" },
-    scope: { domain: payload.domain, app: "chrome" },
-    time: { observed_at: payload.selected_at ?? new Date().toISOString(), captured_at: new Date().toISOString() },
-    content: { title: payload.title, url: payload.url, text: payload.selected_text },
-    acquisition: { mode: "passive", actor: "user", reason: kind === "copied" ? "browser text copied" : "browser text selected" },
-    signal: { importance: kind === "copied" ? 0.9 : 0.75, confidence: 0.95, status: "inbox" },
-    privacy,
-    payload: {
+  const state = getTabState(tab.id, tab.url, { windowId: tab.windowId });
+  state.settings = settings;
+  const occurredAt = typeof payload.selected_at === "string" ? payload.selected_at : new Date().toISOString();
+  return submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "selection", kind === "copied" ? "copy" : "selection", occurredAt),
+    page: browserPage({
+      url: payload.url,
+      title: payload.title,
+      domain: payload.domain,
+      metadata: { canonical_url: payload.canonical_url },
+    }),
+    content: { selected_text: String(payload.selected_text).trim() },
+    facts: jsonFacts({
       ...payload,
       copied: kind === "copied",
       tab_id: tab?.id,
       window_id: tab?.windowId,
       attention_signal: kind,
       attention_weight: kind === "copied" ? 1.0 : 0.85,
-    },
+    }),
+    policy: browserPolicyForUrl(String(payload.url), {
+      excluded_domains: settings.excludedDomains,
+      allow_external_model: settings.allowExternalLlm,
+    }),
   });
 }
 
@@ -509,16 +801,23 @@ function sanitizeWritingPageContext(value: unknown) {
 }
 
 async function sendLifecycleEvent(state: TabState, event: string) {
-  return postRecord({
-    schema: { name: "observation.browser_lifecycle", version: 1 },
-    source: { type: "browser", connector: "chrome-acp" },
-    scope: { domain: state.domain, app: "chrome" },
-    time: { observed_at: new Date().toISOString(), captured_at: new Date().toISOString() },
-    content: { title: state.title, url: state.url },
-    acquisition: { mode: "passive", actor: "user", reason: event },
-    signal: { importance: 0.1, confidence: 0.9, status: "inbox" },
-    privacy: state.privacy ?? privacyForUrl(state.url, await getSettings()),
-    payload: { visit_id: state.visitId, event, dwell_seconds: Math.round((Date.now() - state.startedAt) / 1000) },
+  const occurredAt = new Date().toISOString();
+  const tab = await chrome.tabs.get(state.tabId).catch(() => undefined);
+  return submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "navigation", "navigation_lifecycle", occurredAt),
+    navigation: {
+      navigation_id: state.visitId,
+      transition: "lifecycle",
+      ...(state.documentId ? { document_id: state.documentId } : {}),
+      frame_id: state.frameId ?? 0,
+    },
+    page: browserPage({ title: state.title, url: state.url, domain: state.domain }),
+    content: {},
+    facts: jsonFacts({
+      visit_id: state.visitId,
+      event,
+      dwell_seconds: Math.round((Date.now() - state.startedAt) / 1000),
+    }),
   });
 }
 
@@ -527,31 +826,43 @@ async function sendYouTubeObservation(message: any, tab?: chrome.tabs.Tab) {
   const schemaName = youtubeObservationSchema(message.schemaName);
   if (!schemaName) return { ok: false, error: "unsupported youtube observation schema" };
   await ensureVisit(tab, "youtube_observation");
-  const state = getTabState(tab.id, tab.url);
-  state.windowId = tab.windowId;
+  const state = getTabState(tab.id, tab.url, { windowId: tab.windowId });
   state.settings = await getSettings();
-  const page = await collectFromTab(tab.id).catch(() => basicPageFromTab(tab));
+  const page = await collectFromTab(tab.id).catch(error => {
+    reportCaptureTaskFailure("youtube_observation_page_context", error, { tab_id: tab.id, url: tab.url });
+    return basicPageFromTab(tab);
+  });
   const payload = message.payload && typeof message.payload === "object" ? message.payload : {};
   const text = youtubeObservationText(schemaName, payload);
-  const record = baseRecord({
-    schemaName,
-    page,
-    state,
-    contentText: text,
-    acquisitionMode: "passive",
-    reason: `YouTube ${schemaName.replace(/^observation\.youtube\./, "").replace(/_/g, " ")} observed by content script`,
-    importance: schemaName === "observation.youtube.caption_fragment" ? 0.78 : 0.48,
-    payload: {
+  const action = schemaName === "observation.youtube.caption_fragment"
+    ? "media_caption"
+    : schemaName === "observation.youtube.caption_state"
+      ? "media_caption_state"
+      : schemaName === "observation.youtube.paused"
+        ? "media_paused"
+        : "media_played";
+  const occurredAt = typeof payload.observed_at === "string"
+    ? payload.observed_at
+    : page.observed_at ?? new Date().toISOString();
+  return submitBrowserCaptureEvent({
+    ...await browserEventBase(state, tab, "media", action, occurredAt),
+    page: browserPage({
+      ...page,
+      ...(typeof payload.video_url === "string" ? { url: payload.video_url } : {}),
+      ...(typeof payload.video_title === "string" ? { title: payload.video_title } : {}),
+    }),
+    content: compactContent({
+      text,
+      media_id: typeof payload.video_id === "string" ? payload.video_id : undefined,
+      media_url: typeof payload.video_url === "string" ? payload.video_url : page.url,
+    }),
+    facts: jsonFacts({
       ...payload,
       visit_id: state.visitId,
       tab_id: tab.id,
       window_id: tab.windowId,
-    },
+    }),
   });
-  if (typeof payload.observed_at === "string") record.time.observed_at = payload.observed_at;
-  if (typeof payload.video_url === "string") record.content.url = payload.video_url;
-  if (typeof payload.video_title === "string") record.content.title = payload.video_title;
-  return postRecord(record, { process: true, cascadeViews: true });
 }
 
 function youtubeObservationSchema(value: unknown): string | undefined {
@@ -576,7 +887,175 @@ function youtubeObservationText(schemaName: string, payload: Record<string, unkn
   return undefined;
 }
 
-function baseRecord(input: {
+async function captureNavigation(
+  details: chrome.webNavigation.WebNavigationTransitionCallbackDetails,
+  action: "navigation_committed" | "navigation_history_state",
+) {
+  await ensureTabStateLoaded();
+  if (details.tabId < 0 || !details.documentId) {
+    throw new Error(`${action} is missing tab or document identity`);
+  }
+  const tab = await chrome.tabs.get(details.tabId);
+  if (!tab.id || tab.windowId === undefined || !shouldCaptureBrowserTab({ ...tab, url: details.url })) return;
+  let state = details.frameId === 0
+    ? getTabState(details.tabId, details.url, {
+        windowId: tab.windowId,
+        documentId: details.documentId,
+        frameId: details.frameId,
+    })
+    : getTabState(details.tabId, tab.url ?? details.url, { windowId: tab.windowId });
+  if (details.frameId === 0) {
+    await ensureVisit(
+      { ...tab, url: details.url },
+      action,
+      { allow_snapshot: action === "navigation_history_state" },
+    );
+    state = getTabState(details.tabId, details.url, {
+      windowId: tab.windowId,
+      documentId: details.documentId,
+      frameId: details.frameId,
+    });
+  }
+  state.settings = await getSettings();
+  const occurredAt = new Date(details.timeStamp).toISOString();
+  const navigationIdentity = browserNavigationIdentity({
+    visit_id: state.visitId,
+    action,
+    document_id: details.documentId,
+    frame_id: details.frameId,
+    timestamp_ms: details.timeStamp,
+  });
+  const base = await browserEventBase(
+    state,
+    tab,
+    "navigation",
+    action,
+    occurredAt,
+    `${details.documentId}:${details.frameId}:${Math.trunc(details.timeStamp)}`,
+  );
+  return submitBrowserCaptureEvent({
+    ...base,
+    event_id: navigationIdentity.event_id,
+    policy: browserPolicyForUrl(details.url, {
+      excluded_domains: state.settings.excludedDomains,
+      allow_external_model: state.settings.allowExternalLlm,
+    }),
+    browser: { ...base.browser, document_id: details.documentId, frame_id: details.frameId },
+    navigation: {
+      navigation_id: navigationIdentity.navigation_id,
+      transition: action === "navigation_committed" ? "committed" : "history_state",
+      document_id: details.documentId,
+      frame_id: details.frameId,
+      parent_frame_id: details.parentFrameId,
+    },
+    page: browserPage({ url: details.url, title: tab.title, domain: new URL(details.url).hostname }),
+    content: {},
+    facts: jsonFacts({
+      transition_type: details.transitionType,
+      transition_qualifiers: details.transitionQualifiers,
+      frame_type: details.frameType,
+    }),
+  });
+}
+
+async function browserEventBase(
+  state: TabState,
+  tab: chrome.tabs.Tab | undefined,
+  kind: BrowserCaptureEventPayload["kind"],
+  action: BrowserCaptureEventPayload["action"],
+  occurredAt: string,
+  identitySuffix?: string,
+) {
+  const window = await chrome.windows.get(state.windowId).catch(() => undefined);
+  const tabActive = Boolean(tab?.active);
+  const windowFocused = Boolean(window?.focused);
+  const attention = classifyBrowserAttention({
+    tab_active: tabActive,
+    window_focused: windowFocused,
+    window_state: window?.state,
+  });
+  const eventIdentity = identitySuffix ?? `${state.visitId}:${action}:${occurredAt}`;
+  return {
+    version: 1 as const,
+    event_id: `browser:${action}:${eventIdentity}`.slice(0, 240),
+    kind,
+    action,
+    occurred_at: new Date(occurredAt).toISOString(),
+    captured_at: new Date().toISOString(),
+    source: { connector: "chrome-extension" as const, connection_id: "chrome:default" },
+    browser: {
+      tab_id: state.tabId,
+      window_id: state.windowId,
+      visit_id: state.visitId,
+      attention,
+      tab_active: tabActive,
+      window_focused: windowFocused,
+      ...(state.documentId ? { document_id: state.documentId } : {}),
+      ...(state.frameId !== undefined ? { frame_id: state.frameId } : {}),
+    },
+    policy: browserPolicyForUrl(state.url, {
+      excluded_domains: state.settings.excludedDomains,
+      allow_external_model: state.settings.allowExternalLlm,
+    }),
+  };
+}
+
+function browserPage(page: PageContext): NonNullable<BrowserCaptureEventPayload["page"]> {
+  if (!page.url) throw new Error("Browser Capture page URL is required");
+  const url = new URL(page.url);
+  const canonical = typeof page.metadata?.canonical_url === "string" && page.metadata.canonical_url
+    ? new URL(page.metadata.canonical_url).toString()
+    : undefined;
+  return {
+    url: url.toString(),
+    ...(page.title?.trim() ? { title: page.title.trim().slice(0, 500) } : {}),
+    domain: url.hostname,
+    ...(canonical ? { canonical_url: canonical } : {}),
+  };
+}
+
+function updateTabStateFromPage(state: TabState, page: PageContext, settings: InfoSettings) {
+  if (page.url) {
+    state.url = new URL(page.url).toString();
+    state.domain = new URL(page.url).hostname;
+  }
+  state.title = page.title;
+  state.privacy = privacyForUrl(page.url ?? state.url, settings);
+}
+
+function compactContent(input: BrowserCaptureEventPayload["content"]): BrowserCaptureEventPayload["content"] {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as BrowserCaptureEventPayload["content"];
+}
+
+function jsonFacts(input: Record<string, unknown>): BrowserCaptureEventPayload["facts"] {
+  return JSON.parse(JSON.stringify(input)) as BrowserCaptureEventPayload["facts"];
+}
+
+async function submitBrowserCaptureEvent(input: unknown) {
+  const settings = await getSettings();
+  const event = buildBrowserCaptureEvent(input);
+  const endpoint = browserCaptureEndpoint(settings.endpoint);
+  const result = await deliverBrowserCaptureEvent({ event, endpoint, outbox: chromeBrowserCaptureOutbox });
+  if (!result.ok) {
+    console.error(JSON.stringify({
+      component: "browser-capture-extension",
+      event: "browser_capture.delivery_failed",
+      event_id: event.event_id,
+      endpoint,
+      status: result.status,
+      code: result.error?.code,
+      attempts: result.failure?.attempts,
+    }));
+  }
+  return {
+    ...result,
+    endpoint,
+    event_id: event.event_id,
+    action: event.action,
+  };
+}
+
+function legacyContextRecord(input: {
   schemaName: string;
   page: PageContext;
   state: TabState;
@@ -603,7 +1082,7 @@ function baseRecord(input: {
   };
 }
 
-async function postRecord(record: any, options: { process?: boolean; cascadeViews?: boolean } = {}) {
+async function postLegacyRecord(record: any, options: { process?: boolean; cascadeViews?: boolean } = {}) {
   if (record.privacy?.retention === "do_not_store") {
     return { ok: true, stored: false, reason: "privacy do_not_store", schema: record.schema.name };
   }
@@ -616,9 +1095,92 @@ async function postRecord(record: any, options: { process?: boolean; cascadeView
       body: JSON.stringify(record),
     });
     const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      await recordCaptureFailure(record, endpoint, `HTTP ${response.status}`, body);
+    }
     return { ok: response.ok, status: response.status, body, schema: record.schema.name, endpoint };
   } catch (error) {
-    return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error), schema: record.schema.name, endpoint };
+    const message = error instanceof Error ? error.message : String(error);
+    await recordCaptureFailure(record, endpoint, message);
+    return { ok: false, status: 0, error: message, schema: record.schema.name, endpoint };
+  }
+}
+
+const chromeBrowserCaptureOutbox: BrowserCaptureOutbox & { list(): Promise<BrowserCaptureTransportFailure[]> } = new SerializedBrowserCaptureOutbox({
+  async read() {
+    const stored = await chrome.storage.local.get(BROWSER_CAPTURE_OUTBOX_KEY);
+    return stored[BROWSER_CAPTURE_OUTBOX_KEY];
+  },
+  async write(records) {
+    await chrome.storage.local.set({ [BROWSER_CAPTURE_OUTBOX_KEY]: records });
+  },
+});
+
+async function retryBrowserCaptureFailure(id: string) {
+  const failure = (await listBrowserCaptureFailures()).find(item => item.id === id && item.status === "pending");
+  if (!failure) throw new Error(`Pending Browser Capture transport failure is missing: ${id}`);
+  const result = await deliverBrowserCaptureEvent({
+    event: failure.event,
+    endpoint: failure.endpoint,
+    outbox: chromeBrowserCaptureOutbox,
+    previous: failure,
+  });
+  return { ...result, event_id: failure.event.event_id, failure_id: failure.id };
+}
+
+async function listBrowserCaptureFailures(): Promise<BrowserCaptureTransportFailure[]> {
+  return chromeBrowserCaptureOutbox.list();
+}
+
+function reportCaptureTaskFailure(stage: string, error: unknown, details: Record<string, unknown>) {
+  console.error(JSON.stringify({
+    component: "browser-capture-extension",
+    event: "browser_capture.task_failed",
+    stage,
+    error: error instanceof Error ? error.message : String(error),
+    ...details,
+  }));
+}
+
+async function recordCaptureFailure(record: any, endpoint: string, message: string, response?: unknown) {
+  const failure = {
+    id: crypto.randomUUID(),
+    failed_at: new Date().toISOString(),
+    endpoint,
+    schema: record?.schema?.name,
+    observed_at: record?.time?.observed_at,
+    source_id: record?.source?.id,
+    message,
+    response,
+  };
+  console.error("[info-capture] ingest failed", failure);
+  try {
+    const stored = await chrome.storage.local.get("infoCaptureDeadLetters");
+    const current = Array.isArray(stored.infoCaptureDeadLetters) ? stored.infoCaptureDeadLetters : [];
+    await chrome.storage.local.set({ infoCaptureDeadLetters: [...current.slice(-99), failure] });
+  } catch (error) {
+    console.error("[info-capture] failed to persist dead letter", error, failure);
+  }
+}
+
+async function recordAutomationFailure(event: any, endpoint: string, message: string, response?: unknown) {
+  const failure = {
+    id: crypto.randomUUID(),
+    failed_at: new Date().toISOString(),
+    endpoint,
+    event_id: event?.event_id,
+    navigation_id: event?.navigation_id,
+    url: event?.url,
+    message,
+    response,
+  };
+  console.error("[info-capture] Browser Automation failed", failure);
+  try {
+    const stored = await chrome.storage.local.get("infoAutomationDeadLetters");
+    const current = Array.isArray(stored.infoAutomationDeadLetters) ? stored.infoAutomationDeadLetters : [];
+    await chrome.storage.local.set({ infoAutomationDeadLetters: [...current.slice(-99), failure] });
+  } catch (error) {
+    console.error("[info-capture] failed to persist Automation dead letter", error, failure);
   }
 }
 
@@ -808,39 +1370,15 @@ async function getActiveTab() {
 }
 
 async function getHeartbeatTabs(): Promise<chrome.tabs.Tab[]> {
-  const candidates = await getCurrentCandidateTabs();
-  const remembered = await getRememberedMeaningfulTab();
-  return dedupeTabs([...candidates, ...(remembered ? [remembered] : [])])
-    .filter(shouldCaptureBrowserTab)
-    .slice(0, HEARTBEAT_MAX_TABS);
+  return (await getCurrentCandidateTabs()).filter(shouldCaptureBrowserTab).slice(0, 1);
 }
 
 async function getCurrentCandidateTabs(): Promise<chrome.tabs.Tab[]> {
-  const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] }).catch(() => []);
-  const activeTabs = windows
-    .filter(window => window.state !== "minimized")
-    .sort((a, b) => Number(Boolean(b.focused)) - Number(Boolean(a.focused)))
-    .flatMap(window => (window.tabs ?? []).filter(tab => tab.active));
-  const fallback = activeTabs.length
-    ? []
-    : await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
-  return dedupeTabs([...activeTabs, ...fallback])
+  const focusedWindow = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
+  if (!focusedWindow?.focused || focusedWindow.state === "minimized" || focusedWindow.id === undefined) return [];
+  return (await chrome.tabs.query({ active: true, windowId: focusedWindow.id }).catch(() => []))
     .filter(tab => tab?.id && tab.url)
     .sort((a, b) => tabCaptureScore(b) - tabCaptureScore(a));
-}
-
-async function getRememberedMeaningfulTab(): Promise<chrome.tabs.Tab | undefined> {
-  if (!lastMeaningfulTab) return undefined;
-  if (Date.now() - lastMeaningfulTab.rememberedAt > RECENT_MEANINGFUL_TAB_TTL_MS) {
-    lastMeaningfulTab = null;
-    return undefined;
-  }
-  const tab = await chrome.tabs.get(lastMeaningfulTab.tabId).catch(() => undefined);
-  if (!tab?.id || !tab.url || !shouldCaptureBrowserTab(tab)) {
-    lastMeaningfulTab = null;
-    return undefined;
-  }
-  return tab;
 }
 
 function dedupeTabs(tabs: chrome.tabs.Tab[]): chrome.tabs.Tab[] {
@@ -852,21 +1390,6 @@ function dedupeTabs(tabs: chrome.tabs.Tab[]): chrome.tabs.Tab[] {
     result.push(tab);
   }
   return result;
-}
-
-function rememberMeaningfulTab(tab: chrome.tabs.Tab): void {
-  if (!tab.id || !tab.url || !shouldRememberBrowserTab(tab)) return;
-  lastMeaningfulTab = {
-    tabId: tab.id,
-    windowId: tab.windowId,
-    url: tab.url,
-    title: tab.title,
-    rememberedAt: Date.now(),
-  };
-}
-
-function shouldRememberBrowserTab(tab: chrome.tabs.Tab): boolean {
-  return shouldCaptureBrowserTab(tab) && tabCaptureScore(tab) >= 10;
 }
 
 function shouldCaptureBrowserTab(tab: chrome.tabs.Tab): boolean {
@@ -917,28 +1440,45 @@ async function getSettings(): Promise<InfoSettings> {
   return { ...DEFAULT_SETTINGS, ...(await chrome.storage.local.get(keys)) };
 }
 
-function getTabState(tabId: number, url: string, options: { markActivated?: boolean } = {}): TabState {
-  let state = tabState.get(tabId);
-  if (!state || state.url !== url) {
-    let domain = "";
-    try { domain = new URL(url).hostname; } catch {}
-    state = {
-      tabId,
-      url,
-      domain,
-      visitId: crypto.randomUUID(),
-      openedAt: new Date().toISOString(),
-      startedAt: Date.now(),
-      activatedAt: Date.now(),
-      visitRecorded: false,
-      snapshotCount: 0,
-      lastSnapshotAt: 0,
-      settings: DEFAULT_SETTINGS,
-    };
-    tabState.set(tabId, state);
-  }
-  if (options.markActivated) state.activatedAt = Date.now();
+function getTabState(
+  tabId: number,
+  url: string,
+  options: { markActivated?: boolean; windowId?: number; documentId?: string; frameId?: number } = {},
+): TabState {
+  const now = Date.now();
+  const resolved = resolveBrowserVisitState({
+    existing: tabState.get(tabId),
+    tab_id: tabId,
+    window_id: options.windowId ?? tabState.get(tabId)?.windowId ?? 0,
+    url,
+    ...(options.documentId ? { document_id: options.documentId } : {}),
+    ...(options.frameId !== undefined ? { frame_id: options.frameId } : {}),
+    mark_activated: options.markActivated,
+    now_ms: now,
+    now_iso: new Date(now).toISOString(),
+    id_factory: () => crypto.randomUUID(),
+  });
+  const state: TabState = { ...resolved.state, settings: tabState.get(tabId)?.settings ?? DEFAULT_SETTINGS };
+  tabState.set(tabId, state);
   return state;
+}
+
+async function ensureTabStateLoaded() {
+  if (!tabStateReady) {
+    tabStateReady = (async () => {
+      const stored = await chrome.storage.session.get(BROWSER_TAB_STATE_KEY);
+      for (const persisted of parsePersistedBrowserTabStates(stored[BROWSER_TAB_STATE_KEY])) {
+        tabState.set(persisted.tabId, { ...persisted, settings: DEFAULT_SETTINGS });
+      }
+    })();
+  }
+  await tabStateReady;
+}
+
+async function persistTabStates() {
+  await chrome.storage.session.set({
+    [BROWSER_TAB_STATE_KEY]: [...tabState.values()].map(({ settings: _settings, ...state }) => state),
+  });
 }
 
 function summarizeState(state?: TabState) {
@@ -981,6 +1521,8 @@ function secretPrivacy() {
 
 function contextIngestEndpoint(settings: InfoSettings, options: { process?: boolean; cascadeViews?: boolean }) {
   const url = new URL(settings.endpoint || DEFAULT_SETTINGS.endpoint);
+  url.pathname = "/context/ingest";
+  url.search = "";
   if (options.process) url.searchParams.set("process", "true");
   if (options.cascadeViews) url.searchParams.set("cascade_views", "true");
   return url.toString();

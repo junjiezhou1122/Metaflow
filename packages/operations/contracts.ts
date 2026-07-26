@@ -1,0 +1,199 @@
+import { z } from "zod";
+import {
+  ExactViewRefSchema,
+  ExecuteForgetParametersSchema,
+  ForgetRequestParametersSchema,
+  IdentifierSchema,
+  JsonValueSchema,
+  RelationTraversalQuerySchema,
+  SourceTombstoneParametersSchema,
+  TimestampSchema,
+  ViewQuerySchema,
+  type JsonObject,
+  type JsonValue,
+} from "@info/view";
+import {
+  ExactTransformationRefSchema,
+  TransformationSchema,
+} from "@info/transformation";
+import {
+  RecordFeedbackInputSchema,
+  StartExecutionParametersSchema,
+} from "@info/execution";
+import { CaptureBatchSchema } from "@info/capture";
+
+export const OPERATION_NAMES = [
+  "catalog.list",
+  "capture.ingest",
+  "view.get",
+  "view.search",
+  "view.traverse",
+  "view.tombstone",
+  "transformation.submit",
+  "transformation.get",
+  "run.execute",
+  "run.inspect",
+  "run.cancel",
+  "feedback.submit",
+  "failure.inspect",
+  "policy.decision.get",
+  "privacy.forget.request",
+  "privacy.forget.execute",
+  "privacy.forget.inspect",
+  "trace.read",
+] as const;
+
+export const OperationNameSchema = z.enum(OPERATION_NAMES);
+
+export const OperationInputSchemas = {
+  "catalog.list": z.object({}).strict(),
+  "capture.ingest": z.object({ batch: CaptureBatchSchema }).strict(),
+  "view.get": z.object({ ref: ExactViewRefSchema }).strict(),
+  "view.search": z.object({ query: ViewQuerySchema.default({}) }).strict(),
+  "view.traverse": z.object({ query: RelationTraversalQuerySchema }).strict(),
+  "view.tombstone": SourceTombstoneParametersSchema,
+  "transformation.submit": z.object({
+    transformation: TransformationSchema,
+    expected_revision: z.number().int().nonnegative(),
+    idempotency_key: IdentifierSchema.optional(),
+  }).strict(),
+  "transformation.get": z.object({ ref: ExactTransformationRefSchema }).strict(),
+  "run.execute": z.object({
+    transformation: ExactTransformationRefSchema,
+    parameters: StartExecutionParametersSchema,
+  }).strict(),
+  "run.inspect": z.object({ run_id: IdentifierSchema }).strict(),
+  "run.cancel": z.object({ run_id: IdentifierSchema }).strict(),
+  "feedback.submit": z.object({ feedback: RecordFeedbackInputSchema }).strict(),
+  "failure.inspect": z.object({ ref: ExactViewRefSchema }).strict(),
+  "policy.decision.get": z.object({ run_id: IdentifierSchema }).strict(),
+  "privacy.forget.request": ForgetRequestParametersSchema,
+  "privacy.forget.execute": ExecuteForgetParametersSchema,
+  "privacy.forget.inspect": z.object({ request_id: IdentifierSchema }).strict(),
+  "trace.read": z.discriminatedUnion("scope", [
+    z.object({ scope: z.literal("run"), run_id: IdentifierSchema }).strict(),
+    z.object({ scope: z.literal("capture"), connection_id: IdentifierSchema }).strict(),
+  ]),
+} satisfies Record<OperationName, z.ZodTypeAny>;
+
+export const OPERATION_DESCRIPTIONS: Record<OperationName, string> = {
+  "catalog.list": "List the canonical Metaflow v1 operation catalog.",
+  "capture.ingest": "Atomically admit one provider-neutral Capture Batch as Raw View revisions.",
+  "view.get": "Read one exact immutable View revision.",
+  "view.search": "Search View revisions through the View Store port.",
+  "view.traverse": "Traverse typed relations from one exact View revision.",
+  "view.tombstone": "Append an immutable source-deletion tombstone without claiming privacy erasure.",
+  "transformation.submit": "Commit one immutable Transformation revision.",
+  "transformation.get": "Read one exact Transformation revision.",
+  "run.execute": "Execute one committed Transformation revision with frozen inputs and policy.",
+  "run.inspect": "Inspect a Run, attempts, trace, committed outputs, and Failure evidence.",
+  "run.cancel": "Request cancellation of an active Run in this operation service.",
+  "feedback.submit": "Record feedback about one exact View revision.",
+  "failure.inspect": "Inspect one exact Failure View and its parsed evidence.",
+  "policy.decision.get": "Read the frozen View access decision for one Run.",
+  "privacy.forget.request": "Freeze a provenance impact plan or immediately execute a preauthorized sensitive cascade.",
+  "privacy.forget.execute": "Execute one confirmed frozen Forget plan across every governed cleanup store.",
+  "privacy.forget.inspect": "Inspect one content-free durable Forget audit and its cleanup receipts.",
+  "trace.read": "Read a durable Run or Capture trace.",
+};
+
+export const OperationRequestSchema = z.object({
+  operation: OperationNameSchema,
+  input: JsonValueSchema,
+}).strict();
+
+export const OperationPrincipalSchema = z.object({
+  id: IdentifierSchema,
+  grants: z.array(z.union([OperationNameSchema, z.literal("*")])).default([]),
+}).strict().superRefine((principal, context) => {
+  if (new Set(principal.grants).size !== principal.grants.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["grants"], message: "Operation grants must be unique" });
+  }
+});
+
+export const OperationContextSchema = z.object({
+  request_id: IdentifierSchema,
+  principal: OperationPrincipalSchema,
+}).strict();
+
+export const OperationErrorCategorySchema = z.enum([
+  "invalid_request",
+  "forbidden",
+  "not_found",
+  "conflict",
+  "failed_dependency",
+  "internal",
+]);
+
+export const OperationErrorSchema = z.object({
+  code: IdentifierSchema,
+  message: z.string().trim().min(1).max(2_000),
+  category: OperationErrorCategorySchema,
+  details: z.record(JsonValueSchema).default({}),
+}).strict();
+
+export const OperationSuccessSchema = z.object({
+  ok: z.literal(true),
+  request_id: IdentifierSchema,
+  operation: OperationNameSchema,
+  data: JsonValueSchema,
+}).strict();
+
+export const OperationFailureSchema = z.object({
+  ok: z.literal(false),
+  request_id: IdentifierSchema,
+  operation: OperationNameSchema.optional(),
+  error: OperationErrorSchema,
+}).strict();
+
+export const OperationEnvelopeSchema = z.union([OperationSuccessSchema, OperationFailureSchema]);
+
+export const OperationTraceEventSchema = z.object({
+  request_id: IdentifierSchema,
+  operation: OperationNameSchema.optional(),
+  actor: IdentifierSchema,
+  type: z.enum(["operation.started", "operation.succeeded", "operation.failed"]),
+  occurred_at: TimestampSchema,
+  details: z.record(JsonValueSchema).default({}),
+  error: OperationErrorSchema.optional(),
+}).strict();
+
+export type OperationName = z.infer<typeof OperationNameSchema>;
+export type OperationRequest = z.infer<typeof OperationRequestSchema>;
+export type OperationPrincipal = z.infer<typeof OperationPrincipalSchema>;
+export type OperationContext = z.infer<typeof OperationContextSchema>;
+export type OperationErrorCategory = z.infer<typeof OperationErrorCategorySchema>;
+export type OperationError = z.infer<typeof OperationErrorSchema>;
+export type OperationSuccess = z.infer<typeof OperationSuccessSchema>;
+export type OperationFailure = z.infer<typeof OperationFailureSchema>;
+export type OperationEnvelope = z.infer<typeof OperationEnvelopeSchema>;
+export type OperationTraceEvent = z.infer<typeof OperationTraceEventSchema>;
+
+export type OperationAuthorizationDecision = {
+  allowed: boolean;
+  reason: string;
+};
+
+export interface OperationAuthorizationPort {
+  authorize(input: {
+    principal: OperationPrincipal;
+    operation: OperationName;
+  }): Promise<OperationAuthorizationDecision>;
+}
+
+export interface OperationObserver {
+  record(event: OperationTraceEvent, cause?: unknown): Promise<void>;
+}
+
+export type OperationContextProvider = (input: {
+  transport: "cli" | "http" | "mcp";
+  operation?: string;
+}) => Promise<OperationContext> | OperationContext;
+
+export function operationData(value: unknown): JsonValue {
+  return JsonValueSchema.parse(value);
+}
+
+export function operationDetails(value: JsonObject): JsonObject {
+  return value;
+}

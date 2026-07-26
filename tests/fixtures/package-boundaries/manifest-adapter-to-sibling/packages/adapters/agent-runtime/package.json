@@ -1,0 +1,8 @@
+{
+  "name": "@info/agent-runtime-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@info/storage-sqlite": "workspace:*"
+  }
+}

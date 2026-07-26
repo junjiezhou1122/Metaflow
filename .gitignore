@@ -10,6 +10,7 @@ apps/website/.netlify/
 .pnpm-store/
 .runtime/
 .tmp-info-acp-runtime-test-*/
+packages/adapters/agent-runtime/.tmp-*/
 .firecrawl/
 .evo/keyfile
 artifacts/**/.chrome-profile/
@@ -24,8 +25,8 @@ packages/ui/node_modules/
 ui/dist/
 apps/website/dist/
 
-apps/mac-companion/.build/
-apps/mac-companion/build/
+apps/mac/.build/
+apps/mac/build/
 *.vtt
 
 # Local analysis reports

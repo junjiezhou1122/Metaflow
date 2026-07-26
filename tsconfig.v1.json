@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "packages/view/**/*.ts",
+    "packages/view-package/**/*.ts",
+    "packages/transformation/**/*.ts",
+    "packages/execution/**/*.ts",
+    "packages/automation/**/*.ts",
+    "packages/capture/**/*.ts",
+    "packages/operations/**/*.ts",
+    "packages/adapters/**/*.ts",
+    "view-packages/**/*.ts",
+    "apps/ambient-daemon/**/*.ts",
+    "scripts/v1/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "tests"
+  ]
+}

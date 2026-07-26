@@ -1,3 +1,0 @@
-- supermemory context: user is moving toward modular background/runtime pieces and does not want one large agent; this changes the plan toward protocol-first View/Processor contracts.
-- conversation memory: user rejected closed ScopeKind/domain enums; this changes the plan toward open view_type namespaces, open subject metadata, and AI-assisted extension.
-- repository memory: Chrome ACP current-page policy is already committed in CLAUDE.md; this is out of scope for this architecture run except as a consumer of View/Processor outputs.

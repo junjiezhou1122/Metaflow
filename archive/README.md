@@ -19,3 +19,9 @@ Current archive:
 - `dead-code/2026-05-src-package-shims/` — obsolete `src/connectors/*` and
   package-backed `src/runtime/*` re-export shims. Active code imports connector
   and View packages from `packages/` directly.
+- `docs/` — legacy v0-era design documents (context runtime, view architecture,
+  ambient context, evolution engine, etc.). The canonical v1 documentation now
+  lives in `wiki/`; new architecture decisions should be written there instead.
+  Useful material here can be reviewed and deliberately promoted into `wiki/`,
+  but the directory as a whole is preserved as historical evidence and must not
+  be imported as source.

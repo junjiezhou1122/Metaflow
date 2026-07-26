@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "type": "UI",
+      "content": {
+        "id": 301,
+        "text": "Implement Screenpipe Raw View Capture",
+        "timestamp": "2026-07-26T12:00:03Z",
+        "app_name": "Google Chrome",
+        "window_name": "GitHub",
+        "initial_traversal_at": "2026-07-26T12:00:02Z",
+        "file_path": "/screenpipe/data/monitor-1.mp4",
+        "offset_index": 17,
+        "frame_name": "monitor-1",
+        "browser_url": "https://github.com/junjiezhou1122/Metaflow/issues/35"
+      }
+    }
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1 }
+}

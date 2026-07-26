@@ -1,0 +1,14 @@
+{
+  "name": "@info/committed-view-trigger-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/automation": "workspace:*",
+    "@info/view": "workspace:*",
+    "zod": "^3.24.4"
+  }
+}

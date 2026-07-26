@@ -1,10 +1,13 @@
-import { createDefaultAgentRuntimeAdapter, type AgentMcpServerConfig, type AgentTaskOutput, type AgentTaskOutputView } from "@info/capabilities";
+import { createDefaultAgentRuntimeAdapter, type AgentCurrentContext, type AgentMcpServerConfig, type AgentTaskOutput, type AgentTaskOutputView, type AgentViewToolDescriptor } from "@info/capabilities";
 import type { ContextRecord, ContextView, StoredContextRecord, StoredContextView } from "@info/core";
 import type { Capability, CapabilityRunResult, ContextSignal } from "../types.js";
 
 export type AgentTaskPayload = {
   runtime?: string;
+  prompt?: string;
   goal?: string;
+  current_context?: AgentCurrentContext;
+  view_tools?: AgentViewToolDescriptor[];
   context_pack?: { markdown?: string; sources?: unknown[]; diagnostics?: Record<string, unknown> };
   output_contract?: {
     view_type?: string;
@@ -28,7 +31,8 @@ export const agentTaskSubmitCapability: Capability = {
   async run({ signal, store, payload, program, dry_run }): Promise<CapabilityRunResult> {
     const task = normalizeTask(payload?.task);
     if (agentTaskHasCallerSelectedSkills(payload?.task)) return { ok: false, reason: "agent task must not include skills or tools; external runtime owns them" };
-    if (!task.goal) return { ok: false, reason: "agent task missing goal" };
+    const prompt = task.prompt ?? task.goal;
+    if (!prompt) return { ok: false, reason: "agent task missing prompt" };
     const viewType = task.output_contract?.view_type;
     if (!viewType) return { ok: false, reason: "agent task output_contract.view_type is required" };
     const viewTypeError = validateAgentTaskViewType(viewType);
@@ -47,7 +51,7 @@ export const agentTaskSubmitCapability: Capability = {
         diagnostics: {
           ...result.diagnostics,
           runtime,
-          task_goal: task.goal,
+          task_prompt: prompt,
           output_view_type: task.output_contract?.view_type,
           context_source_count: provenanceCount(provenance),
         },
@@ -65,7 +69,7 @@ export const agentTaskSubmitCapability: Capability = {
           policy: privacyDenial.policy,
           related_records: privacyDenial.related_records,
           related_views: privacyDenial.related_views,
-          task_goal: task.goal,
+          task_prompt: prompt,
           context_source_count: provenanceCount(provenance),
         },
       };
@@ -89,14 +93,14 @@ export const agentTaskSubmitCapability: Capability = {
             plugin_id: "capability.agent_task.submit",
             related_records: provenance.source_records,
             related_views: provenance.source_views,
-            payload: { runtime, goal: task.goal, reason, requested_by_program: program?.id },
+            payload: { runtime, prompt, reason, requested_by_program: program?.id },
           },
         ],
         diagnostics: {
           ...result.diagnostics,
           runtime,
           error: reason,
-          task_goal: task.goal,
+          task_prompt: prompt,
           context_source_count: provenanceCount(provenance),
         },
       };
@@ -142,7 +146,7 @@ export const agentTaskSubmitCapability: Capability = {
           plugin_id: "capability.agent_task.submit",
           related_records: provenance.source_records,
           related_views: [...provenance.source_views, ...views.map(item => item.id!)],
-          payload: { runtime, goal: task.goal, output_view_id: view.id, output_view_ids: views.map(item => item.id!), output_view_type: view.view_type, evidence_view_count: evidenceViews.length, output_contract: task.output_contract, requested_by_program: program?.id },
+          payload: { runtime, prompt, output_view_id: view.id, output_view_ids: views.map(item => item.id!), output_view_type: view.view_type, evidence_view_count: evidenceViews.length, output_contract: task.output_contract, requested_by_program: program?.id },
         },
       ],
       diagnostics: {
@@ -152,7 +156,7 @@ export const agentTaskSubmitCapability: Capability = {
         output_view_id: view.id,
         output_view_ids: views.map(item => item.id!),
         evidence_view_count: evidenceViews.length,
-        task_goal: task.goal,
+        task_prompt: prompt,
         context_source_count: provenanceCount(provenance),
       },
     };
@@ -172,9 +176,10 @@ function buildAgentOutputView(input: {
   extraSourceViews?: string[];
 }): ContextView {
   const { task, signal, object, output, provenance, store, compilerId, requestedByProgram, runtime, extraSourceViews = [] } = input;
+  const prompt = taskPrompt(task);
   const summary = output.summary || summarize(task, signal, object);
   return {
-    id: `${task.output_contract?.view_type}:${stableKey(`${runtime}:${task.goal}:${signal.object_id}`)}`,
+    id: `${task.output_contract?.view_type}:${stableKey(`${runtime}:${prompt}:${signal.object_id}`)}`,
     view_type: task.output_contract?.view_type ?? "analysis.agent_task",
     title: (task.output_contract?.title ?? `Agent task result: ${signal.title ?? signal.object_id}`).slice(0, 180),
     summary,
@@ -197,7 +202,7 @@ function buildAgentOutputView(input: {
       key_points: output.key_points,
       agent_task: {
         runtime,
-        goal: task.goal,
+        prompt,
         output_contract: task.output_contract,
         constraints: task.constraints,
       },
@@ -250,6 +255,7 @@ function buildAgentReturnedView(input: {
   runtime: string;
 }): ContextView {
   const { task, signal, object, view, index, provenance, store, compilerId, requestedByProgram, runtime } = input;
+  const prompt = taskPrompt(task);
   const scope = {
     domain: signal.domain,
     project: signal.project,
@@ -260,7 +266,7 @@ function buildAgentReturnedView(input: {
   };
   const summary = view.summary || stringValue(view.content?.summary) || stringValue(view.content?.text)?.slice(0, 360) || `Agent returned ${view.view_type} evidence.`;
   return {
-    id: `${view.view_type}:${stableKey(`${runtime}:${task.goal}:${signal.object_id}:${index}:${summary}`)}`,
+    id: `${view.view_type}:${stableKey(`${runtime}:${prompt}:${signal.object_id}:${index}:${summary}`)}`,
     view_type: view.view_type,
     title: (view.title ?? `Agent evidence: ${signal.title ?? signal.object_id}`).slice(0, 180),
     summary,
@@ -274,7 +280,7 @@ function buildAgentReturnedView(input: {
       ...(view.content ?? {}),
       agent_task: {
         runtime,
-        goal: task.goal,
+        prompt,
         output_contract: task.output_contract,
         returned_view_index: index,
       },
@@ -306,12 +312,16 @@ function contextSourcesForPrompt(task: AgentTaskPayload, provenance: AgentTaskPr
 }
 
 function toRuntimeTask(task: AgentTaskPayload, runtime: string, signal: ContextSignal, provenance: AgentTaskProvenance, dryRun: boolean) {
+  const prompt = taskPrompt(task);
   return {
-    id: `agent-task:${stableKey(`${runtime}:${task.goal}:${signal.object_id}`)}`,
+    id: `agent-task:${stableKey(`${runtime}:${prompt}:${signal.object_id}`)}`,
     runtime,
-    goal: task.goal!,
+    prompt,
+    goal: prompt,
     cwd: signal.project_path,
     dryRun,
+    currentContext: task.current_context,
+    viewTools: task.view_tools,
     contextPack: {
       markdown: task.context_pack?.markdown,
       sources: contextSourcesForPrompt(task, provenance),
@@ -332,6 +342,7 @@ type AgentTaskProvenance = {
 };
 
 function agentTaskSubmittedEvent(task: AgentTaskPayload, provenance: AgentTaskProvenance, runtime: string, requestedByProgram?: string) {
+  const prompt = taskPrompt(task);
   return {
     event_type: "agent_task.submitted",
     actor: "system" as const,
@@ -343,7 +354,7 @@ function agentTaskSubmittedEvent(task: AgentTaskPayload, provenance: AgentTaskPr
     related_views: provenance.source_views,
     payload: {
       runtime,
-      goal: task.goal,
+      prompt,
       output_contract: task.output_contract,
       constraints: task.constraints,
       requested_by_program: requestedByProgram,
@@ -443,7 +454,11 @@ function loadSignalObject(signal: ContextSignal, store: { getRecord(id: string):
 function summarize(task: AgentTaskPayload, signal: ContextSignal, object?: StoredContextRecord | StoredContextView): string {
   const text = signal.text_preview ?? objectText(object);
   const base = text ? firstSentence(text, 220) : `Agent task completed for ${signal.object_type}.`;
-  return `${base} Goal: ${task.goal}`.slice(0, 360);
+  return `${base} Prompt: ${taskPrompt(task)}`.slice(0, 360);
+}
+
+function taskPrompt(task: AgentTaskPayload): string {
+  return (task.prompt ?? task.goal ?? "").trim();
 }
 
 function keyPoints(task: AgentTaskPayload, signal: ContextSignal): string[] {

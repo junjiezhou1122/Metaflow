@@ -1,0 +1,31 @@
+{
+  "name": "@info/ambient-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-sqlite --import tsx index.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.37.0",
+    "@info/agent-runtime-adapter": "workspace:*",
+    "@info/automation": "workspace:*",
+    "@info/automation-execution-adapter": "workspace:*",
+    "@info/automation-sqlite": "workspace:*",
+    "@info/browser-automation-adapter": "workspace:*",
+    "@info/browser-capture-adapter": "workspace:*",
+    "@info/macos-automation-adapter": "workspace:*",
+    "@info/inbox-automation-adapter": "workspace:*",
+    "@info/operation-surfaces": "workspace:*",
+    "@info/operations": "workspace:*",
+    "@info/scheduler-automation-adapter": "workspace:*",
+    "@info/capture": "workspace:*",
+    "@info/execution": "workspace:*",
+    "@info/storage-sqlite": "workspace:*",
+    "@info/transformation": "workspace:*",
+    "@info/transformation-sqlite": "workspace:*",
+    "@info/view": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}

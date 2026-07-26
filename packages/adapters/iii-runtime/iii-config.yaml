@@ -1,0 +1,26 @@
+{
+  "workers": [
+    {
+      "name": "iii-queue",
+      "config": {
+        "adapter": {
+          "name": "builtin",
+          "config": {
+            "store_method": "file_based",
+            "file_path": "${METAFLOW_III_QUEUE_DATA:./data/metaflow-iii-queue}",
+            "save_interval_ms": 100
+          }
+        },
+        "queue_configs": {
+          "metaflow-automation-v1": {
+            "max_retries": 3,
+            "concurrency": 4,
+            "type": "standard",
+            "backoff_ms": 1000,
+            "poll_interval_ms": 100
+          }
+        }
+      }
+    }
+  ]
+}

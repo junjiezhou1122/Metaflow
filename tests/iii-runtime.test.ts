@@ -1,435 +1,975 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { ContextStore } from "@info/core";
-import { III_CASCADE_FUNCTIONS, III_CONTEXT_FUNCTIONS, III_PROCESSOR_FUNCTIONS, III_PROGRAM_FUNCTIONS, III_WORKER_FUNCTIONS, InProcessIiiRuntimeClient, registerInfoIiiRuntime, VIEW_WORKER_FUNCTIONS } from "@info/iii-runtime";
-import { signalFromRecord, signalFromView } from "@info/programs/signals.js";
-import { createViewProcessorDefinitions } from "@info/views/processors.js";
+import { join } from "node:path";
+import type {
+  FunctionRef,
+  RegisterFunctionOptions,
+  TriggerRequest,
+} from "iii-sdk";
+import {
+  type AutomationInvocationAdmissionResult,
+  type AutomationInvocationInput,
+  parseAutomationView,
+} from "@info/automation";
+import {
+  AgentOperatorExecutionBridge,
+  DeterministicViewAccessAuthorizer,
+  ExecutionRuntime,
+  type AgentOperatorInvocation,
+  type AgentOperatorPort,
+  type AgentOperatorResult,
+  type OperatorExecutionInvocation,
+  type OperatorExecutionPort,
+  type OperatorExecutionResult,
+} from "@info/execution";
+import { parseTransformation, type OperatorSnapshot, type Transformation } from "@info/transformation";
+import {
+  exactViewRef,
+  parseView,
+  type ExactViewRef,
+  type View,
+  type ViewDraft,
+} from "@info/view";
+import { SqliteViewRepository } from "../packages/adapters/storage-sqlite/index.ts";
+import { SqliteReactiveCascadeLedger } from "../packages/adapters/automation-sqlite/index.ts";
+import {
+  AutomationCascadeTerminalizer,
+  InMemoryTransformationCatalog,
+} from "../packages/adapters/automation-execution/index.ts";
+import {
+  III_AUTOMATION_FUNCTION_ID,
+  III_ENGINE_VERSION,
+  IiiAutomationInvocationEnvelopeSchema,
+  IiiRuntimeError,
+  IiiRuntimeWorker,
+  METAFLOW_AUTOMATION_QUEUE,
+  iiiOperatorFunctionId,
+  type IiiClientPort,
+  type IiiRuntimeEvent,
+} from "../packages/adapters/iii-runtime/index.ts";
 
-async function withStore(fn: (store: ContextStore) => Promise<void>) {
-  const dir = mkdtempSync(join(tmpdir(), "info-iii-runtime-test-"));
-  const store = new ContextStore(join(dir, "context.sqlite"));
+const NOW = "2026-07-26T18:00:00.000Z";
+
+test("III Worker registers strict versioned Functions and fails startup on incompatible engine, SDK, or queue config", async () => {
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  const worker = await startWorker(engine, automation, async () => ignored(), events);
   try {
-    await fn(store);
+    const registration = engine.functions.get(III_AUTOMATION_FUNCTION_ID);
+    assert.ok(registration);
+    assert.equal(registration.options?.metadata?.metaflow_contract, "metaflow.automation.invoke.v1");
+    assert.equal(registration.options?.metadata?.queue, METAFLOW_AUTOMATION_QUEUE.name);
+    assert.deepEqual(registration.options?.request_format?.required, [
+      "schema_version",
+      "contract",
+      "message_id",
+      "correlation_id",
+      "queue",
+      "automation",
+      "signal",
+    ]);
+    await assert.rejects(
+      engine.invoke(III_AUTOMATION_FUNCTION_ID, { schema_version: 1, unexpected: true }),
+      /contract|Required/,
+    );
+    const unsafe = IiiAutomationInvocationEnvelopeSchema.parse({
+      ...queuedEnvelope(automation),
+      signal: { ...queuedEnvelope(automation).signal, payload: { text: "private raw text" } },
+    });
+    await assert.rejects(
+      engine.invoke(III_AUTOMATION_FUNCTION_ID, unsafe),
+      (error: unknown) => error instanceof IiiRuntimeError && error.code === "signal_payload_not_descriptor_safe",
+    );
+    assert.equal(events.some(event => event.type === "iii.worker.compatibility_verified"), true);
+    assert.equal(events.some(event => event.type === "iii.worker.registered"), true);
+    assert.equal(process.env.III_DISABLE_TRACE_PAYLOADS, "true");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await worker.close();
+  }
+
+  const oldEngine = new FakeIiiEngine("0.18.0");
+  await assert.rejects(
+    startWorker(oldEngine, automation, async () => ignored(), []),
+    (error: unknown) => error instanceof IiiRuntimeError && error.code === "engine_version_incompatible",
+  );
+
+  const wrongQueue = new FakeIiiEngine(III_ENGINE_VERSION, 10);
+  await assert.rejects(
+    startWorker(wrongQueue, automation, async () => ignored(), []),
+    (error: unknown) => error instanceof IiiRuntimeError && error.code === "queue_config_incompatible",
+  );
+  assert.equal(oldEngine.shutdowns, 1);
+
+  await assert.rejects(
+    IiiRuntimeWorker.start({
+      engine_url: "ws://fake",
+      sdk_version: "0.22.0",
+      views: viewReader([automation.view]),
+      automations: { invoke: async () => ignored() },
+      events: { emit() {} },
+      client_factory: () => engine.client(),
+    }),
+    (error: unknown) => error instanceof IiiRuntimeError && error.code === "sdk_version_incompatible",
+  );
+
+  await assert.rejects(
+    IiiRuntimeWorker.start({
+      engine_url: "ws://fake",
+      queue: { ...METAFLOW_AUTOMATION_QUEUE, concurrency: 99 },
+      views: viewReader([automation.view]),
+      automations: { invoke: async () => ignored() },
+      events: { emit() {} },
+      client_factory: () => engine.client(),
+    }),
+    (error: unknown) => error instanceof IiiRuntimeError && error.code === "queue_config_incompatible",
+  );
+
+  const config = JSON.parse(readFileSync(
+    join(process.cwd(), "packages/adapters/iii-runtime/iii-config.yaml"),
+    "utf8",
+  )) as { workers: Array<{ config: Record<string, unknown> }> };
+  assert.deepEqual(config.workers[0]?.config.queue_configs, {
+    "metaflow-automation-v1": {
+      max_retries: 3,
+      concurrency: 4,
+      type: "standard",
+      backoff_ms: 1000,
+      poll_interval_ms: 100,
+    },
+  });
+  assert.equal(JSON.stringify(config).includes("file_based"), true);
+});
+
+test("Automation admission enqueues exact evidence, records receipts, and leaves duplicate ownership to Automation Runtime", async () => {
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  let calls = 0;
+  const worker = await startWorker(engine, automation, async input => {
+    calls += 1;
+    return calls === 1
+      ? succeeded(input, "run:queue:first")
+      : {
+          status: "duplicate",
+          correlation_id: correlation(input),
+          existing_status: "succeeded",
+        };
+  }, events);
+  try {
+    const invocation = automationInvocation(automation);
+    const first = await worker.automationQueue.invoke(invocation);
+    const second = await worker.automationQueue.invoke(invocation);
+    assert.equal(first.status, "enqueued");
+    assert.equal(second.status, "enqueued");
+    assert.notEqual(first.status === "enqueued" ? first.receipt_id : "", second.status === "enqueued" ? second.receipt_id : "");
+    assert.equal(engine.queue.length, 2);
+    const firstEnvelope = IiiAutomationInvocationEnvelopeSchema.parse(engine.queue[0]?.payload);
+    const secondEnvelope = IiiAutomationInvocationEnvelopeSchema.parse(engine.queue[1]?.payload);
+    assert.equal(firstEnvelope.message_id, secondEnvelope.message_id);
+    assert.deepEqual(firstEnvelope.signal.evidence, invocation.signal.evidence);
+    assert.deepEqual(firstEnvelope.automation, exactViewRef(automation.view));
+
+    await assert.rejects(
+      worker.automationQueue.invoke({
+        ...invocation,
+        signal: { ...invocation.signal, payload: { text: "raw private page content" } },
+      }),
+      (error: unknown) => error instanceof IiiRuntimeError && error.code === "signal_payload_not_descriptor_safe",
+    );
+    assert.equal(engine.queue.length, 2);
+
+    await engine.drainAll();
+    assert.equal(calls, 2);
+    assert.equal(events.filter(event => event.type === "iii.queue.enqueued").length, 2);
+    assert.equal(events.some(event => event.type === "iii.queue.duplicate"), true);
+    assert.equal(events.filter(event => event.receipt_id).length, 2);
+  } finally {
+    await worker.close();
+  }
+});
+
+test("III queue retries the same correlated message and preserves queued work across Worker restart", async () => {
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  let attempts = 0;
+  let first = await startWorker(engine, automation, async input => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary Automation store outage");
+    return succeeded(input, "run:retry");
+  }, events);
+  await first.automationQueue.invoke(automationInvocation(automation));
+  await engine.drainAll();
+  assert.equal(attempts, 2);
+  const received = events.filter(event => event.type === "iii.queue.received");
+  assert.equal(received.length, 2);
+  assert.equal(new Set(received.map(event => event.message_id)).size, 1);
+  assert.equal(events.some(event => event.type === "iii.queue.retryable_failure"), true);
+
+  await first.automationQueue.invoke(automationInvocation(automation, "signal:restart"));
+  assert.equal(engine.queue.length, 1);
+  await first.close();
+  assert.equal(engine.functions.has(III_AUTOMATION_FUNCTION_ID), false);
+
+  let recovered = 0;
+  const second = await startWorker(engine, automation, async input => {
+    recovered += 1;
+    return succeeded(input, "run:restart");
+  }, events);
+  try {
+    await engine.drainAll();
+    assert.equal(recovered, 1);
+    assert.equal(engine.queue.length, 0);
+  } finally {
+    await second.close();
+  }
+});
+
+test("a duplicate reserved occurrence is retryable and is never acknowledged as completed", async () => {
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  let calls = 0;
+  const worker = await startWorker(engine, automation, async input => {
+    calls += 1;
+    return {
+      status: "duplicate",
+      correlation_id: correlation(input),
+      existing_status: "reserved",
+    };
+  }, events);
+  try {
+    await worker.automationQueue.invoke(automationInvocation(automation, "signal:reserved"));
+    await engine.drainAll();
+    assert.equal(calls, METAFLOW_AUTOMATION_QUEUE.max_retries + 1);
+    assert.equal(engine.dlq.length, 1);
+    assert.equal(events.some(event => event.type === "iii.queue.completed"), false);
+    assert.equal(events.some(event => event.type === "iii.queue.duplicate"), false);
+    assert.equal(events.filter(event => event.type === "iii.queue.retryable_failure").length, calls);
+  } finally {
+    await worker.close();
+  }
+});
+
+test("exhausted queue work enters the DLQ and inspection emits terminal correlated failure", async () => {
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  const worker = await startWorker(engine, automation, async () => {
+    throw new Error("permanent crash");
+  }, events);
+  try {
+    await worker.automationQueue.invoke(automationInvocation(automation, "signal:dlq"));
+    await engine.drainAll();
+    assert.equal(engine.dlq.length, 1);
+    assert.equal(engine.dlq[0]?.retries, METAFLOW_AUTOMATION_QUEUE.max_retries);
+    const messages = await worker.inspectDeadLetters();
+    assert.equal(messages.length, 1);
+    const observed = events.find(event => event.type === "iii.queue.dlq_observed");
+    assert.equal(observed?.signal_id, "signal:dlq");
+    assert.deepEqual(observed?.automation, exactViewRef(automation.view));
+    assert.equal(observed?.payload.retries, METAFLOW_AUTOMATION_QUEUE.max_retries);
+  } finally {
+    await worker.close();
+  }
+});
+
+test("DLQ monitoring terminalizes the exact reactive cascade attempt", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-iii-dlq-cascade-"));
+  const repository = new SqliteViewRepository(join(directory, "views.sqlite"));
+  const ledger = new SqliteReactiveCascadeLedger(join(directory, "cascade.sqlite"));
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  const input = (await repository.commit({ draft: rawViewDraft(), expected_revision: 0 })).view;
+  const dlqTransformation = parseTransformation({
+    ...transformation(input, functionOperator("operator:test:iii-dlq"), "summary.iii-dlq"),
+    id: "transformation:test:iii",
+  });
+  let workerExecutions = 0;
+  const execution = new ExecutionRuntime(
+    repository,
+    repository,
+    new DeterministicViewAccessAuthorizer(),
+    {
+      async execute() {
+        workerExecutions += 1;
+        assert.fail("DLQ terminalization must not invoke an Operator Worker");
+      },
+      async cancel() {},
+    },
+    undefined,
+    { now: () => NOW, id: kind => `${kind}:iii-dlq` },
+  );
+  const terminalizer = new AutomationCascadeTerminalizer({
+    transformations: new InMemoryTransformationCatalog([dlqTransformation]),
+    execution,
+    views: repository,
+  });
+  const cascade = iiiCascade(automation, exactViewRef(input));
+  await ledger.reservePlan({ attempts: [cascade], reserved_at: NOW });
+  const worker = await startWorker(engine, automation, async () => {
+    throw new Error("permanent reactive Worker crash");
+  }, events, { cascades: ledger, cascade_terminalizer: terminalizer, dlq_poll_interval_ms: 100 });
+  try {
+    const invocation = automationInvocation(automation, "signal:dlq-cascade");
+    invocation.signal.cascade = cascade;
+    await worker.automationQueue.invoke(invocation);
+    await engine.drainAll();
+    await waitFor(async () => (await ledger.getAttempt(cascade.attempt_id))?.status === "stopped");
+    const terminal = await ledger.getAttempt(cascade.attempt_id);
+    assert.equal(terminal?.status, "stopped");
+    assert.equal(terminal?.error_code, "iii_dlq_terminal");
+    assert.match(terminal?.error_message ?? "", /permanent reactive Worker crash/);
+    assert.ok(terminal?.run_id);
+    const run = await repository.getRun(terminal!.run_id!);
+    assert.equal(run?.status, "failed");
+    assert.ok(run?.failure_view);
+    assert.equal(workerExecutions, 0);
+    assert.equal((await repository.listEvents()).filter(item => item.event.origin.id === run?.id).length, 1);
+    const terminalEvent = events.find(event => event.type === "iii.queue.dlq_terminalized");
+    assert.equal(terminalEvent?.run_id, run?.id);
+    assert.deepEqual(terminalEvent?.payload.failure_view, run?.failure_view);
+    worker.assertHealthy();
+  } finally {
+    await worker.close();
+    repository.close();
+    ledger.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("DLQ transport failure preserves an already successful canonical Run", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-iii-dlq-success-"));
+  const ledger = new SqliteReactiveCascadeLedger(join(directory, "cascade.sqlite"));
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const events: IiiRuntimeEvent[] = [];
+  const cascade = iiiCascade(automation, { view_id: "view:evidence", revision: 7 }, {
+    attempt_id: "cascade-attempt:iii-dlq-success",
+    root_correlation_id: "cascade-root:iii-dlq-success",
+    root_event_id: "event:iii-dlq-success",
+    parent_event_id: "event:iii-dlq-success",
+  });
+  await ledger.reservePlan({ attempts: [cascade], reserved_at: NOW });
+  await ledger.bindOperator({
+    attempt_id: cascade.attempt_id,
+    operator: { id: "operator:test:iii-success", revision: 1 },
+    run_id: "run:iii:already-succeeded",
+    started_at: NOW,
+  });
+  const worker = await startWorker(engine, automation, async () => {
+    throw new Error("queue acknowledgement crashed after Run success");
+  }, events, {
+    cascades: ledger,
+    cascade_terminalizer: {
+      async terminalize({ attempt }) {
+        assert.equal(attempt.run_id, "run:iii:already-succeeded");
+        return {
+          status: "succeeded",
+          run_id: "run:iii:already-succeeded",
+          output_views: [{ view_id: "view:summary:already-succeeded", revision: 1 }],
+        };
+      },
+    },
+  });
+  try {
+    const invocation = automationInvocation(automation, "signal:dlq-success");
+    invocation.signal.cascade = cascade;
+    await worker.automationQueue.invoke(invocation);
+    await engine.drainAll();
+    await worker.inspectDeadLetters();
+    const terminal = await ledger.getAttempt(cascade.attempt_id);
+    assert.equal(terminal?.status, "succeeded");
+    assert.equal(terminal?.run_id, "run:iii:already-succeeded");
+    assert.equal(terminal?.error_code, undefined);
+    const terminalEvent = events.find(event => event.type === "iii.queue.dlq_terminalized");
+    assert.equal(terminalEvent?.payload.execution_status, "succeeded");
+  } finally {
+    await worker.close();
+    ledger.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Function and Agent Workers execute through III while Execution Runtime validates and atomically commits Views", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-iii-runtime-"));
+  const repository = new SqliteViewRepository(join(directory, "views.sqlite"));
+  const engine = new FakeIiiEngine();
+  const events: IiiRuntimeEvent[] = [];
+  const automation = automationView();
+  const input = (await repository.commit({ draft: rawViewDraft(), expected_revision: 0 })).view;
+  const functionTransformation = transformation(input, functionOperator(), "summary.function");
+  const agentTransformation = transformation(input, agentOperator(), "summary.agent");
+  const functionPort: OperatorExecutionPort = {
+    async execute(invocation) {
+      return {
+        status: "succeeded",
+        candidate: outputCandidate(invocation, `view:function:${invocation.run.id}`, { summary: "Function Worker output" }),
+      };
+    },
+    async cancel() {},
+  };
+  const agent = new FakeAgentOperator();
+  const agentBridge = new AgentOperatorExecutionBridge(agent, {
+    now: () => NOW,
+    output_view_id: invocation => `view:agent:${invocation.run.id}`,
+  });
+  const worker = await IiiRuntimeWorker.start({
+    engine_url: "ws://fake",
+    views: repository,
+    automations: { invoke: async () => ignored() },
+    operators: [
+      { operator: functionTransformation.operator, port: functionPort },
+      { operator: agentTransformation.operator, port: agentBridge },
+    ],
+    events: { emit: event => { events.push(event); } },
+    client_factory: () => engine.client(),
+    now: () => NOW,
+  });
+  let id = 0;
+  const runtime = new ExecutionRuntime(
+    repository,
+    repository,
+    new DeterministicViewAccessAuthorizer(),
+    worker.operatorClient,
+    undefined,
+    { now: () => NOW, id: kind => `${kind}:iii:${++id}` },
+  );
+  try {
+    assert.equal(engine.functions.has(iiiOperatorFunctionId(functionTransformation.operator)), true);
+    assert.equal(engine.functions.has(iiiOperatorFunctionId(agentTransformation.operator)), true);
+
+    const functionResult = await runtime.execute(executionRequest(functionTransformation, "run:iii:function"));
+    assert.equal(functionResult.run.status, "succeeded");
+    assert.equal(functionResult.outputs[0]?.representation.form, "inline");
+    assert.deepEqual(functionResult.outputs[0]?.representation.form === "inline"
+      ? functionResult.outputs[0].representation.value
+      : undefined, { summary: "Function Worker output" });
+
+    const agentResult = await runtime.execute(executionRequest(agentTransformation, "run:iii:agent"));
+    assert.equal(agentResult.run.status, "succeeded");
+    assert.equal(agent.executions, 1);
+    assert.deepEqual(agentResult.outputs[0]?.provenance.inputs, [exactViewRef(input)]);
+    assert.equal(events.some(event => event.type === "iii.operator.received" && event.run_id === "run:iii:agent"), true);
+    assert.equal(events.some(event => event.type === "iii.operator.completed" && event.run_id === "run:iii:function"), true);
+  } finally {
+    await worker.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Execution cancellation crosses the III cancel Function and remains a canonical cancelled Run", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-iii-cancel-"));
+  const repository = new SqliteViewRepository(join(directory, "views.sqlite"));
+  const engine = new FakeIiiEngine();
+  const input = (await repository.commit({ draft: rawViewDraft(), expected_revision: 0 })).view;
+  const transform = transformation(input, functionOperator("operator:test:slow"), "summary.cancelled");
+  const slow = new CancellableOperator();
+  const worker = await IiiRuntimeWorker.start({
+    engine_url: "ws://fake",
+    views: repository,
+    automations: { invoke: async () => ignored() },
+    operators: [{ operator: transform.operator, port: slow }],
+    events: { emit() {} },
+    client_factory: () => engine.client(),
+    now: () => NOW,
+  });
+  const runtime = new ExecutionRuntime(
+    repository,
+    repository,
+    new DeterministicViewAccessAuthorizer(),
+    worker.operatorClient,
+    undefined,
+    { now: () => NOW, id: kind => `${kind}:cancel` },
+  );
+  const controller = new AbortController();
+  try {
+    const pending = runtime.execute(executionRequest(transform, "run:iii:cancel"), { signal: controller.signal });
+    await slow.started;
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.run.status, "cancelled");
+    assert.equal(result.failure?.schema.name, "metaflow.execution.failure");
+    assert.equal(slow.cancelled.length, 1);
+    assert.match(slow.cancelled[0] ?? "", /^attempt:/);
+  } finally {
+    await worker.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+type FunctionRegistration = {
+  handler: (input: unknown) => Promise<unknown>;
+  options?: RegisterFunctionOptions;
+};
+
+type QueueJob = {
+  function_id: string;
+  queue: string;
+  payload: unknown;
+  receipt: string;
+  attempts: number;
+};
+
+class FakeIiiEngine {
+  readonly functions = new Map<string, FunctionRegistration>();
+  readonly queue: QueueJob[] = [];
+  readonly dlq: Array<{
+    id: string;
+    payload: unknown;
+    error: string;
+    failed_at: number;
+    retries: number;
+    size_bytes: number;
+  }> = [];
+  shutdowns = 0;
+  private receipt = 0;
+
+  constructor(readonly version = III_ENGINE_VERSION, readonly queueConcurrency = 4) {}
+
+  client(): IiiClientPort {
+    const owned = new Set<string>();
+    return {
+      registerFunction: (functionId, handler, options) => {
+        if (this.functions.has(functionId)) throw new Error(`duplicate function: ${functionId}`);
+        this.functions.set(functionId, { handler, options });
+        owned.add(functionId);
+        return {
+          id: functionId,
+          unregister: () => {
+            this.functions.delete(functionId);
+            owned.delete(functionId);
+          },
+        } satisfies FunctionRef;
+      },
+      trigger: async <TInput, TOutput>(request: TriggerRequest<TInput>) => {
+        if (request.function_id === "engine::workers::list") {
+          return { workers: [{ id: "iii-engine", name: "iii-engine", version: this.version, runtime: "engine", status: "available" }] } as TOutput;
+        }
+        if (request.function_id === "engine::queue::topic_stats") {
+          return { depth: this.queue.length, consumer_count: this.queueConcurrency, dlq_depth: this.dlq.length, config: null } as TOutput;
+        }
+        if (request.function_id === "engine::functions::info") {
+          const functionId = (request.payload as { function_id?: string }).function_id;
+          const registration = functionId ? this.functions.get(functionId) : undefined;
+          if (!functionId || !registration) throw new Error(`unknown function: ${String(functionId)}`);
+          return {
+            function_id: functionId,
+            worker_name: "metaflow-v1",
+            description: registration.options?.description,
+            request_schema: registration.options?.request_format,
+            response_schema: registration.options?.response_format,
+            metadata: registration.options?.metadata,
+            registered_triggers: [],
+          } as TOutput;
+        }
+        if (request.function_id === "engine::queue::dlq_messages") {
+          return this.dlq as TOutput;
+        }
+        if (request.action?.type === "enqueue") {
+          if (!this.functions.has(request.function_id)) throw new Error(`unknown function: ${request.function_id}`);
+          const receipt = `receipt:${++this.receipt}`;
+          this.queue.push({
+            function_id: request.function_id,
+            queue: request.action.queue,
+            payload: request.payload,
+            receipt,
+            attempts: 0,
+          });
+          return { messageReceiptId: receipt } as TOutput;
+        }
+        return await this.invoke(request.function_id, request.payload) as TOutput;
+      },
+      shutdown: async () => {
+        this.shutdowns += 1;
+        for (const id of owned) this.functions.delete(id);
+        owned.clear();
+      },
+    };
+  }
+
+  async invoke(functionId: string, input: unknown): Promise<unknown> {
+    const registration = this.functions.get(functionId);
+    if (!registration) throw new Error(`unknown function: ${functionId}`);
+    return registration.handler(input);
+  }
+
+  async drainAll(): Promise<void> {
+    let deliveries = 0;
+    while (this.queue.length > 0) {
+      if (++deliveries > 100) throw new Error("fake III queue did not quiesce");
+      const job = this.queue.shift()!;
+      try {
+        await this.invoke(job.function_id, job.payload);
+      } catch (error) {
+        if (job.attempts < METAFLOW_AUTOMATION_QUEUE.max_retries) {
+          this.queue.push({ ...job, attempts: job.attempts + 1 });
+        } else {
+          this.dlq.push({
+            id: `dlq:${job.receipt}`,
+            payload: job.payload,
+            error: error instanceof Error ? error.message : String(error),
+            failed_at: Math.floor(Date.parse(NOW) / 1_000),
+            retries: job.attempts,
+            size_bytes: Buffer.byteLength(JSON.stringify(job.payload)),
+          });
+        }
+      }
+    }
   }
 }
 
-test("@info/iii-runtime registers view compiler functions as first-class iii functions", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  const result = await registerInfoIiiRuntime(iii, { store });
+async function startWorker(
+  engine: FakeIiiEngine,
+  automation: ReturnType<typeof automationView>,
+  invoke: (input: AutomationInvocationInput) => Promise<AutomationInvocationAdmissionResult>,
+  events: IiiRuntimeEvent[],
+  options: Pick<Parameters<typeof IiiRuntimeWorker.start>[0], "cascades" | "cascade_terminalizer" | "dlq_poll_interval_ms"> = {},
+) {
+  return IiiRuntimeWorker.start({
+    engine_url: "ws://fake",
+    views: viewReader([automation.view]),
+    automations: { invoke },
+    events: { emit: event => { events.push(event); } },
+    client_factory: () => engine.client(),
+    now: () => NOW,
+    ...options,
+  });
+}
 
-  assert.equal(result.ok, true);
-  assert.equal(iii.functions.has(VIEW_WORKER_FUNCTIONS.evidence), true);
-  assert.equal(iii.functions.has(VIEW_WORKER_FUNCTIONS.activity), true);
-  assert.equal(iii.functions.has(VIEW_WORKER_FUNCTIONS.workThread), true);
-  assert.ok(iii.triggers.length >= result.functions_registered.length);
-}));
-
-test("@info/iii-runtime adapts the shared View processor registry", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-  const processors = createViewProcessorDefinitions();
-
-  assert.ok(processors.length >= 1);
-  for (const processor of processors) {
-    assert.equal(iii.functions.has(processor.function_id), true);
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
   }
-  assert.equal(processors.find(processor => processor.view_type === "evidence")?.function_id, VIEW_WORKER_FUNCTIONS.evidence);
-}));
+  throw new Error(`condition was not met within ${timeoutMs}ms`);
+}
 
-test("@info/iii-runtime registers default programs and capabilities as iii functions", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  assert.equal(iii.functions.has("program::browser_ambient"), true);
-  assert.equal(iii.functions.has("program::project_ambient"), true);
-  assert.equal(iii.functions.has(III_PROGRAM_FUNCTIONS.agentTaskSubmit), true);
-  assert.equal(iii.functions.has("capability::browser_ambient_explore"), true);
-}));
-
-test("@info/iii-runtime exposes a unified worker catalog", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const result = await iii.trigger({ function_id: III_WORKER_FUNCTIONS.catalog }) as {
-    ok?: boolean;
-    workers?: Array<{
-      id: string;
-      kind: string;
-      processor: { function_id: string };
-      subscribes: { observations?: string[]; views?: string[]; topics?: string[] };
-      produces: { views?: string[]; observations?: string[] };
-    }>;
+function viewReader(views: View[]) {
+  return {
+    async get(ref: ExactViewRef) {
+      return views.find(view => view.id === ref.view_id && view.revision === ref.revision);
+    },
   };
-  const workers = result.workers ?? [];
-  const byId = new Map(workers.map(worker => [worker.id, worker]));
+}
 
-  assert.equal(result.ok, true);
-  assert.equal(iii.functions.has(III_WORKER_FUNCTIONS.catalog), true);
-  assert.equal(byId.get(III_CONTEXT_FUNCTIONS.ingest)?.kind, "ingest");
-  assert.ok(byId.get(III_CONTEXT_FUNCTIONS.ingest)?.subscribes.observations?.includes("observation.*"));
-  assert.equal(byId.get(VIEW_WORKER_FUNCTIONS.evidence)?.kind, "view_compiler");
-  assert.deepEqual(byId.get(VIEW_WORKER_FUNCTIONS.evidence)?.produces.views, ["evidence"]);
-  assert.equal(byId.get(III_PROCESSOR_FUNCTIONS.surfaceState)?.kind, "processor");
-  assert.ok(byId.get(III_PROCESSOR_FUNCTIONS.surfaceState)?.subscribes.observations?.includes("observation.screenpipe_*"));
-  assert.deepEqual(byId.get(III_PROCESSOR_FUNCTIONS.surfaceState)?.produces.views, ["state.surface"]);
-  assert.equal(byId.get(III_PROCESSOR_FUNCTIONS.youtubeLearning)?.kind, "processor");
-  assert.ok(byId.get(III_PROCESSOR_FUNCTIONS.youtubeLearning)?.subscribes.observations?.includes("observation.youtube.caption_fragment"));
-  assert.ok(byId.get(III_PROCESSOR_FUNCTIONS.youtubeLearning)?.produces.views?.includes("learning.youtube_fragment"));
-  assert.ok(byId.get("program::writing_ambient")?.subscribes.observations?.includes("observation.editor.text_changed"));
-  assert.ok(byId.get("program::writing_ambient")?.produces.views?.includes("advice.writing_assist"));
-  assert.ok(byId.get("program::browser_ambient")?.subscribes.observations?.includes("observation.browser_page_snapshot"));
-  assert.ok(byId.get("program::browser_ambient")?.produces.views?.includes("analysis.browser_agent_task"));
-}));
-
-test("@info/iii-runtime can compile current surface state from an Observation", async () => withStore(async (store) => {
-  const record = store.insertRecord({
-    id: "record:iii-surface-screen",
-    schema: { name: "observation.screenpipe_activity", version: 1 },
-    source: { type: "screenpipe", connector: "screenpipe-local-api" },
-    scope: { app: "Warp" },
-    time: { observed_at: new Date().toISOString() },
-    content: { title: "Warp - info", text: "pnpm typecheck running in /Users/junjie/info" },
-    payload: {
-      app_name: "Warp",
-      window_name: "info",
-      frame_id: 12345,
-      raw_result: { content: { file_path: "/tmp/surface.jpg" } },
+function automationView() {
+  const view = parseView({
+    ...rawViewDraft(),
+    id: "automation:test:iii",
+    name: "III test Automation",
+    schema: {
+      name: "metaflow.automation",
+      version: 1,
+      mode: "strict",
+      dialect: "https://json-schema.org/draft/2020-12/schema",
+      json_schema: { type: "object" },
     },
-  });
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const result = await iii.trigger({
-    function_id: III_PROCESSOR_FUNCTIONS.surfaceState,
-    payload: { record_id: record.id },
-  }) as { ok?: boolean; views_written?: string[] };
-  const view = result.views_written?.[0] ? store.getView(result.views_written[0]) : undefined;
-
-  assert.equal(result.ok, true);
-  assert.equal(view?.view_type, "state.surface");
-  assert.equal(view?.content?.surface_kind, "terminal");
-  assert.equal((view?.content?.screen as any)?.screenshot_path, "/tmp/surface.jpg");
-}));
-
-test("@info/iii-runtime writes YouTube learning fragments during ingest cascade", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const result = await iii.functions.get(III_CONTEXT_FUNCTIONS.ingest)?.({
-    record: {
-      id: "record:iii-youtube-caption-fragment",
-      schema: { name: "observation.youtube.caption_fragment", version: 1 },
-      source: { type: "browser", connector: "chrome-acp" },
-      scope: { app: "chrome", domain: "youtube.com" },
-      content: {
-        title: "English listening demo - YouTube",
-        text: "This is the sentence the learner wants to review.",
-        url: "https://www.youtube.com/watch?v=english-demo",
+    role: "derived",
+    representation: {
+      form: "inline",
+      kind: "automation",
+      value: {
+        version: 1,
+        enabled: true,
+        trigger: { id: "trigger:iii", kind: "event", source: "metaflow.view", event: "view.committed" },
+        target: { kind: "transformation", transformation_id: "transformation:test:iii", revision: 1 },
+        input_mapping: [],
+        delivery: [],
+        limits: { dedupe_window_ms: 0, cooldown_ms: 0, max_concurrency: 1 },
       },
-      payload: {
-        video_id: "english-demo",
-        video_title: "English listening demo",
-        video_url: "https://www.youtube.com/watch?v=english-demo",
-        start_seconds: 42,
-        end_seconds: 49,
-        caption_text: "This is the sentence the learner wants to review.",
-        caption_lang: "en",
-      },
-      privacy: { level: "private", retention: "normal" },
+      metadata: {},
     },
-    cascade: true,
-    max_depth: 2,
+    provenance: { inputs: [], actor: "test" },
+    revision: 1,
   });
-  const fragments = store.listViews({ view_types: ["learning.youtube_fragment"], active_only: true, limit: 10 });
+  return parseAutomationView(view);
+}
 
-  assert.equal(result?.ok, true);
-  assert.ok(result?.cascade?.steps.some((step: any) => step.function_id === III_PROCESSOR_FUNCTIONS.youtubeLearning));
-  assert.equal(fragments.length, 1);
-  assert.equal(fragments[0].content?.caption_text, "This is the sentence the learner wants to review.");
-  assert.equal(fragments[0].content?.start_seconds, 42);
-  assert.ok(result?.cascade?.views_written.includes(fragments[0].id));
-}));
-
-test("direct capability iii workers preserve ProgramRuntime capability provenance events", async () => withStore(async (store) => {
-  const record = store.insertRecord({
-    id: "record:iii-direct-browser-capability",
-    schema: { name: "observation.browser_page_snapshot", version: 1 },
-    source: { type: "browser", connector: "test" },
-    content: { title: "iii direct capability", text: "Direct capability worker should keep provenance events.", url: "https://github.com/example/repo" },
-    privacy: { level: "private", retention: "normal", allow_external_llm: true },
-  });
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const response = await iii.trigger({
-    function_id: "capability::browser_ambient_explore",
-    payload: {
-      signal: signalFromRecord(record),
-      autonomy: "suggest",
-      speed: "glance",
-    },
-  }) as { result?: { ok?: boolean; diagnostics?: Record<string, unknown>; written_records?: string[]; written_views?: string[] } };
-
-  assert.equal(response.result?.ok, true);
-  assert.deepEqual(response.result?.written_records, []);
-  assert.deepEqual(response.result?.written_views, []);
-  assert.equal((response.result?.diagnostics?.classification as { kind?: string } | undefined)?.kind, "github_repo");
-  assert.ok(store.listRuntimeEvents({ event_type: "capability.run.started", plugin_id: "capability.browser_ambient.explore", limit: 1 })[0]);
-  assert.ok(store.listRuntimeEvents({ event_type: "capability.run.completed", plugin_id: "capability.browser_ambient.explore", limit: 1 })[0]);
-}));
-
-test("program iii workers invoke capabilities through iii while preserving requested program metadata", async () => withStore(async (store) => {
-  const oldRuntime = process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME;
-  process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME = "local_mock";
-  try {
-    const record = store.insertRecord({
-      id: "record:iii-program-capability",
-      schema: { name: "observation.browser_page_snapshot", version: 1 },
-      source: { type: "browser", connector: "test" },
-      content: { title: "iii program capability", text: "Program worker should invoke AgentTask capability through iii.", url: "https://github.com/example/repo" },
-      privacy: { level: "private", retention: "normal", allow_external_llm: true },
-    });
-    const iii = new InProcessIiiRuntimeClient();
-    await registerInfoIiiRuntime(iii, { store });
-
-    const response = await iii.trigger({
-      function_id: "program::browser_ambient",
+function automationInvocation(
+  automation: ReturnType<typeof automationView>,
+  signalId = "signal:iii",
+): AutomationInvocationInput {
+  return {
+    automation,
+    signal: {
+      id: signalId,
+      kind: "event",
+      source: "metaflow.view",
+      event: "view.committed",
+      occurred_at: NOW,
+      idempotency_key: `idempotency:${signalId}`,
+      evidence: [{ view_id: "view:evidence", revision: 7 }],
       payload: {
-        signal: signalFromRecord(record),
-        autonomy: "suggest",
-        speed: "glance",
-      },
-    }) as { result?: { ok?: boolean; runs?: Array<{ written_views?: string[] }> } };
-    const viewId = response.result?.runs?.[0]?.written_views?.[0];
-    const view = viewId ? store.getView(viewId) : undefined;
-
-    assert.equal(response.result?.ok, true);
-    assert.ok(view);
-    assert.equal(view.view_type, "analysis.browser_agent_task");
-    assert.equal(view.metadata?.requested_by_program, "program.browser_ambient");
-    assert.equal(store.listRuntimeEvents({ event_type: "capability.run.completed", plugin_id: "capability.agent_task.submit", limit: 1 })[0]?.payload?.program_id, "program.browser_ambient");
-  } finally {
-    if (oldRuntime === undefined) delete process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME;
-    else process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME = oldRuntime;
-  }
-}));
-
-test("aggregate program iii workers honor routing.shortcut Views before fan-out", async () => withStore(async (store) => {
-  const oldRuntime = process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME;
-  process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME = "local_mock";
-  try {
-    const record = store.insertRecord({
-      id: "record:iii-routing-shortcut",
-      schema: { name: "observation.browser_page_snapshot", version: 1 },
-      source: { type: "browser", connector: "test" },
-      content: { title: "iii route", text: "Routing shortcut should select browser ambient only.", url: "https://github.com/example/repo" },
-      privacy: { level: "private", retention: "normal", allow_external_llm: true },
-    });
-    store.upsertView({
-      id: "routing:iii-browser-ambient",
-      view_type: "routing.shortcut",
-      title: "Route browser snapshots to Browser Ambient",
-      content: {
-        program_id: "program.browser_ambient",
-        match: { object_kind: "observation", source: "browser", domain: "github.com" },
-      },
-      confidence: 0.9,
-      privacy: { level: "private", retention: "normal" },
-    });
-    const iii = new InProcessIiiRuntimeClient();
-    await registerInfoIiiRuntime(iii, { store });
-
-    const response = await iii.trigger({
-      function_id: III_PROGRAM_FUNCTIONS.processRecord,
-      payload: {
-        record_id: record.id,
-        autonomy: "suggest",
-        speed: "glance",
-      },
-    }) as { result?: { diagnostics?: { selected_program_ids?: string[]; routing_shortcut_view_id?: string } } };
-
-    assert.deepEqual(response.result?.diagnostics?.selected_program_ids, ["program.browser_ambient"]);
-    assert.equal(response.result?.diagnostics?.routing_shortcut_view_id, "routing:iii-browser-ambient");
-  } finally {
-    if (oldRuntime === undefined) delete process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME;
-    else process.env.BROWSER_AMBIENT_AGENT_TASK_RUNTIME = oldRuntime;
-  }
-}));
-
-test("agent task capability runs as a direct iii function and writes returned Views", async () => withStore(async (store) => {
-  const oldRuntime = process.env.PROACTIVE_RESEARCH_AGENT_TASK_RUNTIME;
-  process.env.PROACTIVE_RESEARCH_AGENT_TASK_RUNTIME = "local_mock";
-  try {
-    const source = store.insertRecord({
-      id: "record:iii-agent-task-source",
-      schema: { name: "observation.local_project", version: 1 },
-      source: { type: "local_project", connector: "test" },
-      content: { title: "iii agent task source", text: "Direct capability worker should write agent output." },
-      privacy: { level: "private", retention: "normal", allow_external_llm: true },
-    });
-    const taskView = store.upsertView({
-      id: "task:iii-agent-task",
-      view_type: "task.background_research",
-      title: "iii direct agent task",
-      source_records: [source.id],
-      content: { goal: "Prepare a short background research note." },
-      privacy: { level: "private", retention: "normal", allow_external_llm: true },
-    });
-    const iii = new InProcessIiiRuntimeClient();
-    await registerInfoIiiRuntime(iii, { store });
-
-    const response = await iii.trigger({
-      function_id: III_PROGRAM_FUNCTIONS.agentTaskSubmit,
-      payload: {
-        signal: signalFromView(taskView),
-        autonomy: "suggest",
-        speed: "background",
-        payload: {
-          task: {
-            runtime: "local_mock",
-            goal: "Prepare a short background research note.",
-            output_contract: {
-              view_type: "brief.background_research",
-              title: "Background research from iii function",
-              purpose: "Test direct iii capability execution.",
-            },
-          },
+        view: {
+          ref: { view_id: "view:evidence", revision: 7 },
+          schema: { name: "capture.browser.page_snapshot", version: 1 },
+          representation: { form: "inline", kind: "capture.browser.page_snapshot", access: "descriptor" },
         },
       },
-    }) as { result?: { ok?: boolean; written_views?: string[] } };
-
-    assert.equal(response.result?.ok, true);
-    assert.equal(response.result?.written_views?.length, 1);
-    assert.equal(store.getView(response.result!.written_views![0])?.view_type, "brief.background_research");
-  } finally {
-    if (oldRuntime === undefined) delete process.env.PROACTIVE_RESEARCH_AGENT_TASK_RUNTIME;
-    else process.env.PROACTIVE_RESEARCH_AGENT_TASK_RUNTIME = oldRuntime;
-  }
-}));
-
-test("evidence view worker compiles a stored observation without using old runtimeTick", async () => withStore(async (store) => {
-  const record = store.insertRecord({
-    id: "record:iii-runtime-browser-page",
-    schema: { name: "observation.browser_page_snapshot", version: 1 },
-    source: { type: "browser", connector: "test" },
-    content: { title: "iii runtime migration", text: "Each view compiler is a worker now.", url: "https://example.com/iii-runtime" },
-    privacy: { level: "private", retention: "normal" },
-  });
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const result = await iii.functions.get(VIEW_WORKER_FUNCTIONS.evidence)?.({
-    source_record_ids: [record.id],
-    write: true,
-  });
-
-  assert.equal(result?.ok, true);
-  assert.equal(result?.function_id, VIEW_WORKER_FUNCTIONS.evidence);
-  assert.equal(result?.view_type, "evidence");
-  assert.equal(result?.views_written.length, 1);
-  assert.equal(store.getView(result.views_written[0])?.view_type, "evidence");
-}));
-
-test("record_ingested cascade runs view workers through iii trigger calls", async () => withStore(async (store) => {
-  const record = store.insertRecord({
-    id: "record:iii-cascade-browser-page",
-    schema: { name: "observation.browser_page_snapshot", version: 1 },
-    source: { type: "browser", connector: "test" },
-    content: { title: "iii cascade migration", text: "The iii cascade should create downstream views.", url: "https://example.com/iii-cascade" },
-    privacy: { level: "private", retention: "normal" },
-  });
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const result = await iii.functions.get(III_CASCADE_FUNCTIONS.recordIngested)?.({
-    record_id: record.id,
-    write: true,
-    max_depth: 3,
-  });
-
-  assert.equal(result?.ok, true);
-  assert.equal(result?.mode, "iii_cascade");
-  assert.ok(result.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.evidence));
-  assert.ok(result.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.activity));
-  assert.ok(result.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.proposal));
-  assert.ok(store.listViews({ view_types: ["evidence"], active_only: true, limit: 10 }).length >= 1);
-  assert.ok(store.listViews({ view_types: ["activity"], active_only: true, limit: 10 }).length >= 1);
-}));
-
-test("view_written cascade starts from a source view and routes downstream workers", async () => withStore(async (store) => {
-  const record = store.insertRecord({
-    id: "record:iii-view-cascade",
-    schema: { name: "observation.browser_page_snapshot", version: 1 },
-    source: { type: "browser", connector: "test" },
-    content: { title: "view cascade", text: "Downstream view workers should run.", url: "https://example.com/view-cascade" },
-    privacy: { level: "private", retention: "normal" },
-  });
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-  const evidence = await iii.trigger({
-    function_id: VIEW_WORKER_FUNCTIONS.evidence,
-    payload: { source_record_ids: [record.id], write: true },
-  });
-
-  const result = await iii.functions.get(III_CASCADE_FUNCTIONS.viewWritten)?.({
-    view_ids: evidence.views_written,
-    view_type: "evidence",
-    write: true,
-    max_depth: 2,
-  });
-
-  assert.equal(result?.ok, true);
-  assert.ok(result.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.activity));
-  assert.ok(result.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.proposal));
-  assert.ok(result.views_written.length >= 1);
-}));
-
-test("context::ingest stores an observation and cascades through iii runtime", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-
-  const result = await iii.functions.get(III_CONTEXT_FUNCTIONS.ingest)?.({
-    record: {
-      id: "record:iii-native-ingest",
-      schema: { name: "observation.browser_page_snapshot", version: 1 },
-      source: { type: "browser", connector: "test" },
-      content: { title: "iii native ingest", text: "context::ingest should be the iii-native entrypoint.", url: "https://example.com/native-ingest" },
-      privacy: { level: "private", retention: "normal" },
     },
-    cascade: true,
-    max_depth: 2,
-  });
-
-  assert.equal(result?.ok, true);
-  assert.equal(result?.function_id, III_CONTEXT_FUNCTIONS.ingest);
-  assert.equal(result?.id, "record:iii-native-ingest");
-  assert.equal(store.getRecord("record:iii-native-ingest")?.schema.name, "observation.browser_page_snapshot");
-  assert.ok(result?.cascade?.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.evidence));
-  assert.ok(result?.cascade?.steps.some((step: any) => step.function_id === VIEW_WORKER_FUNCTIONS.activity));
-  assert.ok(store.listViews({ view_types: ["evidence"], active_only: true, limit: 10 }).length >= 1);
-}));
-
-test("context::ingest uses store dedupe and skips cascade for duplicate snapshots", async () => withStore(async (store) => {
-  const iii = new InProcessIiiRuntimeClient();
-  await registerInfoIiiRuntime(iii, { store });
-  const input = {
-    schema: { name: "observation.browser_page_snapshot", version: 1 },
-    source: { type: "browser", connector: "test" },
-    content: { title: "dedupe", text: "same content", url: "https://example.com/dedupe" },
-    payload: { dedupe_window_seconds: 300 },
-    privacy: { level: "private", retention: "normal" },
   };
+}
 
-  const first = await iii.functions.get(III_CONTEXT_FUNCTIONS.ingest)?.({ record: input, cascade: false });
-  const second = await iii.functions.get(III_CONTEXT_FUNCTIONS.ingest)?.({ record: input, cascade: true });
+function iiiCascade(
+  automation: ReturnType<typeof automationView>,
+  evidence: ExactViewRef,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    attempt_id: "cascade-attempt:iii-dlq",
+    root_correlation_id: "cascade-root:iii-dlq",
+    root_event_id: "event:iii-dlq",
+    parent_event_id: "event:iii-dlq",
+    target: {
+      automation: exactViewRef(automation.view),
+      transformation: { transformation_id: "transformation:test:iii", revision: 1 },
+    },
+    lineage: [evidence],
+    depth: 1,
+    fan_out_index: 0,
+    fan_out_total: 1,
+    semantic_fingerprints: ["d".repeat(64)],
+    policy: {
+      id: "policy:iii-dlq",
+      revision: 1,
+      limits: {
+        max_depth: 4,
+        max_fan_out: 4,
+        max_total_attempts: 16,
+        max_total_cost_usd: 10,
+        max_elapsed_ms: 60_000,
+        max_operator_concurrency: 2,
+        reservation_lease_ms: 1_000,
+      },
+    },
+    root_started_at: NOW,
+    attempt_started_at: NOW,
+    aggregate: { attempts: 1, cost_usd: 0 },
+    disposition: "continue" as const,
+    ...overrides,
+  };
+}
 
-  assert.equal(first?.deduped, false);
-  assert.equal(second?.deduped, true);
-  assert.equal(second?.duplicate_of, first?.id);
-  assert.equal(second?.cascade, undefined);
-}));
+function queuedEnvelope(automation: ReturnType<typeof automationView>) {
+  const invocation = automationInvocation(automation, "signal:direct");
+  return {
+    schema_version: 1 as const,
+    contract: "metaflow.automation.invoke.v1" as const,
+    message_id: "iii-message:direct",
+    correlation_id: correlation(invocation),
+    enqueued_at: NOW,
+    queue: { name: "metaflow-automation-v1" as const, config_version: 1 as const },
+    automation: exactViewRef(automation.view),
+    signal: invocation.signal,
+  };
+}
+
+function correlation(input: AutomationInvocationInput): string {
+  return [
+    "automation-occurrence",
+    input.automation.view.id,
+    input.automation.view.revision,
+    input.automation.definition.trigger.id,
+    input.signal.id,
+  ].join(":");
+}
+
+function succeeded(input: AutomationInvocationInput, runId: string): AutomationInvocationAdmissionResult {
+  return {
+    status: "succeeded",
+    correlation_id: correlation(input),
+    occurrence: {
+      id: correlation(input),
+      automation: exactViewRef(input.automation.view),
+      trigger_id: input.automation.definition.trigger.id,
+      trigger_kind: "event",
+      source: input.signal.source,
+      occurred_at: input.signal.occurred_at,
+      idempotency_key: input.signal.idempotency_key,
+      evidence: input.signal.evidence,
+      payload: input.signal.payload,
+      match: { matched: true, reason: "test" },
+    },
+    run_id: runId,
+    output_views: [{ view_id: `view:output:${runId}`, revision: 1 }],
+    deliveries: [],
+  };
+}
+
+function ignored(): AutomationInvocationAdmissionResult {
+  return { status: "ignored", reason: "test" };
+}
+
+function functionOperator(id = "operator:test:function"): OperatorSnapshot {
+  return {
+    id,
+    revision: 1,
+    reference: { kind: "function", function_id: "test.summary", version: 1 },
+    configuration: {},
+    required_capabilities: [],
+  };
+}
+
+function agentOperator(): OperatorSnapshot {
+  return {
+    id: "operator:test:agent",
+    revision: 1,
+    reference: { kind: "agent", adapter: "agent-execution" },
+    configuration: {},
+    required_capabilities: [],
+  };
+}
+
+function transformation(input: View, operator: OperatorSnapshot, schemaName: string): Transformation {
+  return parseTransformation({
+    id: `transformation:${schemaName}`,
+    revision: 1,
+    name: `${schemaName} summary`,
+    instruction: { format: "natural_language", text: "Summarize exact input.", parameters: {} },
+    operator,
+    inputs: [{ role: "source", required: true, sources: [{ kind: "view", ref: exactViewRef(input) }] }],
+    output: {
+      schema: { name: schemaName, version: 1, mode: "freeform" },
+      schema_origin: "declared",
+      cardinality: { min: 1, max: 1 },
+    },
+    policy: {
+      id: "policy:test:approve-all",
+      revision: 1,
+      configuration: { kind: "view_access", profile: "approve_all", rules: [] },
+    },
+    created_at: NOW,
+    metadata: {},
+  });
+}
+
+function executionRequest(transformation: Transformation, runId: string) {
+  return {
+    run_id: runId,
+    correlation_id: `correlation:${runId}`,
+    transformation,
+    access_policy: transformation.policy!,
+    access_use: "local_execution" as const,
+  };
+}
+
+function rawViewDraft(): ViewDraft {
+  return {
+    id: "view:iii:input",
+    name: "III input",
+    purpose: "Exercise Worker boundary",
+    aliases: [],
+    schema: { name: "capture.test", version: 1, mode: "freeform" },
+    role: "raw",
+    time: { created_at: NOW },
+    representation: { form: "inline", kind: "text", value: "Exact input for III Worker", metadata: {} },
+    materialization: {
+      primary: { id: "canonical", format: "json", media_type: "application/json", location: { kind: "inline" } },
+      alternatives: [],
+    },
+    relations: [],
+    provenance: {
+      inputs: [],
+      actor: "capture-ingress",
+      capture: {
+        connector: "test",
+        connection_id: "test:default",
+        source_id: "view:iii:input",
+        source_kind: "fixture",
+        identity: "occurrence",
+        assertion: "direct",
+      },
+    },
+    policy: {
+      owner: "user:local",
+      visibility: "private",
+      privacy: "private",
+      retention: "normal",
+      allow_external_model: true,
+      allow_embedding: false,
+      labels: [],
+    },
+    metadata: {},
+  };
+}
+
+function outputCandidate(invocation: OperatorExecutionInvocation, id: string, value: unknown) {
+  const inputRefs = invocation.inputs.flatMap(binding => binding.views.map(exactViewRef));
+  return {
+    outputs: [{
+      draft: {
+        id,
+        name: invocation.run.frozen.transformation.name,
+        purpose: invocation.run.frozen.transformation.instruction.text,
+        aliases: [],
+        schema: invocation.run.frozen.transformation.output.schema,
+        role: "derived",
+        time: { created_at: NOW },
+        representation: { form: "inline", kind: "summary", value, metadata: {} },
+        materialization: {
+          primary: { id: "canonical", format: "json", media_type: "application/json", location: { kind: "inline" } },
+          alternatives: [],
+        },
+        relations: inputRefs.map(target => ({ type: "derived_from", target, metadata: {} })),
+        provenance: {
+          inputs: inputRefs,
+          operator_run_id: invocation.run.id,
+          actor: "function:test",
+          trace_id: invocation.run.trace_id,
+        },
+        policy: invocation.inputs[0]!.views[0]!.policy,
+        metadata: {},
+      },
+      expected_revision: 0,
+    }],
+    diagnostics: {},
+  };
+}
+
+class FakeAgentOperator implements AgentOperatorPort {
+  executions = 0;
+
+  async execute(invocation: AgentOperatorInvocation): Promise<AgentOperatorResult> {
+    this.executions += 1;
+    assert.equal(invocation.inputs[0]?.views[0]?.ref.view_id, "view:iii:input");
+    return {
+      status: "succeeded",
+      runtime: "agent:test",
+      candidate: { summary: "Agent Worker output" },
+      diagnostics: {},
+    };
+  }
+
+  async cancel() {
+    return { status: "cancelled" as const, runtime: "agent:test" };
+  }
+}
+
+class CancellableOperator implements OperatorExecutionPort {
+  readonly cancelled: string[] = [];
+  readonly started: Promise<void>;
+  private markStarted!: () => void;
+  private finish!: (result: OperatorExecutionResult) => void;
+
+  constructor() {
+    this.started = new Promise(resolve => { this.markStarted = resolve; });
+  }
+
+  async execute(): Promise<OperatorExecutionResult> {
+    this.markStarted();
+    return new Promise(resolve => { this.finish = resolve; });
+  }
+
+  async cancel(attemptId: string): Promise<void> {
+    this.cancelled.push(attemptId);
+    this.finish({ status: "cancelled", reason: "cancelled through III" });
+  }
+}

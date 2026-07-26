@@ -1,63 +1,50 @@
-# Packages
+# Active Packages
 
-`packages/` holds the backend as a pnpm workspace of `@info/*` packages.
-Application surfaces live in `apps/`. Dependencies flow strictly downward -
-each package may only depend on packages below it.
+`packages/` contains only the active Metaflow v1 domain modules and adapters.
+Historical v0 implementations live under `archive/v0/`; they are migration
+evidence and may not be imported by active source.
 
-## Dependency layers (top depends on bottom)
+## Dependency direction
 
 ```text
-apps/{ui,browser-extension}   Application surfaces — HTTP only, no code imports
-        |
-@info/server      HTTP API (port 3111) + iii worker
-@info/runtime     periodic tick orchestrator
-@info/programs    user-value loops: ProgramRuntime, registry, built-in programs
-        |              |
-@info/views   ---> @info/sensors      view compilers / Observation sources
-@info/capabilities                    reusable agent-execution power (zero coupling)
-@info/processor-runtime                open ProcessorDefinition runtime + diagnostics
-@info/view-system                      open ViewSpec registry/query layer
-        |
-@info/core        kernel: types, schema, store (Context Graph), llm, env,
-                  view lifecycle/query/surfacing, policy-aware broker, plugins
+apps
+  -> adapters
+    -> operations / automation / capture / execution
+      -> transformation
+        -> view
+
+view-packages/* -> view-package -> transformation + view
 ```
 
-## Packages
+The active modules are:
 
-- `core/` — the leaf kernel. Domain types, the SQLite-backed `ContextStore`
-  (Context Graph), Zod schemas, LLM access, view lifecycle/query/surfacing, the
-  policy-aware broker, and the plugin registry. Depends on nothing intra-repo.
-- `sensors/` — Observation sources: Screenpipe, browser enrichment, local
-  project snapshots, AI session location. Depends on `@info/core`.
-- `views/` — View compilers and shared helpers, plus the `timeline/`,
-  `threads/`, `work-router/`, `project/`, and `pipeline/` compiler clusters.
-  Includes `work.focus_set`, `project.current`, and the Info-native memory
-  framework (`memory.candidate`, candidate extraction, memory gate, durable
-  memory helpers, and the backend adapter boundary). Depends on `@info/core`
-  (and `@info/sensors` for the visual-frame compiler).
-- `view-system/` — the open ViewSpec registry/query layer used by CLI and
-  processor diagnostics. It describes view families without adding closed core
-  domain enums. Depends on `@info/core`.
-- `capabilities/` — `agent-runtime`: the generic AgentTask execution boundary
-  (ACP stdio, Claude-Code CLI-JSON, mock, MCP providers). Zero runtime coupling.
-  Current implementation lives under `packages/capabilities/agent-runtime/`.
-- `processor-runtime/` — the open ProcessorDefinition runtime, including
-  consumes/produces declarations, view-system diagnostics, and realtime
-  processors such as `state.surface` and `observation.route_candidate`.
-  Depends on `@info/core` and `@info/view-system`.
-- `programs/` — the ProgramRuntime engine, program/capability registry, signal
-  builders, and built-in programs. Depends on `@info/core`, `@info/capabilities`.
-- `runtime/` — the periodic tick: pulls sensors, runs view compilers, processes
-  ambient/background tasks; hosts feedback, triggers, view-provenance.
-- `server/` — the HTTP API surface and the iii worker.
+- `view/`: exact View revisions, Schema, Representation, Materialization,
+  policy, provenance, relations, search projection, and the View Store port.
+- `view-package/`: coherent Schema-family authoring, Renderer and Agent Method
+  descriptors, catalog discovery, version checks, and conformance tests.
+- `transformation/`: immutable Transformation and Operator declarations.
+- `execution/`: authorization, exact input resolution, Operator execution,
+  validation, atomic commit, traces, feedback evolution, Failure Views, and
+  explicit repair.
+- `automation/`: deterministic Trigger admission, exact target invocation,
+  Delivery requests, and correlated Automation traces.
+- `capture/`: Connector Kit, Connector Runtime, Raw View candidate admission,
+  checkpoints, traces, and dead letters.
+- `operations/`: the transport-neutral operation catalog and call-level
+  authorization.
+- `adapters/*`: replaceable implementations for storage, capture sources,
+  Operator hosts, Automation triggers, Delivery surfaces, and transports.
 
 ## Rules
 
-- Each package declares its `@info/*` dependencies in its own `package.json`;
-  the root `package.json` lists every `@info/*` package as `workspace:*` so
-  `tests/` and `scripts/` resolve bare specifiers. tsx resolves package names
-  to `.ts` sources via each `package.json`'s `exports` field - no build step.
-- Import across packages by package name (`@info/core`), never by relative path.
-- Never introduce an upward import (a lower layer importing a higher one).
-- `apps/` are excluded from the root tsconfig; they build with their own Vite
-  configs and talk to the backend only over HTTP.
+- Import another module through its package name, never through a relative
+  cross-package path.
+- Domain modules do not import adapters or apps.
+- Adapters implement an existing interface at a real seam; they do not own
+  View, Transformation, Run, policy, or commit semantics.
+- CLI, HTTP, MCP, Web, and Agent tools project `@info/operations`; they do not
+  reconstruct domain behavior.
+- A new v1 capability must be added to `pnpm-workspace.yaml`,
+  `tsconfig.v1.json`, the package-boundary checks, and focused interface tests.
+- Do not move archived v0 code back into `packages/`. Extract the needed
+  behavior into its named v1 owner with a migration test.

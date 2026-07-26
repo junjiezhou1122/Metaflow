@@ -1,8 +1,0 @@
-{
-  "eval_epoch": 1,
-  "experiment_id": "exp_0004",
-  "reason": "pre-verify: design-time cheating not resolved",
-  "score": null,
-  "status": "discarded",
-  "timestamp": "2026-06-18T07:09:09+00:00"
-}

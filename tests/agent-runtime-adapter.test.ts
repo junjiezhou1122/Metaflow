@@ -5,12 +5,13 @@ import { join } from "node:path";
 import {
   AcpStdioAgentRuntimeAdapter,
   MockAgentRuntimeAdapter,
+  buildAgentHandoff,
   buildAgentTaskPromptBlocks,
   normalizeAgentTaskOutput,
   parseAgentTaskOutput,
   httpMcpServer,
   type AgentRuntimeEvent,
-} from "@info/capabilities";
+} from "@info/agent-runtime-adapter";
 
 test("MockAgentRuntimeAdapter returns structured agent task output", async () => {
   const adapter = new MockAgentRuntimeAdapter();
@@ -69,12 +70,19 @@ test("AgentTask output parser accepts optional evidence Views without treating t
   );
 });
 
-test("buildAgentTaskPromptBlocks maps Info task boundary to ACP text content", () => {
+test("buildAgentTaskPromptBlocks maps simple handoff to ACP text content", () => {
   const blocks = buildAgentTaskPromptBlocks({
     task: {
       id: "task:prompt",
       runtime: "acp_stdio",
-      goal: "Analyze context through ACP.",
+      prompt: "What does this have to do with our project?",
+      goal: "compat fallback",
+      currentContext: {
+        voice: { transcript: "这跟我们项目有什么关系？" },
+        screen: { app: "Safari", title: "Interesting repo", url: "https://github.com/example/repo" },
+        app: { name: "Safari", window_title: "Interesting repo", project_path: "/tmp/info" },
+      },
+      viewTools: [{ name: "mf search", kind: "cli", command: "pnpm", args: ["mf", "views", "search"] }],
       contextPack: { markdown: "# Context\nImportant context." },
       outputContract: { viewType: "analysis.acp_agent_task" },
       constraints: { views_only: true },
@@ -86,12 +94,47 @@ test("buildAgentTaskPromptBlocks maps Info task boundary to ACP text content", (
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].type, "text");
   assert.match(blocks[0].text, /Return only JSON/);
+  assert.match(blocks[0].text, /Use your installed skills/);
+  assert.match(blocks[0].text, /CURRENT CONTEXT/);
+  assert.match(blocks[0].text, /这跟我们项目有什么关系/);
+  assert.match(blocks[0].text, /AVAILABLE VIEW TOOLS/);
+  assert.match(blocks[0].text, /mf search/);
   assert.match(blocks[0].text, /analysis\.acp_agent_task/);
   assert.match(blocks[0].text, /context:\/\/records\/record:1/);
+  assert.doesNotMatch(blocks[0].text, /Use the provided task and Context Pack/);
+});
+
+test("buildAgentHandoff derives current context and default View tools from a signal", () => {
+  const handoff = buildAgentHandoff({
+    task: {
+      id: "task:handoff",
+      runtime: "cli_json",
+      goal: "Summarize this.",
+      cwd: "/Users/junjie/info",
+      outputContract: { viewType: "analysis.agent_task" },
+    },
+    signal: {
+      object_id: "record:1",
+      object_type: "observation.browser_page_snapshot",
+      object_kind: "observation",
+      app: "Chrome",
+      title: "Agent Runtime notes",
+      url: "https://example.com/runtime",
+      text_preview: "Current page talks about agent runtime adapters.",
+      project_path: "/Users/junjie/info",
+    },
+  });
+
+  assert.equal(handoff.prompt, "Summarize this.");
+  assert.equal(handoff.currentContext.screen?.app, "Chrome");
+  assert.equal(handoff.currentContext.screen?.url, "https://example.com/runtime");
+  assert.equal(handoff.currentContext.app?.project_path, "/Users/junjie/info");
+  assert.ok(handoff.viewTools.some(tool => tool.kind === "cli"));
+  assert.ok(handoff.viewTools.some(tool => tool.kind === "mcp"));
 });
 
 test("AcpStdioAgentRuntimeAdapter initializes, creates a session, injects MCP servers, and reads structured output", async () => {
-  const dir = mkdtempSync(join(process.cwd(), ".tmp-info-acp-runtime-test-"));
+  const dir = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-runtime-test-"));
   const script = join(dir, "fake-acp-agent.mjs");
   writeFileSync(script, fakeAcpAgentSource());
   chmodSync(script, 0o755);
@@ -131,6 +174,77 @@ test("AcpStdioAgentRuntimeAdapter initializes, creates a session, injects MCP se
   }
 });
 
+test("persistent ACP reuses one process, closes every session, and survives invalid Agent output", async () => {
+  const dir = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-persistent-test-"));
+  const script = join(dir, "fake-persistent-acp-agent.mjs");
+  writeFileSync(script, fakePersistentAcpAgentSource());
+  chmodSync(script, 0o755);
+  const adapter = new AcpStdioAgentRuntimeAdapter({
+    id: "acp_persistent_test",
+    command: process.execPath,
+    args: [script],
+    cwd: dir,
+    lifecycle: "persistent",
+  });
+
+  try {
+    const warmed = await adapter.warmup();
+    const first = await adapter.submit(agentTask("task:persistent:first", "FIRST"), runtimeContext());
+    const invalid = await adapter.submit(agentTask("task:persistent:invalid", "INVALID_OUTPUT"), runtimeContext());
+    const third = await adapter.submit(agentTask("task:persistent:third", "THIRD"), runtimeContext());
+
+    assert.equal(first.ok, true);
+    assert.equal(invalid.ok, false);
+    assert.match(invalid.reason, /no valid AgentTaskOutput/);
+    assert.equal(third.ok, true);
+    assert.equal(warmed.process_reused, false);
+    assert.equal(first.diagnostics?.process_reused, true);
+    assert.equal(first.diagnostics?.process_id, warmed.process_id);
+    assert.equal(third.diagnostics?.process_reused, true);
+    assert.equal(third.diagnostics?.process_id, first.diagnostics?.process_id);
+    assert.notEqual(third.diagnostics?.session_id, first.diagnostics?.session_id);
+    assert.deepEqual(third.output?.key_points, ["mcp_servers:1", "closed_sessions:2"]);
+  } finally {
+    await adapter.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persistent ACP cancellation targets the active session without killing the resident process", async () => {
+  const dir = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-cancel-test-"));
+  const script = join(dir, "fake-persistent-acp-agent.mjs");
+  writeFileSync(script, fakePersistentAcpAgentSource());
+  chmodSync(script, 0o755);
+  const events: AgentRuntimeEvent[] = [];
+  const adapter = new AcpStdioAgentRuntimeAdapter({
+    id: "acp_persistent_cancel_test",
+    command: process.execPath,
+    args: [script],
+    cwd: dir,
+    lifecycle: "persistent",
+  });
+
+  try {
+    const pending = adapter.submit(agentTask("task:persistent:cancel", "WAIT_FOR_CANCEL"), {
+      ...runtimeContext(),
+      events: { emit: event => events.push(event) },
+    });
+    await waitFor(() => events.some(event => event.type === "runtime.session_created"));
+    await adapter.cancel("task:persistent:cancel");
+    const cancelled = await pending;
+    assert.equal(cancelled.ok, true);
+    assert.equal(cancelled.output?.summary, "cancelled:sess_1");
+
+    const next = await adapter.submit(agentTask("task:persistent:after-cancel", "AFTER_CANCEL"), runtimeContext());
+    assert.equal(next.ok, true);
+    assert.equal(next.diagnostics?.process_id, cancelled.diagnostics?.process_id);
+    assert.equal(next.diagnostics?.process_reused, true);
+  } finally {
+    await adapter.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function fakeAcpAgentSource(): string {
   return `
 import { AgentSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
@@ -156,21 +270,21 @@ const agent = {
     return { sessionId: "sess_fake" };
   },
   async prompt(params) {
-    await connection.sessionUpdate({
-      sessionId: params.sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: {
-          type: "text",
-          text: JSON.stringify({
-            summary: "Fake ACP agent completed task",
-            analysis: "Prompt blocks: " + params.prompt.length,
-            key_points: ["mcp_servers:" + lastMcpServerCount],
-            confidence: 0.82
-          })
+    const output = "\`\`\`json\\n" + JSON.stringify({
+      summary: "Fake ACP agent completed task",
+      analysis: "Prompt blocks: " + params.prompt.length,
+      key_points: ["mcp_servers:" + lastMcpServerCount],
+      confidence: 0.82
+    }) + "\\n\`\`\`";
+    for (const text of [output.slice(0, 17), output.slice(17, 61), output.slice(61)]) {
+      await connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text }
         }
-      }
-    });
+      });
+    }
     return { stopReason: "end_turn" };
   },
   async cancel() {},
@@ -183,4 +297,120 @@ const output = Readable.toWeb(process.stdin);
 connection = new AgentSideConnection(() => agent, ndJsonStream(input, output));
 await connection.closed;
 `;
+}
+
+function fakePersistentAcpAgentSource(): string {
+  return `
+import { AgentSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
+import { Readable, Writable } from "node:stream";
+
+let connection;
+let sessionCount = 0;
+let closedSessions = 0;
+const mcpCounts = new Map();
+const waiting = new Map();
+const cancelled = new Set();
+
+async function emitOutput(sessionId, output) {
+  await connection.sessionUpdate({
+    sessionId,
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: JSON.stringify(output) }
+    }
+  });
+}
+
+const agent = {
+  async initialize(params) {
+    return {
+      protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
+      agentCapabilities: {
+        promptCapabilities: {},
+        mcpCapabilities: { http: true },
+        sessionCapabilities: { close: {} }
+      },
+      agentInfo: { name: "fake-persistent-acp-agent", version: "0.0.1" },
+      authMethods: []
+    };
+  },
+  async newSession(params) {
+    const sessionId = "sess_" + (++sessionCount);
+    mcpCounts.set(sessionId, params.mcpServers.length);
+    return { sessionId };
+  },
+  async prompt(params) {
+    const text = JSON.stringify(params.prompt);
+    if (text.includes("WAIT_FOR_CANCEL")) {
+      if (!cancelled.has(params.sessionId)) {
+        await new Promise(resolve => waiting.set(params.sessionId, resolve));
+      }
+      await emitOutput(params.sessionId, {
+        summary: "cancelled:" + params.sessionId,
+        key_points: ["cancel_targeted"],
+        confidence: 1
+      });
+      return { stopReason: "cancelled" };
+    }
+    if (text.includes("INVALID_OUTPUT")) {
+      await connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "not valid AgentTaskOutput" }
+        }
+      });
+      return { stopReason: "end_turn" };
+    }
+    await emitOutput(params.sessionId, {
+      summary: "completed:" + params.sessionId,
+      key_points: [
+        "mcp_servers:" + mcpCounts.get(params.sessionId),
+        "closed_sessions:" + closedSessions
+      ],
+      confidence: 1
+    });
+    return { stopReason: "end_turn" };
+  },
+  async cancel(params) {
+    cancelled.add(params.sessionId);
+    waiting.get(params.sessionId)?.();
+    waiting.delete(params.sessionId);
+  },
+  async closeSession() {
+    closedSessions += 1;
+    return {};
+  },
+  async authenticate() {}
+};
+
+const input = Writable.toWeb(process.stdout);
+const output = Readable.toWeb(process.stdin);
+connection = new AgentSideConnection(() => agent, ndJsonStream(input, output));
+await connection.closed;
+`;
+}
+
+function agentTask(id: string, goal: string) {
+  return {
+    id,
+    runtime: "acp_persistent_test",
+    goal,
+    outputContract: { viewType: "analysis.acp_agent_task" },
+  };
+}
+
+function runtimeContext() {
+  return {
+    signal: { object_type: "observation.local_project" },
+    mcpServers: [httpMcpServer("metaflow", "http://127.0.0.1:3111/mcp")],
+  };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started >= timeoutMs) throw new Error(`condition not met within ${timeoutMs}ms`);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
 }

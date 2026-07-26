@@ -119,6 +119,23 @@ function metadata() {
   };
 }
 
+function automationDomContext() {
+  const path = location.pathname.split("/").filter(Boolean);
+  const githubRepository = location.hostname === "github.com"
+    && path.length >= 2
+    && Boolean(document.querySelector("#repository-container-header, [data-testid='repository-container-header'], [itemtype='http://schema.org/SoftwareSourceCode']"));
+  return {
+    github_repository: githubRepository,
+    repository_owner: githubRepository ? path[0] : undefined,
+    repository_name: githubRepository ? path[1] : undefined,
+    markers: {
+      repository_header: Boolean(document.querySelector("#repository-container-header, [data-testid='repository-container-header']")),
+      repository_content: Boolean(document.querySelector("#repo-content-pjax-container, [data-turbo-frame='repo-content-turbo-frame']")),
+      readme: Boolean(document.querySelector("#readme, article.markdown-body")),
+    },
+  };
+}
+
 function scrollDepth() {
   const doc = document.documentElement;
   const max = Math.max(1, doc.scrollHeight - window.innerHeight);
@@ -175,13 +192,16 @@ function collectPageContext() {
     metadata: metadata(),
     text_quality: textQuality(text),
     search: searchQueryInfo(),
+    dom: automationDomContext(),
   };
 }
 
 function sendAttention(kind: "selected" | "copied") {
   const payload = selectionContext(kind);
   if (!payload || payload.selected_text.length < 3) return;
-  chrome.runtime.sendMessage({ type: "context.capture.browser_attention", kind, payload }).catch(() => undefined);
+  chrome.runtime.sendMessage({ type: "context.capture.browser_attention", kind, payload }).catch(error => {
+    reportBrowserCaptureMessageFailure("attention", error, { kind, url: payload.url });
+  });
 }
 
 function handleStableSelection() {
@@ -191,7 +211,19 @@ function handleStableSelection() {
     return;
   }
   showSelectionToolbar(payload);
-  chrome.runtime.sendMessage({ type: "context.capture.browser_attention", kind: "selected", payload }).catch(() => undefined);
+  chrome.runtime.sendMessage({ type: "context.capture.browser_attention", kind: "selected", payload }).catch(error => {
+    reportBrowserCaptureMessageFailure("selection", error, { url: payload.url });
+  });
+}
+
+function reportBrowserCaptureMessageFailure(stage: string, error: unknown, details: Record<string, unknown>): void {
+  console.error(JSON.stringify({
+    component: "browser-capture-content",
+    event: "browser_capture.message_failed",
+    stage,
+    error: error instanceof Error ? error.message : String(error),
+    ...details,
+  }));
 }
 
 function queueSelectionCheck(delayMs = 180) {
@@ -533,7 +565,9 @@ function submitWritingFeedback(view: any, input: any) {
       target_view_type: view.view_type,
       ...(input.payload ?? {}),
     },
-  }).catch(() => undefined);
+  }).catch(error => {
+    console.error("[metaflow-writing] feedback delivery failed", error, { view_id: view.id });
+  });
 }
 
 function rememberInsertedDraftForEdit(element: Element, view: any, draft: string, beforeText: string, afterText: string) {
@@ -933,26 +967,20 @@ style.textContent = TOOLBAR_STYLE;
 document.documentElement.append(style);
 
 // ---------------------------------------------------------------------------
-// Ambient: silent trigger
+// Ambient: declarative Browser trigger signal
 // ---------------------------------------------------------------------------
 // The user's request: while they are reading or interacting with a page, we
-// quietly fire an ambient analysis request so a task shows up in the side
-// panel Tasks tab. We never mutate the page or interrupt the user; this
-// module only reads signals and posts a single fire-and-forget message.
+// Cheap DOM/dwell signals stay in the content script. Once a local condition
+// is reached, the background submits one strict event to the v1 Automation
+// endpoint. Durable dedupe and Agent selection remain backend responsibilities.
 
 const AMBIENT_DWELL_MS = 30_000;          // 30s dwell
 const AMBIENT_SCROLL_THRESHOLD = 0.5;     // 50% scroll depth
 const AMBIENT_SELECTION_MIN = 20;         // any 20+ char selection
-const AMBIENT_DEDUPE_KEY_PREFIX = "info.ambient.lastFiredAt:";
-
-let ambientLastFiredAt = 0;
+const ambientNavigationId = crypto.randomUUID();
 let ambientDwellTimer: number | undefined;
 let ambientDwellFired = false;
 let ambientSelectionFired = false;
-
-function ambientDedupeKey(): string {
-  return `${AMBIENT_DEDUPE_KEY_PREFIX}${location.host}${location.pathname}`;
-}
 
 function ambientShouldFireFromDwell(): boolean {
   return !ambientDwellFired
@@ -965,7 +993,7 @@ function ambientMaybeFireFromDwell(): void {
   if (ambientDwellFired) return;
   if (!ambientShouldFireFromDwell()) return;
   ambientDwellFired = true;
-  ambientFire("Silent ambient: dwelled on page and scrolled past 50%");
+  void ambientFire("dwell", "Dwelled on page and scrolled past 50%");
 }
 
 function ambientMaybeFireFromSelection(text: string): void {
@@ -973,27 +1001,28 @@ function ambientMaybeFireFromSelection(text: string): void {
   if (ambientDwellFired) return; // dwell already won
   if (text.length < AMBIENT_SELECTION_MIN) return;
   ambientSelectionFired = true;
-  ambientFire(`Silent ambient: significant selection (${text.length} chars)`);
+  void ambientFire("selection", `Significant selection (${text.length} chars)`);
 }
 
-async function ambientFire(reason: string): Promise<void> {
-  // Hard de-dupe: at most once every 90s per page, and once per URL per session.
-  const now = Date.now();
-  if (now - ambientLastFiredAt < 90_000) return;
+async function ambientFire(reasonKind: "dwell" | "selection", reason: string): Promise<void> {
   try {
-    const dedupeKey = ambientDedupeKey();
-    const stored = await chrome.storage.session?.get?.(dedupeKey).catch(() => ({} as Record<string, unknown>));
-    const lastForUrl = typeof stored?.[dedupeKey] === "number" ? (stored[dedupeKey] as number) : 0;
-    if (now - lastForUrl < 10 * 60_000) return;
-    await chrome.storage.session?.set?.({ [dedupeKey]: now }).catch(() => undefined);
-  } catch {
-    // storage.session is unavailable in some contexts; fall back to time-only dedupe.
-  }
-  ambientLastFiredAt = now;
-  try {
-    await chrome.runtime.sendMessage({ type: "trigger-ambient", reason });
-  } catch {
-    // Background may be reloading; the next user-initiated trigger will recover.
+    const response = await chrome.runtime.sendMessage({
+      type: "automation.browser.signal",
+      event_id: crypto.randomUUID(),
+      navigation_id: ambientNavigationId,
+      reason_kind: reasonKind,
+      reason,
+      dwell_ms: Date.now() - startedAt,
+      scroll_depth: Math.max(maxScrollDepth, scrollDepth()),
+      scroll_events: scrollEvents,
+      selection_count: selectionCount,
+      dom: automationDomContext(),
+    });
+    if (!response?.ok) {
+      console.error("[metaflow-ambient] Browser Automation rejected", response);
+    }
+  } catch (error) {
+    console.error("[metaflow-ambient] Browser Automation submission failed", error);
   }
 }
 
@@ -1201,7 +1230,9 @@ function ytSendCanonicalObservation(schemaName: string, payload: Record<string, 
       observed_at: new Date().toISOString(),
       ...payload,
     },
-  }).catch(() => undefined);
+  }).catch(error => {
+    reportBrowserCaptureMessageFailure("youtube_observation", error, { schema_name: schemaName, video_id: ytVideoId });
+  });
 }
 
 function ytStartFreshGap(): void {
@@ -1322,7 +1353,9 @@ function ytSendGap(gap: YtGap | null): void {
     void chrome.runtime.sendMessage({
       type: "youtube-comprehension-gap",
       gap: payload,
-    }).catch(() => undefined);
+    }).catch(error => {
+      reportBrowserCaptureMessageFailure("youtube_comprehension_gap", error, { video_id: ytVideoId });
+    });
   }, YT_SEND_DEBOUNCE_MS);
 }
 

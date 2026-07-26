@@ -1,225 +1,197 @@
 # Metaflow
 
-<p align="center">
-  <a href="./README.zh-CN.md">简体中文</a>
-</p>
-
-Metaflow is a local-first context runtime for personal AI agents. It turns raw
-work traces into typed, inspectable Views that agents and applications can use
-as durable working memory.
+Metaflow is a local-first information runtime for personal AI. It captures
+source evidence as immutable Raw Views, transforms exact View revisions through
+versioned Operators, and keeps results, feedback, failures, policy decisions,
+and traces inspectable.
 
 ```text
-Observation -> Processor -> ViewGraph -> App / Agent Action -> Feedback -> Evolution
+external source
+  -> Connector Runtime
+  -> immutable Raw View revisions
+  -> versioned Transformation + Operator
+  -> observable Run
+  -> Derived View / Failure View
+  -> Feedback and explicit evolution
 ```
 
-![Metaflow architecture](assets/metaflow-architecture.svg)
+An Observation is the product name for a Raw View. It is not a second storage
+model. Every View has a Schema, Representation, Materialization, provenance,
+policy, and an immutable revision.
 
-![Metaflow innovation](assets/metaflow-innovation.jpg)
+## Current Capabilities
 
-## Why Metaflow
+- Browser and Screenpipe evidence enter through one provider-neutral Capture
+  Runtime with idempotency, checkpoints, retry, traces, and dead letters.
+- Function and Agent Operators execute frozen Transformation revisions through
+  one observable Execution Runtime.
+- Exact input bindings, access approval, output validation, atomic commits,
+  cancellation, Failure Views, and explicit repair are shared runtime behavior.
+- Feedback is an ordinary View and can evolve a Transformation through durable
+  compare-and-swap revisions.
+- CLI, HTTP, MCP, and in-process callers project the same v1 Operation catalog.
+- Ambient Browser, macOS push-to-talk, and scheduled summary flows reuse the
+  same Capture, Execution, Delivery, Feedback, and trace owners.
+- Privacy Forget computes exact provenance impact, coordinates cleanup, and
+  permanently retires forgotten View identities.
 
-Most memory systems store history and hope retrieval finds the right chunk
-later. Metaflow treats memory as a living graph of task-specific Views:
-compressed state, evidence, task context, feedback, results, and long-term
-preferences.
-
-The goal is practical: future work should start from organized state instead of
-expensive repeated search. A useful View reduces tokens, time, context misses,
-and repeated failure.
-
-## What It Does Today
-
-- Captures observations from conversations, browser activity, Screenpipe,
-  project files, logs, and runtime events.
-- Writes canonical Views such as `state.surface`, `work.focus_set`,
-  `project.current`, `task.*`, `result.*`, `feedback.*`, `memory.daily`, and
-  `memory.profile`.
-- Runs deterministic, LLM, script, and agent-task processors.
-- Maintains a ViewGraph with fork, update, archive, delete, trace, and child
-  traversal operations.
-- Exposes a CLI surface for agents through `pnpm mf`.
-- Provides an HTTP runtime and React UI for inspecting Views, processors,
-  memory, proactive inboxes, and project state.
-- Ships a Chrome ACP surface for reading the active tab, observing elements,
-  acting in the browser, and using current-page context.
-- Includes adaptive View promotion so repeated work, useful state, and feedback
-  can become better processors or better Views.
-
-## Architecture
-
-Metaflow has seven working layers:
-
-| Layer | Role |
-| --- | --- |
-| Observation stream | Conversations, browser state, Screenpipe evidence, code, logs, failures, and user feedback |
-| Task discovery | Finds repeated work, expensive searches, open loops, failures, and reusable methods |
-| Processor runtime | Runs deterministic code, LLM prompts, scripts, agent tasks, and browser jobs |
-| ViewGraph | Stores typed task-specific Views with provenance and lifecycle state |
-| Personal apps | Projects Views into dashboards, learning tools, memory inboxes, and browser surfaces |
-| Verification | Measures task success, usefulness, edits, dismissals, latency, and search cost |
-| Evolution | Creates, updates, forks, merges, splits, retires, and promotes Views and processors |
-
-Everything important is represented as a View. Current state is a View. A task
-is a View. A result is a View. Feedback is a View family. Memory is a retained
-View whose job is to change future behavior.
+The visual graph explorer, Application Spaces, marketplace, and general
+external side effects are later product layers. The archived v0 React UI is not
+the v1 interface.
 
 ## Repository Layout
 
 ```text
-apps/
-  chrome-acp/          Chrome ACP browser surface
-  ui/                  React inspection UI
-  mac-companion/       macOS companion app
 packages/
-  core/                Store, schema, lifecycle, plugin registry, View queries
-  server/              HTTP runtime
-  processor-runtime/   Processor registry and execution runtimes
-  view-system/         Canonical View definitions and built-ins
-  views/               View catalogs, timelines, proactive and workflow Views
-  runtime/             Ambient runtime loop
-  sensors/             Screenpipe and other observation sources
-  capabilities/        Agent/runtime capability adapters
-docs/                  Architecture, contracts, design notes, and issue docs
-criteria/              Acceptance criteria for focused workstreams
-scripts/               CLI, runtime, ingest, timeline, and maintenance tools
+  view/                 recursive View contract and repository ports
+  transformation/       Transformation and Operator contracts
+  execution/            Runs, authorization, validation, commit, failure, repair
+  automation/           Trigger-to-context-to-target-to-delivery lifecycle
+  capture/              Connector Runtime and Capture Ingress
+  operations/           shared public operation catalog
+  adapters/             independent SQLite, source, runtime, and surface adapters
+
+apps/
+  ambient-daemon/       canonical v1 composition root and HTTP server
+  chrome-acp/           Browser source and delivery integration in migration
+  mac/                  native push-to-talk and Delivery integration
+  website/              product website
+
+scripts/v1/             canonical CLI, MCP, and active-test entrypoints
+wiki/                   canonical v1 architecture and decision history
+archive/                retired artifacts and compatibility fixtures
 ```
+
+The old `packages/core`, `packages/server`, Processor, Program, View-system,
+runtime, and React UI sources remain in the repository only as migration
+evidence. They are not workspace packages, root dependencies, default commands,
+or default tests.
 
 ## Quick Start
 
 Requirements:
 
-- Node.js with `--experimental-sqlite` support
-- pnpm
+- Node.js 22+ with `node:sqlite`
+- Corepack/pnpm
+- an explicit ACP-compatible Agent command for Agent Operators
 
-Install dependencies:
-
-```bash
-pnpm install
-```
-
-Start the HTTP runtime:
+Install the canonical 22-project v1 workspace:
 
 ```bash
-pnpm run dev
+corepack pnpm install
 ```
 
-The runtime defaults to:
+Start the Ambient v1 HTTP daemon:
+
+```bash
+AGENT_TASK_ACP_COMMAND='<your-acp-command>' corepack pnpm dev
+```
+
+The daemon defaults to `http://localhost:3111` and fails at startup if the Agent
+command or a required composition port is absent. Set `METAFLOW_DATA_DIR` to
+change the SQLite data directory.
+
+Health and exact View reads:
 
 ```text
-http://localhost:3111
+GET  /health
+GET  /context/v1/views/<view-id>?revision=<positive-integer>
 ```
 
-Start the UI:
-
-```bash
-pnpm run ui:dev
-```
-
-Build the UI:
-
-```bash
-pnpm run ui:build
-```
-
-Run tests:
-
-```bash
-pnpm test
-```
-
-Type-check:
-
-```bash
-pnpm run typecheck
-```
-
-## CLI
-
-`pnpm mf` is the main agent-facing surface.
-
-```bash
-pnpm mf --json help
-pnpm mf --json state
-pnpm mf --json view list
-pnpm mf --json view latest project.current
-pnpm mf --json view children view:source
-pnpm mf --json view fork view:source --id view:task --view-type task.browser_brief --patch ./patch.json
-pnpm mf --json view update view:task --status accepted --patch ./patch.json
-pnpm mf --json view delete view:task --reason "superseded"
-pnpm mf --json processor list
-pnpm mf --json processor report
-pnpm mf --json processor run processor.view_promotion_engine --record obs:example
-pnpm mf --json task list --refresh
-pnpm mf --json task queue --limit 8
-pnpm mf --json sensor screenpipe status
-pnpm mf --json sensor screenpipe search --focused --app Cursor --start "30m ago"
-pnpm mf --json memory daily show --date 2026-06-17
-pnpm mf --json memory profile show
-```
-
-## Core View Families
-
-- `state.surface`: what the user is currently looking at or operating.
-- `work.focus_set`: active tasks, windows, projects, and intent.
-- `project.current`: the current project state and next useful actions.
-- `task.*`: pending, active, delegated, and completed work.
-- `result.*`: outputs from tasks and agent actions.
-- `feedback.*`: accept, dismiss, edit, correction, and usefulness signals.
-- `memory.daily`: one-day retained memory.
-- `memory.profile`: durable user preferences, habits, and working patterns.
-- `suggestion.*`: proposed actions or context that may help the user.
-
-## Chrome ACP
-
-`apps/chrome-acp/packages/chrome-extension/` is the current browser agent
-surface. It lets agents:
-
-- read the active tab,
-- observe interactive elements,
-- act by intent or selector,
-- use current-tab debugger tools when needed,
-- query task Views and View state from the side panel.
-
-Load it unpacked from:
+Canonical Operations use:
 
 ```text
-apps/chrome-acp/packages/chrome-extension/
+POST /metaflow/v1/operations/<operation-name>
 ```
 
-## Personal Applications
-
-Applications are specialized projections over the same ViewGraph, not separate
-memory silos.
-
-- English learning app: language exposure, difficult segments, review queues,
-  and learning memory.
-- Research app: hypotheses, evidence, methods, failures, timelines, and open
-  questions.
-- Project command center: `project.current`, project tasks, agent task lists,
-  and automation outcomes.
-- Memory inbox: memory candidates, daily memory, profile memory, and feedback.
-- Browser task cockpit: current page state, browser task Views, Chrome ACP
-  results, and action outcomes.
-- Workflow miner: traces, repeated task clusters, failures, and successful
-  methods.
-
-## Key Docs
-
-- [Adaptive ViewGraph Memory](docs/adaptive-viewgraph-memory.md)
-- [View-First Proactive Agent OS](docs/view-first-proactive-agent-os.md)
-- [Application Surface Contract](docs/application-surface-contract.md)
-- [Evolution Engine](docs/evolution-engine.md)
-- [Info Design Consensus](docs/info-design-consensus.md)
-- [Agent Surface CLI](docs/agent-surface-cli.md)
-- [Ambient Runtime Architecture](docs/info-ambient-runtime-architecture.md)
-- [View Implementation Matrix](docs/view-implementation-matrix.md)
-
-## Project Status
-
-Metaflow is an active local-first system with a working CLI, ViewGraph, runtime
-processors, memory surfaces, React UI, and Chrome ACP browser agent surface. The
-implementation is evolving quickly, but the central contract is stable:
+Browser Capture and Ambient transports use:
 
 ```text
-make context inspectable, make memory actionable, and let feedback improve the system
+POST /capture/v1/browser-events
+POST /automation/v1/browser-signals
+GET  /automation/v1/browser-deliveries
+POST /automation/v1/browser-interactions
+
+POST /automation/v1/macos/voice-signals
+GET  /automation/v1/macos/deliveries
+POST /automation/v1/macos/interactions
+
+GET  /automation/v1/inbox/deliveries
+POST /automation/v1/inbox/interactions
 ```
+
+## CLI And MCP
+
+The CLI accepts one canonical operation plus a JSON input:
+
+```bash
+AGENT_TASK_ACP_COMMAND='<your-acp-command>' \
+  corepack pnpm mf catalog.list '{}'
+
+AGENT_TASK_ACP_COMMAND='<your-acp-command>' \
+  corepack pnpm mf view.get '{"ref":{"view_id":"view:example","revision":1}}'
+```
+
+Start the official MCP SDK projection over stdio:
+
+```bash
+AGENT_TASK_ACP_COMMAND='<your-acp-command>' corepack pnpm mcp
+```
+
+CLI, HTTP, MCP, and in-process calls use the same schemas, authorization,
+structured envelope, and observer path. A transport does not reconstruct domain
+behavior.
+
+## Source Integrations
+
+Build the Chrome source surface:
+
+```bash
+corepack pnpm browser:build
+```
+
+The Browser Capture transport posts canonical events to
+`/capture/v1/browser-events` and retains network failures in extension storage
+until an explicit retry. Retryable 408/425/429/5xx responses remain there too,
+because they are not server acceptance. Some older side-panel functions remain a documented
+temporary compatibility surface and are not part of the canonical workspace.
+The MV3 worker persists visit identity in session storage, uses alarms and
+web-navigation events, and shares one validated wire schema with the HTTP and
+adapter surfaces. Manual save commits page evidence and save intent atomically.
+
+Screenpipe is separately installed and accessed through its localhost REST API.
+Metaflow does not vendor Screenpipe or read its internal SQLite. Large frame and
+audio media remain external references unless a policy explicitly requires
+materialization.
+
+Build or run the signed macOS companion bundle:
+
+```bash
+corepack pnpm mac:bundle
+corepack pnpm mac:run
+```
+
+The raw SwiftPM executable is not valid permission evidence because it does not
+carry the bundle's privacy usage descriptions.
+
+## Verification
+
+```bash
+corepack pnpm typecheck
+corepack pnpm check:boundaries
+corepack pnpm test
+corepack pnpm test:v1-vertical
+```
+
+`pnpm test` reads an explicit active-test manifest. Archived v0 tests are not
+silently mixed into the v1 release gate.
+
+## Canonical Docs
+
+- [View Core and Transformation Runtime](wiki/architecture/view-core-transformation-runtime.md)
+- [Ambient Automation Runtime](wiki/architecture/ambient-automation-runtime.md)
+- [v0 Migration Inventory](wiki/architecture/v0-migration-inventory.md)
+- [View Core Wayfinder Map](wiki/wayfinder/metaflow-view-core/map.md)
+
+The `wiki/` directory is the v1 documentation source of truth. `docs/` and the
+archived source tree describe historical designs only.

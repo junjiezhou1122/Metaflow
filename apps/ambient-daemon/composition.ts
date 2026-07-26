@@ -1,0 +1,386 @@
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { CaptureIngress, ConnectorRuntime } from "@info/capture";
+import {
+  AutomationContextResolver,
+  AutomationDeliveryCoordinator,
+  AutomationFeedbackViewService,
+  AutomationRuntime,
+  parseAutomationView,
+  type AutomationContextAuthorizer,
+} from "@info/automation";
+import {
+  DeterministicViewAccessAuthorizer,
+  AgentOperatorExecutionBridge,
+  ExecutionRuntime,
+  FeedbackEvolutionService,
+  OperatorExecutionRouter,
+  parseViewAccessPolicySnapshot,
+} from "@info/execution";
+import { AgentExecutionAdapter, type AgentRuntimeAdapter } from "@info/agent-runtime-adapter";
+import {
+  AutomationExecutionCommandHandler,
+  AutomationExecutionTarget,
+} from "@info/automation-execution-adapter";
+import {
+  SqliteAutomationDeliveryLedger,
+  SqliteAutomationOccurrenceRepository,
+  SqliteReactiveCascadeLedger,
+  SqliteAutomationTraceStore,
+} from "@info/automation-sqlite";
+import {
+  BrowserAutomationController,
+  BrowserAutomationHttpBridge,
+  BrowserDeliveryMailbox,
+  ViewBrowserAutomationCatalog,
+} from "@info/browser-automation-adapter";
+import { configureBrowserCapture } from "@info/browser-capture-adapter";
+import {
+  BrowserDomRequestBroker,
+  MacAutomationController,
+  MacAutomationHttpBridge,
+  MacDeliveryMailbox,
+  ViewMacAutomationCatalog,
+} from "@info/macos-automation-adapter";
+import { SqliteViewRepository } from "@info/storage-sqlite";
+import {
+  SchedulerAutomationController,
+  SqliteScheduleCursorRepository,
+  ViewSchedulerAutomationCatalog,
+} from "@info/scheduler-automation-adapter";
+import { InboxAutomationHttpBridge, InboxDeliveryMailbox } from "@info/inbox-automation-adapter";
+import { HttpOperationAdapter } from "@info/operation-surfaces";
+import {
+  GrantOperationAuthorizer,
+  JsonConsoleOperationObserver,
+  OperationService,
+} from "@info/operations";
+import { SqliteTransformationRepository } from "@info/transformation-sqlite";
+import { exactTransformationRef, type Transformation } from "@info/transformation";
+import {
+  PrivacyForgetService,
+  canonicalJson,
+  parseView,
+  type ReactiveCascadePolicySnapshot,
+  type View,
+} from "@info/view";
+import {
+  githubSummaryAutomationDraft,
+  githubSummaryTransformation,
+  dailySummaryAutomationDraft,
+  dailySummaryTransformation,
+  macVoiceAssistAutomationDraft,
+  macVoiceAssistTransformation,
+} from "./definitions.js";
+import { createAmbientV1HttpHandler } from "./http-handler.js";
+import { createAmbientMcpHttpHandler } from "./mcp-handler.js";
+
+export type AmbientDaemonCompositionOptions = {
+  data_directory: string;
+  agent_runtime: AgentRuntimeAdapter;
+  agent_aliases?: Record<string, string>;
+  agent_mcp_servers?: import("@info/agent-runtime-adapter").AgentMcpServerConfig[];
+  mac_delivery_mailbox?: MacDeliveryMailbox;
+  now?: () => Date;
+};
+
+export const AMBIENT_REACTIVE_CASCADE_POLICY: ReactiveCascadePolicySnapshot = {
+  id: "policy:ambient:reactive-cascade",
+  revision: 1,
+  limits: {
+    max_depth: 8,
+    max_fan_out: 32,
+    max_total_attempts: 256,
+    max_total_cost_usd: 10,
+    max_elapsed_ms: 3_600_000,
+    max_operator_concurrency: 4,
+    reservation_lease_ms: 300_000,
+  },
+};
+
+export async function createAmbientDaemonComposition(options: AmbientDaemonCompositionOptions) {
+  const now = options.now ?? (() => new Date());
+  const databasePath = join(options.data_directory, "metaflow.sqlite");
+  const automationPath = join(options.data_directory, "automation.sqlite");
+  const views = new SqliteViewRepository(databasePath);
+  const transformations = new SqliteTransformationRepository(databasePath);
+  const occurrences = new SqliteAutomationOccurrenceRepository(automationPath);
+  const cascades = new SqliteReactiveCascadeLedger(automationPath);
+  const ledger = new SqliteAutomationDeliveryLedger(automationPath);
+  const traces = new SqliteAutomationTraceStore(automationPath);
+  const schedulerCursors = new SqliteScheduleCursorRepository(automationPath);
+  try {
+    await seedTransformation(transformations, githubSummaryTransformation, "seed:transformation.github.repository_summary@1");
+    await seedTransformation(transformations, macVoiceAssistTransformation, "seed:transformation.macos.voice_assist@1");
+    await seedTransformation(transformations, dailySummaryTransformation, "seed:transformation.ambient.daily_summary@1");
+    await seedAutomation(views, githubSummaryAutomationDraft, "seed:automation.browser.github_repository_summary@1");
+    await seedAutomation(views, macVoiceAssistAutomationDraft, "seed:automation.macos.voice_assist@1");
+    await seedAutomation(views, dailySummaryAutomationDraft, "seed:automation.ambient.daily_summary@1");
+
+    const access = new DeterministicViewAccessAuthorizer();
+    const agent = new AgentExecutionAdapter({
+      runtimes: [options.agent_runtime],
+      default_runtime: options.agent_runtime.id,
+      mcp_servers: options.agent_mcp_servers,
+      now,
+    });
+    const operators = new OperatorExecutionRouter([
+      { kind: "agent", port: new AgentOperatorExecutionBridge(agent, { now: () => now().toISOString() }) },
+    ]);
+    const execution = new ExecutionRuntime(
+      views,
+      views,
+      access,
+      operators,
+      undefined,
+      { now: () => now().toISOString() },
+    );
+    const target = new AutomationExecutionTarget({
+      transformations,
+      execution,
+      cascades,
+    });
+    const mailbox = new BrowserDeliveryMailbox(now);
+    const macMailbox = options.mac_delivery_mailbox ?? new MacDeliveryMailbox(now);
+    const inboxMailbox = new InboxDeliveryMailbox(now);
+    const browserContext = new BrowserDomRequestBroker({ now });
+    const delivery = new AutomationDeliveryCoordinator({
+      renderers: [mailbox, macMailbox, inboxMailbox],
+      ledger,
+      feedback: new AutomationFeedbackViewService(views),
+      commands: new AutomationExecutionCommandHandler(target),
+      events: traces,
+      now,
+    });
+    const context = new AutomationContextResolver({
+      views,
+      authorizer: localContextAuthorizer(access),
+    });
+    const runtime = new AutomationRuntime({
+      occurrences,
+      cascades,
+      context,
+      target,
+      delivery,
+      events: traces,
+      now,
+    });
+    const scheduler = new SchedulerAutomationController({
+      catalog: new ViewSchedulerAutomationCatalog(views),
+      cursors: schedulerCursors,
+      runtime,
+      now,
+      events: {
+        emit(event) {
+          console.info(JSON.stringify({ component: "scheduler-automation", ...event }));
+        },
+      },
+    });
+    const capture = new CaptureIngress({
+      repository: views,
+      now: () => now().toISOString(),
+      onEvent(event) {
+        console.info(JSON.stringify({ component: "capture-ingress", ...event }));
+      },
+    });
+    const connectorRuntime = new ConnectorRuntime(views, capture, {
+      now: () => now().toISOString(),
+    });
+    const browserCapture = await configureBrowserCapture({ runtime: connectorRuntime });
+    const browserController = new BrowserAutomationController({
+      capture: browserCapture,
+      catalog: new ViewBrowserAutomationCatalog(views),
+      runtime,
+      now,
+      events: {
+        emit(event) {
+          console.info(JSON.stringify({ component: "browser-automation", ...event }));
+        },
+      },
+    });
+    const browserAutomation = new BrowserAutomationHttpBridge({
+      controller: browserController,
+      mailbox,
+      delivery,
+      ledger,
+      views,
+    });
+    const macController = new MacAutomationController({
+      capture,
+      catalog: new ViewMacAutomationCatalog(views),
+      runtime,
+      browser_context: browserContext,
+      agents: agentResolver(options.agent_runtime.id, options.agent_aliases),
+      now,
+      events: {
+        emit(event) {
+          console.info(JSON.stringify({ component: "macos-automation", ...event }));
+        },
+      },
+    });
+    const macAutomation = new MacAutomationHttpBridge({
+      controller: macController,
+      mailbox: macMailbox,
+      delivery,
+      ledger,
+      views,
+      browser_context: browserContext,
+    });
+    const inboxAutomation = new InboxAutomationHttpBridge({
+      mailbox: inboxMailbox,
+      delivery,
+      ledger,
+      views,
+    });
+    const feedback = new FeedbackEvolutionService({ views, runs: views, transformations });
+    const privacy = new PrivacyForgetService({ views, requests: views, now: () => now().toISOString() });
+    const operationService = new OperationService({
+      views,
+      transformations,
+      execution,
+      runs: views,
+      feedback,
+      privacy,
+      capture: connectorRuntime,
+      capture_traces: views,
+      authorization: new GrantOperationAuthorizer(),
+      observer: new JsonConsoleOperationObserver(),
+      now: () => now().toISOString(),
+    });
+    const operationHttp = new HttpOperationAdapter(operationService, () => ({
+      request_id: `request:http:${randomUUID()}`,
+      principal: { id: "user:local", grants: ["*"] },
+    }));
+    const handler = createAmbientV1HttpHandler({
+      views,
+      browser_capture: browserCapture,
+      browser_automation: browserAutomation,
+      mac_automation: macAutomation,
+      inbox_automation: inboxAutomation,
+      operations: operationHttp,
+    });
+    const mcpHandler = createAmbientMcpHttpHandler(operationService);
+
+    return {
+      handler,
+      mcpHandler,
+      views,
+      transformations,
+      occurrences,
+      cascades,
+      ledger,
+      traces,
+      execution,
+      operationService,
+      delivery,
+      scheduler,
+      inboxMailbox,
+      inboxAutomation,
+      browserAutomation,
+      browserCapture,
+      connectorRuntime,
+      macAutomation,
+      browserContext,
+      async close() {
+        scheduler.close();
+        browserContext.close();
+        await options.agent_runtime.close?.();
+        schedulerCursors.close();
+        traces.close();
+        ledger.close();
+        cascades.close();
+        occurrences.close();
+        transformations.close();
+        views.close();
+      },
+    };
+  } catch (error) {
+    schedulerCursors.close();
+    traces.close();
+    ledger.close();
+    cascades.close();
+    occurrences.close();
+    transformations.close();
+    views.close();
+    throw error;
+  }
+}
+
+async function seedTransformation(
+  transformations: SqliteTransformationRepository,
+  transformation: Transformation,
+  idempotencyKey: string,
+): Promise<void> {
+  const ref = exactTransformationRef(transformation);
+  const existing = await transformations.get(ref);
+  if (existing) {
+    if (canonicalJson(existing) !== canonicalJson(transformation)) {
+      throw new Error(`Seed Transformation revision conflict: ${ref.transformation_id}@${ref.revision}`);
+    }
+    return;
+  }
+  await transformations.commit({
+    transformation,
+    expected_revision: 0,
+    idempotency_key: idempotencyKey,
+  });
+}
+
+async function seedAutomation(
+  views: SqliteViewRepository,
+  draft: typeof githubSummaryAutomationDraft,
+  idempotencyKey: string,
+): Promise<void> {
+  const existing = await views.get({ view_id: draft.id, revision: 1 });
+  if (existing) {
+    const expected = parseView({ ...draft, revision: 1 });
+    if (canonicalJson(existing) !== canonicalJson(expected)) {
+      throw new Error(`Seed Automation revision conflict: ${existing.id}@${existing.revision}`);
+    }
+    parseAutomationView(existing);
+    return;
+  }
+  const committed = await views.commit({
+    draft,
+    expected_revision: 0,
+    idempotency_key: idempotencyKey,
+  });
+  parseAutomationView(committed.view);
+}
+
+function agentResolver(defaultRuntime: string, aliases: Record<string, string> | undefined) {
+  for (const [name, runtime] of Object.entries(aliases ?? {})) {
+    if (runtime !== defaultRuntime) {
+      throw new Error(`Agent alias ${name} targets unregistered runtime ${runtime}`);
+    }
+  }
+  const normalized = new Map<string, string>([
+    [defaultRuntime.toLowerCase(), defaultRuntime],
+    ...Object.entries(aliases ?? {}).map(([name, runtime]) => [name.toLowerCase(), runtime] as const),
+  ]);
+  return {
+    resolve(requestedName: string) {
+      return normalized.get(requestedName.toLowerCase());
+    },
+  };
+}
+
+function localContextAuthorizer(
+  authorizer: DeterministicViewAccessAuthorizer,
+): AutomationContextAuthorizer {
+  return {
+    async authorize({ view }) {
+      const decision = await authorizer.authorize({
+        policy: parseViewAccessPolicySnapshot(githubSummaryTransformation.policy),
+        operator: githubSummaryTransformation.operator,
+        use: "local_execution",
+        views: [view as View],
+      });
+      return {
+        allowed: decision.outcome === "allowed",
+        decision_id: decision.decision_id,
+        reason: decision.views[0]?.decisive.reason ?? decision.outcome,
+      };
+    },
+  };
+}

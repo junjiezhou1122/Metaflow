@@ -1,0 +1,13 @@
+{
+  "name": "@info/function-operator-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/execution": "workspace:*",
+    "@info/transformation": "workspace:*"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "id": 501,
+      "frame_id": 42,
+      "source": "accessibility",
+      "role": "button",
+      "text": "Run transformation",
+      "parent_id": 500,
+      "depth": 3,
+      "bounds": { "left": 0.7, "top": 0.8, "width": 0.2, "height": 0.08 },
+      "confidence": 1,
+      "sort_order": 4,
+      "on_screen": true,
+      "state": { "focused": true, "disabled": false }
+    }
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1 }
+}
