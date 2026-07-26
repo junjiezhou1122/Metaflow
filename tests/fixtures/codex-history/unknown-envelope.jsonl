@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-27T03:00:00.000Z","type":"session_meta","payload":{"session_id":"synthetic-session-003","id":"synthetic-session-003","timestamp":"2026-07-27T03:00:00.000Z","cwd":"/workspace/unknown-fixture","originator":"Synthetic Test Harness","cli_version":"0.145.0","source":"fixture","thread_source":"fixture","model_provider":"synthetic-provider","base_instructions":{},"dynamic_tools":[]}}
+{"timestamp":"2026-07-27T03:00:01.000Z","type":"future_rollout_envelope","payload":{"value":"must fail compatibility"}}
