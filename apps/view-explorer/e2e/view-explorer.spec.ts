@@ -102,6 +102,66 @@ test("search focus, pointer and keyboard selection, expansion, filters, history,
   expect(errors).toEqual([]);
 });
 
+test("URL reload and Visited cameras remain authoritative after layout and exact-View focus", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  const errors = watchErrors(page);
+  await page.goto("/?fixture=10");
+  await ready(page, 10);
+  await page.getByRole("option", { name: /Research View 0003/ }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+
+  const beforePan = await currentCamera(page);
+  const bounds = await page.locator(".sigma-container").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + bounds!.width * 0.32, y: bounds!.y + bounds!.height * 0.36 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 52, start.y + 34, { steps: 5 });
+  await page.mouse.up();
+  await page.mouse.wheel(0, -180);
+  await expect.poll(async () => cameraDistance(await currentCamera(page), beforePan)).toBeGreaterThan(0.001);
+  await expect.poll(async () => Math.abs((await currentCamera(page)).ratio - beforePan.ratio)).toBeGreaterThan(0.001);
+  await expect.poll(() => cameraDistance(cameraFromUrl(page.url()), beforePan)).toBeGreaterThan(0.001);
+  await expect.poll(() => Math.abs(cameraFromUrl(page.url()).ratio - beforePan.ratio)).toBeGreaterThan(0.001);
+  await page.waitForTimeout(400);
+  const savedCamera = cameraFromUrl(page.url());
+  await assertCameraEquals(page, savedCamera);
+  expect(Math.abs(savedCamera.x - beforePan.x)).toBeGreaterThan(0.001);
+  expect(Math.abs(savedCamera.y - beforePan.y)).toBeGreaterThan(0.001);
+  expect(Math.abs(savedCamera.ratio - beforePan.ratio)).toBeGreaterThan(0.001);
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
+
+  await page.reload();
+  await ready(page, 10);
+  await assertCameraEquals(page, savedCamera);
+  await page.waitForTimeout(400);
+  await assertCameraEquals(page, savedCamera);
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
+  await page.screenshot({ path: testInfo.outputPath("camera-restored-reload.png"), animations: "disabled" });
+
+  await page.getByRole("option", { name: /Research View 0004/ }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0004@2");
+  await assertFocusedNodeVisible(page, "view:fixture:0004@2");
+  await page.waitForTimeout(400);
+  const secondCamera = cameraFromUrl(page.url());
+  await page.locator(".history-strip").getByRole("button", { name: "Research View 0003", exact: true }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await assertCameraEquals(page, savedCamera);
+  await page.waitForTimeout(400);
+  await assertCameraEquals(page, savedCamera);
+  expect(cameraDistance(cameraFromUrl(page.url()), savedCamera)).toBeLessThanOrEqual(0.0001);
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
+  await page.screenshot({ path: testInfo.outputPath("camera-restored-visited.png"), animations: "disabled" });
+  await page.goBack();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0004@2");
+  await assertCameraEquals(page, secondCamera);
+  await page.waitForTimeout(400);
+  await assertCameraEquals(page, secondCamera);
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
+  expect(errors).toEqual([]);
+});
+
 test("WebGL unavailability is a visible typed failure", async ({ page }) => {
   await page.goto("/?fixture=10&webgl=off");
   await expect(page.locator('[data-error-code="graph_webgl_unavailable"]')).toBeVisible();
@@ -191,13 +251,17 @@ test("daemon-shaped Search atomically loads, focuses, persists, and reloads one 
   await expect(page.locator(".history-strip").getByRole("button", { name: "Research View 0003" })).toBeVisible();
   await assertFocusedNodeVisible(page, "view:fixture:0003@1");
   expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
+  const focusedCamera = cameraFromUrl(page.url());
   await page.screenshot({ path: testInfo.outputPath("real-operation-search.png"), animations: "disabled" });
   await page.reload();
   await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
   await ready(page, 2);
   expect(new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0003@1");
   await expect(page.locator(".history-strip").getByRole("button", { name: "Research View 0003" })).toBeVisible();
-  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+  await assertCameraEquals(page, focusedCamera);
+  await page.waitForTimeout(400);
+  await assertCameraEquals(page, focusedCamera);
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
   expect(transport.calls.some(call => call.operation === "view.search")).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -299,13 +363,43 @@ async function assertFocusedNodeVisible(page: Page, key: string): Promise<void> 
 async function explorerDebug(page: Page): Promise<{
   workersCreated: number;
   workersTerminated: number;
+  camera?: CameraSnapshot;
   focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
 }> {
   return page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__: {
     workersCreated: number;
     workersTerminated: number;
+    camera?: CameraSnapshot;
     focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
   } }).__METAFLOW_EXPLORER__);
+}
+
+type CameraSnapshot = { x: number; y: number; ratio: number; angle: number };
+
+async function currentCamera(page: Page): Promise<CameraSnapshot> {
+  const camera = (await explorerDebug(page)).camera;
+  if (!camera) throw new Error("Sigma camera debug state is unavailable");
+  return camera;
+}
+
+function cameraFromUrl(value: string): CameraSnapshot {
+  const url = new URL(value);
+  const camera = {
+    x: Number(url.searchParams.get("cx")),
+    y: Number(url.searchParams.get("cy")),
+    ratio: Number(url.searchParams.get("ratio")),
+    angle: Number(url.searchParams.get("angle")),
+  };
+  if (!Object.values(camera).every(Number.isFinite) || camera.ratio <= 0) throw new Error(`URL has no valid camera: ${value}`);
+  return camera;
+}
+
+function cameraDistance(left: CameraSnapshot, right: CameraSnapshot): number {
+  return Math.max(Math.abs(left.x - right.x), Math.abs(left.y - right.y), Math.abs(left.ratio - right.ratio), Math.abs(left.angle - right.angle));
+}
+
+async function assertCameraEquals(page: Page, expected: CameraSnapshot): Promise<void> {
+  await expect.poll(async () => cameraDistance(await currentCamera(page), expected)).toBeLessThanOrEqual(0.0002);
 }
 
 function deferred(): { promise: Promise<void>; resolve(): void } {

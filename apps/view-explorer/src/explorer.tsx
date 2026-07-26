@@ -36,6 +36,7 @@ const SigmaSurface = lazy(() => import("./sigma-surface.js"));
 type Direction = ViewGraphProjectionRequest["direction"];
 type Drawer = "filters" | "details" | undefined;
 type VisitedItem = { key: string; name: string; camera: CameraState };
+type RestoredCamera = CameraState & { nonce: number };
 type UiFailure = { code: string; message: string; operation?: string };
 type HistoryMode = "push" | "replace" | "none";
 type LoadProjectionOptions = {
@@ -70,10 +71,40 @@ export function ViewExplorer() {
   const [layoutMessage, setLayoutMessage] = useState<string>();
   const [layoutFailureCode, setLayoutFailureCode] = useState("graph_layout_failed");
   const [visited, setVisited] = useState<VisitedItem[]>([]);
-  const [cameraTarget, setCameraTarget] = useState<(CameraState & { nonce: number }) | undefined>(initial.camera ? { ...initial.camera, nonce: 0 } : undefined);
+  const [cameraTarget, setCameraTarget] = useState<RestoredCamera | undefined>(initial.camera ? { ...initial.camera, nonce: 0 } : undefined);
   const cameraRef = useRef<CameraState>(initial.camera ?? { x: 0.5, y: 0.5, ratio: 1, angle: 0 });
+  const cameraTargetRef = useRef<RestoredCamera | undefined>(initial.camera ? { ...initial.camera, nonce: 0 } : undefined);
+  const cameraNonceRef = useRef(0);
+  const selectedKeyRef = useRef(initial.selected);
   const searchRef = useRef<HTMLInputElement>(null);
   const requestsRef = useRef(new ExplorerRequestCoordinator());
+
+  selectedKeyRef.current = selectedKey;
+
+  const restoreCamera = useCallback((camera: CameraState) => {
+    const target = { ...camera, nonce: ++cameraNonceRef.current };
+    cameraRef.current = camera;
+    cameraTargetRef.current = target;
+    setCameraTarget(target);
+  }, []);
+
+  const releaseRestoredCamera = useCallback(() => {
+    cameraTargetRef.current = undefined;
+    setCameraTarget(undefined);
+  }, []);
+
+  const recordVisit = useCallback((key: string, name: string, arrivalCamera: CameraState) => {
+    const priorKey = selectedKeyRef.current;
+    const departureCamera = cameraRef.current;
+    setVisited(items => {
+      const withDeparture = priorKey && priorKey !== key
+        ? items.map(item => item.key === priorKey ? { ...item, camera: departureCamera } : item)
+        : items;
+      return withDeparture.some(item => item.key === key)
+        ? withDeparture
+        : [...withDeparture.slice(-7), { key, name, camera: arrivalCamera }];
+    });
+  }, []);
 
   useEffect(() => {
     if (!fixtureTransport) return;
@@ -112,20 +143,21 @@ export function ViewExplorer() {
     setPendingEdgeTypes(options.edgeTypes);
     setSelectedKey(nextSelected);
     if (nextSelected) {
-      setFocusKey(nextSelected);
-      setFocusNonce(value => value + 1);
-      if (options.recordVisited) {
-        setVisited(items => items.some(item => item.key === nextSelected)
-          ? items
-          : [...items.slice(-7), { key: nextSelected, name: selectedNode!.name, camera: cameraRef.current }]);
+      if (cameraTargetRef.current) {
+        setFocusKey(undefined);
+      } else {
+        setFocusKey(nextSelected);
+        setFocusNonce(value => value + 1);
       }
+      if (options.recordVisited) recordVisit(nextSelected, selectedNode!.name, cameraTargetRef.current ?? cameraRef.current);
     } else {
       setFocusKey(undefined);
     }
+    selectedKeyRef.current = nextSelected;
     if (options.historyMode !== "none") {
-      updateUrl({ root: requestedRoot, selected: nextSelected, direction: options.direction, depth: options.depth, edgeTypes: options.edgeTypes, camera: cameraRef.current }, options.historyMode);
+      updateUrl({ root: requestedRoot, selected: nextSelected, direction: options.direction, depth: options.depth, edgeTypes: options.edgeTypes, camera: cameraTargetRef.current ?? cameraRef.current }, options.historyMode);
     }
-  }, []);
+  }, [recordVisit]);
 
   const loadProjection = useCallback(async (requestedRoot: ExactViewRef, options: LoadProjectionOptions) => {
     const request = requestsRef.current.begin("projection");
@@ -187,7 +219,7 @@ export function ViewExplorer() {
       setDepth(state.depth);
       setEdgeTypes(state.edgeTypes);
       setPendingEdgeTypes(state.edgeTypes);
-      if (state.camera) setCameraTarget({ ...state.camera, nonce: Date.now() });
+      if (state.camera) restoreCamera(state.camera); else releaseRestoredCamera();
       if (!state.root) {
         requestsRef.current.supersede("History navigation returned to the explorer entry surface");
         setRoot(undefined);
@@ -209,12 +241,17 @@ export function ViewExplorer() {
       }
       requestsRef.current.supersede("History selection superseded active explorer work");
       setSelectedKey(state.selected);
-      setFocusKey(state.selected);
-      setFocusNonce(value => value + 1);
+      selectedKeyRef.current = state.selected;
+      if (state.camera) {
+        setFocusKey(undefined);
+      } else {
+        setFocusKey(state.selected);
+        setFocusNonce(value => value + 1);
+      }
     };
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
-  }, [depth, direction, edgeTypes, loadProjection, projection, root]);
+  }, [depth, direction, edgeTypes, loadProjection, projection, releaseRestoredCamera, restoreCamera, root]);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -227,15 +264,21 @@ export function ViewExplorer() {
     return () => removeEventListener("keydown", keyboard);
   }, []);
 
-  function selectNode(key: string, camera = cameraRef.current, historyMode: "push" | "replace" = "push"): void {
+  function selectNode(key: string, camera = cameraRef.current, historyMode: "push" | "replace" = "push", cameraMode: "focus" | "restore" = "focus"): void {
     const node = projection?.nodes.find(candidate => refKey(candidate.ref) === key);
     if (!node) return;
     requestsRef.current.supersede("Exact View selection superseded active explorer work");
     setLoading(false);
+    recordVisit(key, node.name, camera);
+    if (cameraMode === "restore") restoreCamera(camera); else releaseRestoredCamera();
     setSelectedKey(key);
-    setFocusKey(key);
-    setFocusNonce(value => value + 1);
-    setVisited(items => items.some(item => item.key === key) ? items : [...items.slice(-7), { key, name: node.name, camera }]);
+    selectedKeyRef.current = key;
+    if (cameraMode === "restore") {
+      setFocusKey(undefined);
+    } else {
+      setFocusKey(key);
+      setFocusNonce(value => value + 1);
+    }
     updateUrl({ root, selected: key, direction, depth, edgeTypes, camera }, historyMode);
   }
 
@@ -278,6 +321,7 @@ export function ViewExplorer() {
         max_edges: EXPLORER_MAX_EDGES,
       }, projectionController.signal);
       if (!requestsRef.current.isCurrent(search.token, projectionController)) return;
+      releaseRestoredCamera();
       commitProjection(result, hit.ref, {
         direction,
         depth,
@@ -306,8 +350,10 @@ export function ViewExplorer() {
       const incoming = await client.project({ roots: [selectedNode.ref], direction: "both", edge_types: edgeTypes, max_depth: 1, max_nodes: 500, max_edges: 2_000 }, expand.controller.signal);
       if (!requestsRef.current.isCurrent(expand.token, expand.controller)) return;
       setProjection(mergeProjection(currentProjection, incoming));
-      setFocusKey(selectedKey);
-      setFocusNonce(value => value + 1);
+      if (!cameraTargetRef.current) {
+        setFocusKey(selectedKey);
+        setFocusNonce(value => value + 1);
+      }
     } catch (error) {
       if (requestsRef.current.isCurrent(expand.token, expand.controller)) setFailure(toFailure(error));
     } finally {
@@ -371,7 +417,17 @@ export function ViewExplorer() {
               cameraTarget={cameraTarget}
               forceWebglFailure={Boolean(initial.fixture && initial.forceWebglFailure)}
               onSelect={selectNode}
-              onCameraChange={camera => { cameraRef.current = camera; updateUrl({ root, selected: selectedKey, direction, depth, edgeTypes, camera }, "replace"); }}
+              onCameraChange={camera => {
+                const restored = cameraTargetRef.current;
+                if (restored && sameCamera(camera, restored)) {
+                  cameraRef.current = restored;
+                  updateUrl({ root, selected: selectedKey, direction, depth, edgeTypes, camera: restored }, "replace");
+                  return;
+                }
+                if (restored) releaseRestoredCamera();
+                cameraRef.current = camera;
+                updateUrl({ root, selected: selectedKey, direction, depth, edgeTypes, camera }, "replace");
+              }}
               onLayoutState={(state, message, code) => { setLayout(state); setLayoutMessage(message); setLayoutFailureCode(code ?? "graph_layout_failed"); }}
             />
           </Suspense>
@@ -388,7 +444,7 @@ export function ViewExplorer() {
       </aside>
 
       <footer className="companion">
-        <div className="history-strip"><History size={15} aria-hidden="true" /><span className="history-label">Visited</span>{visited.length === 0 ? <span className="muted">None</span> : visited.map(item => <button type="button" key={item.key} onClick={() => { setCameraTarget({ ...item.camera, nonce: Date.now() }); selectNode(item.key, item.camera); }} title={item.key}>{item.name}</button>)}<div className="relation-summary" aria-label="Relations in projection">{relationCounts.map(([type, count]) => <span key={type}>{type}: {count}</span>)}</div></div>
+        <div className="history-strip"><History size={15} aria-hidden="true" /><span className="history-label">Visited</span>{visited.length === 0 ? <span className="muted">None</span> : visited.map(item => <button type="button" key={item.key} onClick={() => selectNode(item.key, item.camera, "push", "restore")} title={item.key}>{item.name}</button>)}<div className="relation-summary" aria-label="Relations in projection">{relationCounts.map(([type, count]) => <span key={type}>{type}: {count}</span>)}</div></div>
         {projection && <VirtualNodeList nodes={projection.nodes} selectedKey={selectedKey} onSelect={key => selectNode(key)} />}
       </footer>
 
@@ -439,6 +495,14 @@ function formatTime(value: string): string { return new Intl.DateTimeFormat("en"
 
 function sameStrings(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameCamera(left: CameraState, right: CameraState): boolean {
+  const tolerance = 0.0001;
+  return Math.abs(left.x - right.x) <= tolerance
+    && Math.abs(left.y - right.y) <= tolerance
+    && Math.abs(left.ratio - right.ratio) <= tolerance
+    && Math.abs(left.angle - right.angle) <= tolerance;
 }
 
 function readUrlState() {
