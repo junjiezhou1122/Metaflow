@@ -17,6 +17,7 @@ import {
 } from "@info/view";
 import {
   SQLITE_VEC_EXTENSION_VERSION,
+  SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS,
   SQLITE_VEC_PACKAGE_VERSION,
   SqliteVecEmbeddingViewSchema,
   SqliteViewRepository,
@@ -661,6 +662,133 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
   }
 });
 
+test("semantic integrity audit isolates one-View retrieval from an over-bound unrelated View Store", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-audit-isolation-"));
+  const database = join(directory, "views.sqlite");
+  let repository: SqliteViewRepository | undefined = semanticRepository(database);
+  try {
+    const target = await commit(repository, targetDraft("view:audit-isolation:target", "bounded audit target"));
+    const embedding = await commit(
+      repository,
+      embeddingDraft("view:audit-isolation:embedding", target, [1, 0, 0]),
+    );
+    assert.equal(
+      repository.semantic_search!.compatibility.integrity_audit_max_rows,
+      SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS,
+    );
+    repository.close();
+    repository = undefined;
+
+    insertSyntheticViewRows(
+      database,
+      target,
+      SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS + 1,
+      "semantic.fixture.unrelated",
+      "semantic_fixture_unrelated",
+    );
+    const audit = new DatabaseSync(database);
+    try {
+      const plans = audit.prepare(`
+        explain query plan
+        select view_json
+        from view_revisions_v1
+        where schema_name = ?
+           or json_extract(view_json, '$.representation.kind') = ?
+        limit ?
+      `).all(
+        "metaflow.search.embedding",
+        "metaflow.search.embedding",
+        SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS + 1,
+      ) as Array<{ detail: string }>;
+      assert.equal(plans.some(plan => plan.detail.includes("idx_view_revisions_v1_schema")), true);
+      assert.equal(plans.some(plan => plan.detail.includes("idx_view_revisions_v1_representation_kind")), true);
+      assert.equal(plans.some(plan => plan.detail === "SCAN view_revisions_v1"), false);
+    } finally {
+      audit.close();
+    }
+
+    repository = semanticRepository(database);
+    const result = await semanticSearch(repository, [target, embedding], [1, 0, 0]);
+    assert.deepEqual(result.hits.map(hit => hit.ref), [exactViewRef(target)]);
+    assert.deepEqual(result.hits[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(embedding));
+  } finally {
+    repository?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("semantic integrity audit rejects an over-bound authority inventory before returning partial results", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-audit-bound-"));
+  const database = join(directory, "views.sqlite");
+  let repository: SqliteViewRepository | undefined = semanticRepository(database);
+  try {
+    const target = await commit(repository, targetDraft("view:audit-bound:target", "audit bound target"));
+    const embedding = await commit(repository, embeddingDraft("view:audit-bound:embedding", target, [1, 0, 0]));
+    const excludedTemplate = parseView({
+      ...embeddingDraft("view:audit-bound:excluded-template", target, [0, 1, 0]),
+      revision: 1,
+      policy: { ...semanticPolicy(), allow_local_search: false },
+    });
+    insertSyntheticViewRows(
+      database,
+      excludedTemplate,
+      SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS - 1,
+      "metaflow.search.embedding",
+      "metaflow.search.embedding",
+      "within-bound",
+    );
+
+    assert.deepEqual(repository.semantic_search!.refreshMaintenanceState(), { status: "ready" });
+    const rejected = embeddingDraft("view:audit-bound:rejected", target, [0, 0, 1]);
+    await assert.rejects(
+      repository.commit({ draft: rejected, expected_revision: 0 }),
+      (error: unknown) => semanticErrorCode(error) === "semantic_integrity_audit_too_large",
+    );
+    assert.equal(await repository.get({ view_id: rejected.id, revision: 1 }), undefined);
+    const batchTargetDraft = targetDraft("view:audit-bound:batch-target", "audit bound batch target");
+    const batchTarget = parseView({ ...batchTargetDraft, revision: 1 });
+    const batchEmbedding = embeddingDraft("view:audit-bound:batch-embedding", batchTarget, [0, 0, 1]);
+    await assert.rejects(
+      repository.commitBatch([
+        { draft: batchTargetDraft, expected_revision: 0 },
+        { draft: batchEmbedding, expected_revision: 0 },
+      ]),
+      (error: unknown) => semanticErrorCode(error) === "semantic_integrity_audit_too_large",
+    );
+    assert.equal(await repository.get(exactViewRef(batchTarget)), undefined);
+    assert.equal(await repository.get({ view_id: batchEmbedding.id, revision: 1 }), undefined);
+    const intact = await semanticSearch(repository, [target, embedding], [1, 0, 0]);
+    assert.deepEqual(intact.hits.map(hit => hit.ref), [exactViewRef(target)]);
+
+    insertSyntheticViewRows(
+      database,
+      excludedTemplate,
+      1,
+      "metaflow.search.embedding",
+      "metaflow.search.embedding",
+      "over-bound",
+    );
+    await assert.rejects(
+      semanticSearch(repository, [target], [1, 0, 0]),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "retrieval_failed"
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "semantic_integrity_audit_too_large",
+    );
+    repository.close();
+    repository = undefined;
+    assert.throws(
+      () => semanticRepository(database),
+      (error: unknown) => error instanceof Error
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "semantic_integrity_audit_too_large",
+    );
+  } finally {
+    repository?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("representative local corpus stays within the pinned sqlite-vec cost gate", async t => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-corpus-"));
   const database = join(directory, "views.sqlite");
@@ -893,6 +1021,48 @@ function fixtureVector(index: number, dimension: number): number[] {
   const values = Array.from({ length: dimension }, (_, item) => ((index + 1) * (item + 3)) % 101 + 1);
   const magnitude = Math.sqrt(values.reduce((total, value) => total + value * value, 0));
   return values.map(value => value / magnitude);
+}
+
+function insertSyntheticViewRows(
+  database: string,
+  template: View,
+  count: number,
+  schemaName: string,
+  representationKind: string,
+  namespace = "rows",
+): void {
+  const audit = new DatabaseSync(database);
+  audit.exec("begin immediate");
+  try {
+    const insert = audit.prepare(`
+      insert into view_revisions_v1 (
+        id, revision, schema_name, schema_version, role, name, created_at, view_json
+      ) values (?, 1, ?, 1, 'derived', ?, ?, json_set(
+        ?, '$.id', ?, '$.name', ?, '$.schema.name', ?, '$.representation.kind', ?
+      ))
+    `);
+    const templateJson = JSON.stringify(template);
+    for (let index = 0; index < count; index += 1) {
+      const id = `view:synthetic-audit:${namespace}:${schemaName}:${index.toString().padStart(5, "0")}`;
+      insert.run(
+        id,
+        schemaName,
+        id,
+        CREATED_AT,
+        templateJson,
+        id,
+        id,
+        schemaName,
+        representationKind,
+      );
+    }
+    audit.exec("commit");
+  } catch (error) {
+    audit.exec("rollback");
+    throw error;
+  } finally {
+    audit.close();
+  }
 }
 
 function replaceStoredVector(

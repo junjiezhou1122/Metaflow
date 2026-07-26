@@ -117,6 +117,20 @@ The final Node `v24.14.0` run passed semantic `17/17`, the 49-file suite with
 `12/12`, Privacy Forget/Capture `20/20`, vertical, typecheck, dependency and
 test boundaries, and frozen-lockfile installation.
 
+The bounded-audit repair selects reserved embedding candidates through indexed
+Schema and Representation-kind inventories instead of parsing every unrelated
+View. Reserved View, mapping, and total physical-vector inventories each stop at
+an explicit 4,096-row ceiling and fail cap-plus-one with typed
+`semantic_integrity_audit_too_large` before ranking. Normal single and batch
+commits reject the cap-crossing embedding inside their transaction, while a
+direct out-of-band overflow fails both live retrieval and reopen rather than
+returning partial results. On Node `v24.14.0`, the final focused run passed
+semantic `19/19`; the 49-file suite passed `408` with one intentional live
+Screenpipe skip. Production deploy verification, View Store `12/12`, Privacy
+Forget/Capture `20/20`, vertical, typecheck, dependency checks, `23` boundary
+regressions, frozen-lockfile installation, public/private artifact audit, and
+post-fix Codex review all passed with no actionable findings.
+
 ## Failure behavior
 
 A database with stored vector profiles refuses to reopen without the same

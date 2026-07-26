@@ -419,7 +419,9 @@ semantic hit returns the target View/location and the exact embedding Derived
 View as `semantic_evidence_ref`. Search never generates missing document
 embeddings, OCR, transcript, summary, or graph structure.
 
-Use an ordinary mapping table as authority and `vec0` only for KNN:
+Treat committed eligible embedding Views as authority. The ordinary mapping
+table and `vec0` rows are derived physical state used for bounded integrity
+checks and KNN:
 
 ```text
 view_search_vectors_v1

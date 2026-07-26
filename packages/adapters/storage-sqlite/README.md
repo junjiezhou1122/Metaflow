@@ -78,6 +78,13 @@ Node's built-in `node:sqlite` driver.
   stay blocked. Vector payload comparison uses bounded canonical little-endian
   float32 bytes derived directly from the committed View, never a mutable
   mapping digest. Profile or target metadata mismatch fails startup outright.
+- Ordinary retrieval discovers reserved embedding candidates through indexed
+  Schema and Representation-kind inventories rather than parsing unrelated
+  View rows. Reserved View, mapping, and total physical-vector audits are each
+  capped at 4,096 rows; cap-plus-one fails before ranking with typed
+  `semantic_integrity_audit_too_large`, never partial results. Ordinary single
+  and batch commits reject the cap-crossing embedding inside the View
+  transaction, so supported databases cannot be poisoned by a successful write.
 - Vector mapping and `vec0` insertion share the View `BEGIN IMMEDIATE`
   transaction. Privacy Forget deletes mappings and vector rows before governed
   payloads, and durable reindex reconstructs only from committed embedding
