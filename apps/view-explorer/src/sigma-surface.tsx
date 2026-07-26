@@ -25,7 +25,6 @@ type SigmaSurfaceProps = {
   selectedKey?: string;
   focusKey?: string;
   focusNodeKey?: string;
-  initialCamera?: CameraState;
   cameraTarget?: CameraState & { nonce: number };
   forceWebglFailure?: boolean;
   onSelect(key: string, camera: CameraState): void;
@@ -57,12 +56,14 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
   const layoutGenerationRef = useRef(0);
   const hasRenderedProjectionRef = useRef(false);
   const selectedRef = useRef(props.selectedKey);
+  const cameraTargetRef = useRef(props.cameraTarget);
   const onSelectRef = useRef(props.onSelect);
   const onCameraRef = useRef(props.onCameraChange);
   const onLayoutRef = useRef(props.onLayoutState);
   const [failure, setFailure] = useState<string>();
 
   selectedRef.current = props.selectedKey;
+  cameraTargetRef.current = props.cameraTarget;
   onSelectRef.current = props.onSelect;
   onCameraRef.current = props.onCameraChange;
   onLayoutRef.current = props.onLayoutState;
@@ -116,7 +117,6 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     rendererRef.current = renderer;
     debug().sigmaCreated += 1;
     const camera = renderer.getCamera();
-    if (props.initialCamera) camera.setState(props.initialCamera);
     const click = ({ node }: { node: string }) => onSelectRef.current(node, camera.getState());
     const cameraUpdated = () => {
       const state = camera.getState();
@@ -168,10 +168,13 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         });
       }
     }
-    if (!hasRenderedProjectionRef.current) {
+    const restoredCamera = cameraTargetRef.current;
+    if (restoredCamera) {
+      applyAuthoritativeCamera(renderer, restoredCamera);
+    } else if (!hasRenderedProjectionRef.current) {
       renderer.getCamera().setState({ x: 0.5, y: 0.5, ratio: 1, angle: 0 });
-      hasRenderedProjectionRef.current = true;
     }
+    hasRenderedProjectionRef.current = true;
     renderer.refresh();
     debug().camera = renderer.getCamera().getState();
     const firstNode = graph.nodes()[0];
@@ -221,7 +224,9 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         }
         for (const position of result.positions) graph.mergeNodeAttributes(position.key, { x: position.x, y: position.y });
         renderer.refresh();
-        if (selectedRef.current) focusExactNode(renderer, selectedRef.current);
+        const currentRestoredCamera = cameraTargetRef.current;
+        if (currentRestoredCamera) applyAuthoritativeCamera(renderer, currentRestoredCamera);
+        else if (selectedRef.current) focusExactNode(renderer, selectedRef.current);
         onLayoutRef.current("ready");
         disposeWorker(workerRef, active);
       };
@@ -248,13 +253,14 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
 
   useEffect(() => {
     const renderer = rendererRef.current;
-    if (!renderer || !props.focusNodeKey) return;
+    if (!renderer || !props.focusNodeKey || cameraTargetRef.current) return;
     focusExactNode(renderer, props.focusNodeKey);
   }, [props.focusKey]);
 
   useEffect(() => {
     if (!props.cameraTarget) return;
-    rendererRef.current?.getCamera().setState(props.cameraTarget);
+    const renderer = rendererRef.current;
+    if (renderer) applyAuthoritativeCamera(renderer, props.cameraTarget);
   }, [props.cameraTarget]);
 
   if (failure) {
@@ -280,6 +286,16 @@ function focusExactNode(renderer: Sigma, key: string): boolean {
     visible: viewport.x >= 0 && viewport.x <= dimensions.width && viewport.y >= 0 && viewport.y <= dimensions.height,
   };
   return true;
+}
+
+function applyAuthoritativeCamera(renderer: Sigma, target: CameraState): void {
+  const state = { x: target.x, y: target.y, ratio: target.ratio, angle: target.angle };
+  const camera = renderer.getCamera();
+  // Sigma has no public cancel method. A zero-duration animation cancels any
+  // in-flight focus animation; setState makes the authoritative value immediate.
+  camera.animate(state, { duration: 0 }, () => undefined);
+  camera.setState(state);
+  debug().camera = camera.getState();
 }
 
 function schemaColor(schema: string): string {
