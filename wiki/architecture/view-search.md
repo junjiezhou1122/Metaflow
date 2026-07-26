@@ -6,15 +6,17 @@ category: architecture-design
 tags: [view, search, retrieval, parser, vector, graph, provenance]
 sources: [architecture-discussion, research/view-search-landscape]
 created: 2026-07-26T14:57:38Z
-updated: 2026-07-26T14:57:38Z
+updated: 2026-07-27T04:00:00Z
 ---
 
 # Recursive View Search
 
-> Status: design draft. The deterministic `search_projection@1` contract in
-> [[architecture/view-core-transformation-runtime|View Core and Transformation
-> Runtime]] remains the current implementation authority. This page describes
-> the larger retrieval model without silently expanding that contract.
+> Status: the issue 66 keyword + relation vertical is implemented in
+> `packages/search` and `packages/adapters/storage-sqlite`. The deterministic
+> `search_projection@1` contract in [[architecture/view-core-transformation-runtime|View
+> Core and Transformation Runtime]] remains the indexing authority. Semantic
+> retrieval remains unavailable until the separately gated pinned sqlite-vec
+> work is accepted; it has no fallback.
 
 ## Decision summary
 
@@ -41,6 +43,33 @@ Search(query, scope, target, modes)
 
 The result is always evidence, not anonymous text: exact View references,
 match locations, relation paths, scores, and a bounded explanation.
+
+## Accepted v1 boundary
+
+`packages/search` now owns strict Search request/result/cursor/error/observer
+contracts and `SearchService`. The service batch-authorizes exact View refs
+before a retriever sees them, freezes exact/bounded-subgraph/bounded-all-visible
+scope, executes requested modes without substitution, fuses one-based ranks
+with weighted `rrf@1`, and validates opaque cursor fingerprints against both
+the frozen scope and strategy.
+
+`packages/adapters/storage-sqlite` remains the only index and relation owner.
+Its aggregate FTS row preserves cross-field AND matching and category-weighted
+BM25 candidate order. A private per-scalar FTS unit table retains declaration
+ordinal, expanded JSON Pointer, category, normalized value digest, and a
+bounded snippet. Both projections commit, reindex, migrate, and purge through
+the same SQLite transaction as their exact View revision. Bounded breadth-first
+scope traversal reads relation layers from that same connection; denied nodes
+are discarded before they can count toward limits, become paths, or expand the
+frontier.
+
+The issue branch deliberately does not own public integration files. The
+integration owner must register `packages/search` in the workspace and package
+boundary catalogs, inject `SearchService` into Operations, replace the legacy
+`ViewRepository.query()` implementation of `view.search`, add authorized
+`view.search.reindex`, and register the four-surface vertical in the root test
+catalog. Until that wiring lands, the older public `view.search` operation is
+not evidence of this contract.
 
 ## Scope: where to search
 
@@ -213,16 +242,18 @@ authorization, retrieval, or persistence.
 The implemented deterministic projection remains in `packages/view` because
 it is part of View commit and repository consistency.
 
-A future `packages/search` is a reasonable, but not yet accepted, owner for:
+`packages/search` is the accepted owner for:
 
 - the unified Search request and result contracts;
-- scope and target resolution;
+- scope and target resolution over exact authorized refs;
 - Retriever, fusion, and reranker ports;
 - observable partial-mode and unsupported-Representation outcomes.
 
-Concrete parser, embedding, vector-store, and graph-retrieval implementations
-belong in independent `packages/adapters/*` packages. This package proposal
-must be validated by a vertical slice before it becomes canonical.
+Concrete parser, embedding, and vector implementations belong in independent
+`packages/adapters/*` packages or SQLite-owned internal projections when they
+must share the canonical transaction. The accepted vertical validates keyword,
+relation, authorization, location, Forget, reindex, reopen, and cursor behavior.
+It does not claim that the sqlite-vec adoption gate has passed.
 
 ## First vertical slice
 

@@ -99,6 +99,12 @@ import {
   type ViewRepository,
   type ViewRepositoryErrorCode,
 } from "@info/view";
+import { SqliteViewSearchAdapter } from "./search-adapter.js";
+import {
+  deleteSqliteSearchUnits,
+  insertSqliteSearchUnits,
+  sqliteSearchUnitsMatch,
+} from "./search-index.js";
 
 type HeadRow = { revision: number };
 type ViewRow = { view_json: string };
@@ -169,6 +175,7 @@ type ViewCommitOutboxRow = {
 };
 
 const VIEW_STORE_MIGRATION_VERSION = 6;
+const VIEW_SEARCH_INDEX_MIGRATION_VERSION = 2;
 
 type TransactionContext = {
   id: string;
@@ -200,6 +207,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
   private readonly db: DatabaseSync;
   private readonly now: () => string;
   private readonly eventIdFactory: (transactionId: string) => string;
+  readonly search: SqliteViewSearchAdapter;
 
   constructor(
     dbPath = process.env.METAFLOW_VIEW_DB_PATH ?? process.env.CONTEXT_DB_PATH ?? "data/context.sqlite",
@@ -217,6 +225,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       this.db.exec("PRAGMA synchronous = NORMAL");
       this.db.exec("PRAGMA foreign_keys = ON");
       this.migrate();
+      this.search = new SqliteViewSearchAdapter(this.db);
     } catch (error) {
       if (error instanceof ViewRepositoryError) throw error;
       throw new ViewRepositoryError(
@@ -2733,6 +2742,28 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
           on conflict(component) do update set version = excluded.version, migrated_at = excluded.migrated_at
         `).run(VIEW_STORE_MIGRATION_VERSION, normalizeTimestamp(this.now()));
       }
+      transaction.phase = "check_search_index_version";
+      const searchStored = this.db.prepare(`
+        select version from view_search_schema_versions_v1 where component = 'view-search-index'
+      `).get() as StoredMigrationRow | undefined;
+      const searchVersion = searchStored ? Number(searchStored.version) : 0;
+      if (searchVersion > VIEW_SEARCH_INDEX_MIGRATION_VERSION) {
+        throw new ViewRepositoryError(
+          `SQLite Search index schema version ${searchVersion} is newer than supported version ${VIEW_SEARCH_INDEX_MIGRATION_VERSION}`,
+          "storage_failure",
+          { operation: "migrate", phase: "check_search_index_version", migration_version: searchVersion },
+        );
+      }
+      if (searchVersion < VIEW_SEARCH_INDEX_MIGRATION_VERSION) {
+        transaction.phase = "rebuild_search_location_index";
+        this.resetSearchProjection(normalizeTimestamp(this.now()));
+        transaction.phase = "record_search_index_version";
+        this.db.prepare(`
+          insert into view_search_schema_versions_v1 (component, version, migrated_at)
+          values ('view-search-index', ?, ?)
+          on conflict(component) do update set version = excluded.version, migrated_at = excluded.migrated_at
+        `).run(VIEW_SEARCH_INDEX_MIGRATION_VERSION, normalizeTimestamp(this.now()));
+      }
       transaction.phase = "validate_schema";
       this.validateSchemaInvariants();
     });
@@ -2835,6 +2866,30 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         tokenize = 'unicode61 remove_diacritics 2'
       );
 
+      create table if not exists view_search_units_v2 (
+        search_unit_id integer primary key,
+        view_id text not null,
+        revision integer not null check(revision > 0),
+        ordinal integer not null check(ordinal >= 0),
+        category text not null check(category in ('title', 'text', 'identifier', 'url', 'timestamp', 'provenance')),
+        expanded_path text not null,
+        value_digest text not null,
+        indexed_at text not null,
+        unique(view_id, revision, ordinal, expanded_path),
+        foreign key (view_id, revision) references view_revisions_v1(id, revision)
+          on delete cascade deferrable initially deferred
+      );
+
+      create virtual table if not exists view_search_unit_fts_v2 using fts5(
+        title,
+        text,
+        identifiers,
+        urls,
+        timestamps,
+        provenance,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+
       create table if not exists view_search_reindex_runs_v1 (
         run_id text primary key,
         status text not null check(status in ('running', 'succeeded', 'failed')),
@@ -2875,6 +2930,12 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
 
       create table if not exists view_store_schema_versions_v1 (
         component text primary key check(component = 'view-store'),
+        version integer not null check(version > 0),
+        migrated_at text not null
+      );
+
+      create table if not exists view_search_schema_versions_v1 (
+        component text primary key check(component = 'view-search-index'),
         version integer not null check(version > 0),
         migrated_at text not null
       );
@@ -2983,6 +3044,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       create index if not exists idx_view_capture_identities_v1_view on view_capture_identities_v1(view_id);
       create index if not exists idx_view_materializations_v1_view on view_materializations_v1(view_id, revision, role);
       create index if not exists idx_view_search_projection_v1_schema on view_search_projection_v1(schema_name, schema_version);
+      create index if not exists idx_view_search_units_v2_ref on view_search_units_v2(view_id, revision, ordinal, expanded_path);
       create index if not exists idx_view_search_reindex_runs_v1_status on view_search_reindex_runs_v1(status, started_at);
       create index if not exists idx_view_commit_outbox_v1_poll on view_commit_outbox_v1(status, available_at, sequence);
       create index if not exists idx_view_commit_outbox_v1_lease on view_commit_outbox_v1(status, lease_expires_at, sequence);
@@ -3151,6 +3213,9 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       "privacy_forgotten_view_ids_v1",
       "view_search_projection_v1",
       "view_search_fts_v1",
+      "view_search_units_v2",
+      "view_search_unit_fts_v2",
+      "view_search_schema_versions_v1",
       "view_search_reindex_runs_v1",
       "view_commit_outbox_v1",
       "view_commit_outbox_refs_v1",
@@ -3308,10 +3373,12 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       document.timestamps.join("\n"),
       document.provenance.join("\n"),
     );
+    insertSqliteSearchUnits(this.db, view, indexedAt);
     return true;
   }
 
   private deleteSearchProjection(ref: ExactViewRef): number {
+    deleteSqliteSearchUnits(this.db, ref);
     const row = this.db.prepare(`
       select search_rowid, view_id, revision, projection_digest
       from view_search_projection_v1 where view_id = ? and revision = ?
@@ -3323,7 +3390,12 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
   }
 
   private resetSearchProjection(indexedAt: string): void {
-    this.db.exec("delete from view_search_fts_v1; delete from view_search_projection_v1;");
+    this.db.exec(`
+      delete from view_search_unit_fts_v2;
+      delete from view_search_units_v2;
+      delete from view_search_fts_v1;
+      delete from view_search_projection_v1;
+    `);
     const rows = this.db.prepare("select view_json from view_revisions_v1 order by id, revision").all() as ViewRow[];
     for (const row of rows) this.insertSearchProjection(this.parseStoredJson(row.view_json), indexedAt);
   }
@@ -3361,11 +3433,12 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       const ftsExists = current
         ? Boolean(this.db.prepare("select rowid from view_search_fts_v1 where rowid = ?").get(Number(current.search_rowid)))
         : false;
-      if (current && current.projection_digest === projected.digest && ftsExists) {
+      if (current && current.projection_digest === projected.digest && ftsExists && sqliteSearchUnitsMatch(this.db, view)) {
         unchanged += 1;
         continue;
       }
       if (current) removed += this.deleteSearchProjection(exactViewRef(view));
+      else deleteSqliteSearchUnits(this.db, exactViewRef(view));
       this.insertSearchProjection(view, indexedAt);
       indexed += 1;
     }
@@ -3378,6 +3451,21 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       where rowid not in (select search_rowid from view_search_projection_v1)
     `).run();
     removed += Number(orphanFts.changes);
+    const orphanUnits = this.db.prepare(`
+      select distinct u.view_id, u.revision
+      from view_search_units_v2 u
+      left join view_search_projection_v1 p on p.view_id = u.view_id and p.revision = u.revision
+      where p.search_rowid is null
+    `).all() as Array<{ view_id: string; revision: number }>;
+    for (const orphan of orphanUnits) {
+      deleteSqliteSearchUnits(this.db, { view_id: orphan.view_id, revision: Number(orphan.revision) });
+      removed += 1;
+    }
+    const orphanUnitFts = this.db.prepare(`
+      delete from view_search_unit_fts_v2
+      where rowid not in (select search_unit_id from view_search_units_v2)
+    `).run();
+    removed += Number(orphanUnitFts.changes);
     return { scanned: rows.length, indexed, excluded, unchanged, removed };
   }
 }

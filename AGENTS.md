@@ -57,14 +57,23 @@ but there is no separate canonical Worker domain layer.
   call-level authorization, active Run cancellation, shared structured error
   envelopes, and operation observer events. It coordinates public domain ports
   and never imports SQLite or transport code.
+- `packages/search`: strict transport-neutral View Search request, evidence,
+  cursor, error, and observer contracts; deterministic batch read
+  authorization; exact, bounded subgraph, and bounded all-visible scope
+  freezing; explicit mode outcomes; relation proximity; and deterministic
+  `rrf@1` fusion. It receives only exact authorized View refs at retriever
+  ports and never imports SQLite, a parser, model SDK, vector store, or
+  transport.
 - `packages/adapters/*`: independent workspace packages implementing storage,
   Browser, Screenpipe, III, Agent Operator, Trigger, Delivery, and
   Materialization ports.
 - `packages/adapters/storage-sqlite`: durable View and Run state plus the
   transactional View-commit outbox and local FTS projection. It persists a
   `ViewCommitted` event and any Schema-declared search document in the same
-  transaction as newly created View revisions, and publishes events only after
-  commit; it never invokes Automation or III directly.
+  transaction as newly created View revisions, retains bounded expanded JSON
+  Pointer evidence in per-scalar FTS units, resolves exact relation layers, and
+  publishes events only after commit; it never invokes Automation or III
+  directly.
 - `packages/adapters/automation-execution`: maps resolved Automation roles into
   exact Execution invocation bindings and projects Execution Agent events back
   into the Automation trace. It also implements the canonical reactive-cascade
