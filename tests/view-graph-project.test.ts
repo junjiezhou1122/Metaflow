@@ -17,6 +17,7 @@ import {
   ViewValidationError,
   exactViewRef,
   parseViewDraft,
+  validateViewRelationProjection,
   type ExactViewRef,
   type ViewGraphProjectionSource,
   type ViewGraphSnapshotReader,
@@ -86,6 +87,28 @@ test("Application Space View Package is strict and binds ordinary read Operation
     }),
     (error: unknown) => error instanceof ViewValidationError && error.code === "representation_schema_mismatch",
   );
+  const normalizedRef = { view_id: "view:entry", revision: 1 };
+  assert.throws(
+    () => validateViewRelationProjection(
+      applicationSpaceViewPackage.schema({ name: "application.space", version: 1 }),
+      {
+        form: "inline",
+        kind: APPLICATION_SPACE_REPRESENTATION_KIND,
+        media_type: "application/json",
+        value: {
+          version: 1,
+          entries: [{ ref: { view_id: " view:entry ", revision: 1 }, semantics: "membership" }],
+        },
+        metadata: {},
+      },
+      [{
+        type: APPLICATION_SPACE_MEMBERSHIP_RELATION,
+        target: normalizedRef,
+        metadata: { application_semantics: "membership" },
+      }],
+    ),
+    (error: unknown) => error instanceof ViewValidationError && error.code === "relation_projection_mismatch",
+  );
   assert.throws(
     () => runViewPackageConformance({
       package: applicationSpaceViewPackage,
@@ -137,6 +160,27 @@ test("Application Space commit admission rejects missing, extra, and mismatched 
           && error.cause.code === "relation_projection_mismatch",
       );
     }
+    const padded = applicationDraft("view:space:padded-ref", entries);
+    await assert.rejects(
+      views.commit({
+        draft: {
+          ...padded,
+          representation: {
+            ...padded.representation,
+            form: "inline",
+            value: {
+              version: 1,
+              entries: [{ ref: { view_id: ` ${member.id} `, revision: member.revision }, semantics: "membership" }],
+            },
+          },
+        },
+        expected_revision: 0,
+      }),
+      (error: unknown) => error instanceof ViewRepositoryError
+        && error.code === "invalid_request"
+        && error.cause instanceof ViewValidationError
+        && error.cause.code === "representation_schema_mismatch",
+    );
   });
 });
 
@@ -312,55 +356,16 @@ test("paged SQLite traversal reaches an authorized edge after denied pages witho
 });
 
 test("SQLite graph projection freezes incoming relation pages across concurrent commits", async () => {
-  await withRepository(async views => {
-    const root = await commit(views, memberDraft("view:snapshot:root", reader));
-    const parentDrafts = Array.from({ length: 270 }, (_, index) => ({
-      ...memberDraft(`view:snapshot:parent:${String(index).padStart(3, "0")}`, reader),
-      relations: [{ type: APPLICATION_SPACE_MEMBERSHIP_RELATION, target: exactViewRef(root), metadata: {} }],
-    }));
-    await views.commitBatch(parentDrafts.map(draft => ({ draft, expected_revision: 0 })));
-    const concurrentId = "view:snapshot:zz-concurrent-parent";
-    const repositoryAuthorizer = new RepositoryViewReadAuthorizer(views);
-    let concurrentCommitted = false;
-    const result = await projectAuthorizedViewGraph({
-      request: ViewGraphProjectionRequestSchema.parse({
-        roots: [exactViewRef(root)],
-        direction: "incoming",
-        edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
-        max_depth: 1,
-        max_nodes: 2_000,
-        max_edges: 10_000,
-      }),
-      principal: { id: reader },
-      authorization: {
-        async authorize(input) {
-          if (!concurrentCommitted && input.refs.some(ref => ref.view_id.startsWith("view:snapshot:parent:"))) {
-            concurrentCommitted = true;
-            await commit(views, {
-              ...memberDraft(concurrentId, reader),
-              relations: [{ type: APPLICATION_SPACE_MEMBERSHIP_RELATION, target: exactViewRef(root), metadata: {} }],
-            });
-          }
-          return repositoryAuthorizer.authorize(input);
-        },
-      },
-      source: views.search,
-    });
-    assert.equal(concurrentCommitted, true);
-    assert.equal(result.nodes.some(node => node.ref.view_id === concurrentId), false);
-    assert.equal(result.edges.some(edge => edge.source.view_id === concurrentId), false);
+  await withRepository(views => assertFrozenIncomingProjection(views, "file"));
+});
 
-    const afterCommit = await project(views, {
-      roots: [exactViewRef(root)],
-      direction: "incoming",
-      edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
-      max_depth: 1,
-      max_nodes: 2_000,
-      max_edges: 10_000,
-    });
-    assert.equal(afterCommit.nodes.some(node => node.ref.view_id === concurrentId), true);
-    assert.equal(afterCommit.edges.some(edge => edge.source.view_id === concurrentId), true);
-  });
+test("in-memory SQLite graph projection uses one frozen backup snapshot across concurrent commits", async () => {
+  const views = new SqliteViewRepository(":memory:");
+  try {
+    await assertFrozenIncomingProjection(views, "memory");
+  } finally {
+    views.close();
+  }
 });
 
 test("denied-only relation scans above the fixed cap stay redacted while authorized scans still fail closed", async () => {
@@ -389,14 +394,19 @@ test("denied-only relation scans above the fixed cap stay redacted while authori
   assert.equal(denied.redacted_boundary, true);
   assert.deepEqual(denied.truncation, { truncated: false, reasons: [] });
 
+  const cumulativeRequest = ViewGraphProjectionRequestSchema.parse({
+    ...request,
+    max_depth: 2,
+    max_nodes: 2,
+  });
   await assert.rejects(
     projectAuthorizedViewGraph({
-      request,
+      request: cumulativeRequest,
       principal: { id: reader },
       authorization: {
         async authorize(input) { return input.refs.map(ref => ({ ref, status: "allowed" as const })); },
       },
-      source,
+      source: generatedTwoLayerSource(root, VIEW_GRAPH_MAX_SCANNED_EDGES),
     }),
     (error: unknown) => error instanceof ViewGraphProjectionOperationError
       && error.code === "view_graph_scan_limit_exceeded",
@@ -635,6 +645,96 @@ function generatedLayerSource(root: ExactViewRef, total: number): ViewGraphProje
       return refs.some(ref => sameRef(ref, root)) ? [summary] : [];
     },
   });
+}
+
+function generatedTwoLayerSource(root: ExactViewRef, secondLayerEdges: number): ViewGraphProjectionSource {
+  const middle = { view_id: "view:scan-limit:middle", revision: 1 };
+  return graphSource({
+    async readGraphRelationPage(input) {
+      if (input.frontier.some(ref => sameRef(ref, root))) {
+        return {
+          edges: [{
+            id: "relation:scan-limit:root-to-middle",
+            type: APPLICATION_SPACE_MEMBERSHIP_RELATION,
+            source: root,
+            target: middle,
+          }],
+        };
+      }
+      const start = input.after === undefined
+        ? 0
+        : Number(input.after.relation_id.slice("relation:scan-limit:depth-two:".length)) + 1;
+      const end = Math.min(secondLayerEdges, start + input.limit);
+      const edges = Array.from({ length: end - start }, (_, offset) => {
+        const sequence = String(start + offset).padStart(6, "0");
+        return {
+          id: `relation:scan-limit:depth-two:${sequence}`,
+          type: APPLICATION_SPACE_MEMBERSHIP_RELATION,
+          source: middle,
+          target: { view_id: `view:scan-limit:depth-two-target:${sequence}`, revision: 1 },
+        };
+      });
+      const last = edges.at(-1);
+      return {
+        edges,
+        ...(end < secondLayerEdges && last ? {
+          next: { type: last.type, source: last.source, target: last.target, relation_id: last.id },
+        } : {}),
+      };
+    },
+    async readGraphNodeSummaries() { return []; },
+  });
+}
+
+async function assertFrozenIncomingProjection(views: SqliteViewRepository, identity: string): Promise<void> {
+  const root = await commit(views, memberDraft(`view:snapshot:${identity}:root`, reader));
+  const parentPrefix = `view:snapshot:${identity}:parent:`;
+  const parentDrafts = Array.from({ length: 270 }, (_, index) => ({
+    ...memberDraft(`${parentPrefix}${String(index).padStart(3, "0")}`, reader),
+    relations: [{ type: APPLICATION_SPACE_MEMBERSHIP_RELATION, target: exactViewRef(root), metadata: {} }],
+  }));
+  await views.commitBatch(parentDrafts.map(draft => ({ draft, expected_revision: 0 })));
+  const concurrentId = `view:snapshot:${identity}:zz-concurrent-parent`;
+  const repositoryAuthorizer = new RepositoryViewReadAuthorizer(views);
+  let concurrentCommitted = false;
+  const result = await projectAuthorizedViewGraph({
+    request: ViewGraphProjectionRequestSchema.parse({
+      roots: [exactViewRef(root)],
+      direction: "incoming",
+      edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
+      max_depth: 1,
+      max_nodes: 2_000,
+      max_edges: 10_000,
+    }),
+    principal: { id: reader },
+    authorization: {
+      async authorize(input) {
+        if (!concurrentCommitted && input.refs.some(ref => ref.view_id.startsWith(parentPrefix))) {
+          concurrentCommitted = true;
+          await commit(views, {
+            ...memberDraft(concurrentId, reader),
+            relations: [{ type: APPLICATION_SPACE_MEMBERSHIP_RELATION, target: exactViewRef(root), metadata: {} }],
+          });
+        }
+        return repositoryAuthorizer.authorize(input);
+      },
+    },
+    source: views.search,
+  });
+  assert.equal(concurrentCommitted, true);
+  assert.equal(result.nodes.some(node => node.ref.view_id === concurrentId), false);
+  assert.equal(result.edges.some(edge => edge.source.view_id === concurrentId), false);
+
+  const afterCommit = await project(views, {
+    roots: [exactViewRef(root)],
+    direction: "incoming",
+    edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
+    max_depth: 1,
+    max_nodes: 2_000,
+    max_edges: 10_000,
+  });
+  assert.equal(afterCommit.nodes.some(node => node.ref.view_id === concurrentId), true);
+  assert.equal(afterCommit.edges.some(edge => edge.source.view_id === concurrentId), true);
 }
 
 async function withRepository(run: (views: SqliteViewRepository) => Promise<void>): Promise<void> {

@@ -27,10 +27,14 @@ Node's built-in `node:sqlite` driver.
   revisions.
 - `get` is exact. `getLatest` and `resolveLatest` are explicit moving-head
   operations.
-- Graph projection opens a separate read-only WAL connection, pins one SQLite
-  read transaction before traversal, and serves every relation page and node
-  summary from that snapshot. Concurrent commits remain visible to later
-  projections without fracturing the active keyset traversal.
+- File-backed graph projection opens a separate read-only WAL connection and
+  pins one SQLite read transaction before traversal. An in-memory repository
+  uses SQLite's backup API to create a uniquely named, query-only shared-memory
+  snapshot held by the projection connection. Both strategies serve every
+  relation page and node summary from one frozen adjacency snapshot without
+  copying in-memory content to disk, so
+  concurrent commits remain visible only to later projections without
+  fracturing active keyset traversal.
 - derived Materializations use generation compare-and-swap and never change the
   semantic View revision.
 - Schema-declared search projection is written to SQLite FTS5 in the same

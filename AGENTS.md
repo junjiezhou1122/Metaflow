@@ -261,11 +261,11 @@ Operations.
   allowlist, and bounded depth/node/edge limits. Traversal order is
   deterministic and all pages plus node summaries come from one read snapshot.
   A relation is validated and its discovered exact refs are authorized before
-  it consumes the fixed server scan budget. Denied or missing discovered
-  revisions contribute only the coarse `redacted_boundary` signal and can never
-  affect returned identifiers, counts, edges, labels, paths, summaries,
-  truncation, frontier, or scan-limit errors. Selecting a projected node remains
-  `view.get`; a projection response is not a durable View.
+  it consumes the fixed projection-wide server scan budget. Denied or missing
+  discovered revisions contribute only the coarse `redacted_boundary` signal
+  and can never affect returned identifiers, counts, edges, labels, paths,
+  summaries, truncation, frontier, or scan-limit errors. Selecting a projected
+  node remains `view.get`; a projection response is not a durable View.
 - `run.execute` resolves one exact committed Transformation revision before
   Execution. `run.cancel` aborts only an active invocation owned by the same
   operation service; Execution still persists the terminal cancelled Run,
@@ -278,7 +278,8 @@ Operations.
 - A strict Schema relation projection is a cross-envelope admission contract:
   every projected Representation entry must have exactly one matching managed
   relation with its exact target, relation type, and metadata. Missing, extra,
-  or mismatched managed relations reject the complete View commit.
+  mismatched, or non-normalized exact refs and managed relations reject the
+  complete View commit.
 - A View identity keeps one Schema family. Within its revision chain, a Schema
   `name@version` is immutable. Changing interpretation rules requires a higher
   version; changing the family requires a fork.

@@ -60,6 +60,10 @@ type SnapshotProjectInput = Omit<ProjectInput, "source"> & {
   source: ViewGraphSnapshotReader;
 };
 
+type AuthorizedEdgeScan = {
+  count: number;
+};
+
 const AUTHORIZATION_BATCH_SIZE = 256;
 const truncationOrder: ViewGraphFrontierReason[] = ["depth_limit", "node_limit", "edge_limit"];
 const utf8Encoder = new TextEncoder();
@@ -91,10 +95,11 @@ async function projectSnapshot(input: SnapshotProjectInput): Promise<ViewGraphPr
 
   const edges = new Map<string, ViewGraphProjectionEdge>();
   const relationEvidence = new Map<string, string>();
+  const authorizedEdgeScan: AuthorizedEdgeScan = { count: 0 };
   let current = [...nodes.values()].map(node => node.ref).sort(compareRefs);
 
   for (let depth = 0; depth < request.max_depth && current.length > 0; depth += 1) {
-    const layer = await readRelationLayer(input, request, current, decisions);
+    const layer = await readRelationLayer(input, request, current, decisions, authorizedEdgeScan);
     const layerEdges = layer.edges;
     if (layer.redacted) redactedBoundary = true;
 
@@ -213,6 +218,7 @@ async function readRelationLayer(
   request: ViewGraphProjectionRequest,
   frontier: ExactViewRef[],
   decisions: Map<string, ViewReadAuthorizationDecision>,
+  authorizedEdgeScan: AuthorizedEdgeScan,
 ): Promise<{ edges: ViewGraphRelationEdge[]; redacted: boolean }> {
   const edges: ViewGraphRelationEdge[] = [];
   const relationIds = new Set<string>();
@@ -243,13 +249,14 @@ async function readRelationLayer(
         redacted = true;
         continue;
       }
+      authorizedEdgeScan.count += 1;
+      if (authorizedEdgeScan.count > VIEW_GRAPH_MAX_SCANNED_EDGES) {
+        throw new ViewGraphProjectionOperationError(
+          "View graph relation scan exceeded the fixed server limit",
+          "view_graph_scan_limit_exceeded",
+        );
+      }
       edges.push(edge);
-    }
-    if (edges.length > VIEW_GRAPH_MAX_SCANNED_EDGES) {
-      throw new ViewGraphProjectionOperationError(
-        "View graph relation scan exceeded the fixed server limit",
-        "view_graph_scan_limit_exceeded",
-      );
     }
     if (page.next !== undefined) {
       const last = page.edges.at(-1);

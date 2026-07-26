@@ -13,7 +13,8 @@ The strict Schema declares this mapping as `relation_projection@1`. View
 admission and View Package conformance both require the Representation entry set
 to match the managed relation set exactly, including exact ref, type, and
 metadata. Missing, extra, mismatched, and whitespace-only-ref evidence fails
-before persistence.
+before persistence, as do leading or trailing spaces that exact-ref parsing
+would otherwise normalize.
 
 Attach and detach are ordinary View evolution. Commit a new revision of the
 same root, add the exact `supersedes` relation to the prior root revision, and
@@ -24,5 +25,7 @@ deletes or revises a member View.
 Use `view.graph.project` for bounded authorized navigation and `view.get` for
 full details of one selected exact revision. Projection pages and summaries are
 read from one storage snapshot, and validated discoveries are authorized before
-they consume the server scan budget. A projection response is transport data,
-not another durable View.
+they consume the projection-wide server scan budget. File databases use a WAL
+read transaction; in-memory repositories use an explicit query-only SQLite
+memory backup. A projection response is transport data, not another durable
+View.
