@@ -53,11 +53,19 @@ Node's built-in `node:sqlite` driver.
   package path, Node SQLite/FTS ABI, WAL, exact profile/provider/model,
   dimension, metric, and physical `vec0` table declaration. A stored profile
   cannot reopen without the same configuration.
+- Node `24.x` is the executable runtime contract. `pnpm verify:semantic-deploy`
+  creates a production-only deploy on the current host, loads the host-specific
+  extension from that artifact, and verifies the bundled upstream MIT notice.
+  Darwin arm64/x64, Linux arm64/x64, and Windows x64 packages are exact-pinned;
+  only the current host tuple is claimed as executed by any one run.
 - Only strict `metaflow.search.embedding@1` Derived Views are projected. Each
   mapping freezes its exact target View/location, normalized source digest,
   exact embedding evidence ref, provider/model profile, dimension, metric,
   Transformation Run, and inherited policy. Query scope refs and target kinds
   are prefiltered by `vec0` before distances can affect ranks.
+- Physical row identity is `(profile_id, profile_revision, vector_rowid)`.
+  The same rowid may exist in multiple profile tables; startup and retrieval
+  validate exact profile and target metadata before evidence can resolve.
 - Vector mapping and `vec0` insertion share the View `BEGIN IMMEDIATE`
   transaction. Privacy Forget deletes mappings and vector rows before governed
   payloads, and durable reindex reconstructs only from committed embedding

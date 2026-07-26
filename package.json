@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "node --experimental-sqlite --import tsx apps/ambient-daemon/index.ts",
     "http": "node --experimental-sqlite --import tsx apps/ambient-daemon/index.ts",
@@ -41,6 +45,7 @@
     "test:view-search": "node --experimental-sqlite --import tsx --test tests/view-search-projection.test.ts tests/view-search-service.test.ts tests/view-search-semantic.test.ts",
     "test:view-search-semantic": "node --no-warnings --experimental-sqlite --import tsx --test tests/view-search-semantic.test.ts tests/operation-surfaces.test.ts",
     "test:view-graph-project": "node --experimental-sqlite --import tsx --test tests/view-graph-project.test.ts tests/operation-surfaces.test.ts",
+    "verify:semantic-deploy": "node --import tsx scripts/v1/verify-semantic-deploy.ts",
     "test:privacy-forget": "node --experimental-sqlite --import tsx --test tests/privacy-forget.test.ts tests/capture-runtime.test.ts",
     "test:view-v1": "node --experimental-sqlite --import tsx --test tests/view-contract.test.ts tests/view-store.test.ts tests/view-v1.test.ts",
     "test:boundaries": "node --import tsx --test tests/package-boundaries.test.ts",

@@ -20,6 +20,7 @@ import {
   type ExactViewRef,
   type JsonValue,
   type View,
+  type ViewPolicy,
   type ViewSchemaRef,
 } from "@info/view";
 
@@ -203,7 +204,9 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       throw error;
     }
     const stored = readProfileRows(db);
-    return new SqliteVecSemanticSearch(db, stored, compatibility);
+    const semanticSearch = new SqliteVecSemanticSearch(db, stored, compatibility);
+    semanticSearch.assertIntegrity("startup");
+    return semanticSearch;
   }
 
   static assertUnconfiguredDatabase(db: DatabaseSync): void {
@@ -219,21 +222,27 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     }
   }
 
-  insert(view: View): "indexed" | "excluded" | "not_embedding" {
+  insert(view: View, plannedViews?: ReadonlyMap<string, View>): "indexed" | "excluded" | "not_embedding" {
     const value = embeddingValue(view);
     if (!value) return "not_embedding";
     const profile = this.requireProfile(value.profile);
-    const target = this.readTarget(value.target.ref);
+    const target = plannedViews?.get(refKey(value.target.ref)) ?? this.readTarget(value.target.ref);
     assertEmbeddingEvidence(view, value, target, profile);
     if (view.policy.allow_local_search === false || target.policy.allow_local_search === false) return "excluded";
 
-    const mapping = this.db.prepare(`
+    const vectorRowid = Number((this.db.prepare(`
+      select coalesce(max(vector_rowid), 0) + 1 as vector_rowid
+      from view_search_vectors_v1
+      where profile_id = ? and profile_revision = ?
+    `).get(profile.id, profile.revision) as { vector_rowid: number }).vector_rowid);
+    this.db.prepare(`
       insert into view_search_vectors_v1 (
-        embedding_view_id, embedding_revision, target_view_id, target_revision,
+        vector_rowid, embedding_view_id, embedding_revision, target_view_id, target_revision,
         target_kind, target_path, target_key, profile_id, profile_revision,
         dimension, distance_metric, source_digest, indexed_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      BigInt(vectorRowid),
       view.id,
       view.revision,
       value.target.ref.view_id,
@@ -248,15 +257,24 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       value.target.source_digest,
       view.time.created_at,
     );
-    const rowid = BigInt(mapping.lastInsertRowid);
-    this.db.prepare(`insert into ${quoteIdentifier(profile.table_name)} (rowid, embedding, target_key, target_kind) values (?, ?, ?, ?)`)
-      .run(rowid, float32Vector(value.vector, profile.distance_metric), refKey(value.target.ref), value.target.location.kind);
+    this.db.prepare(`
+      insert into ${quoteIdentifier(profile.table_name)} (
+        rowid, embedding, target_key, target_kind, profile_id, profile_revision
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(
+      BigInt(vectorRowid),
+      float32Vector(value.vector, profile.distance_metric),
+      refKey(value.target.ref),
+      value.target.location.kind,
+      profile.id,
+      BigInt(profile.revision),
+    );
     return "indexed";
   }
 
   delete(ref: ExactViewRef): number {
     const rows = this.db.prepare(`
-      select vector_rowid, profile_id, profile_revision
+      select vector_rowid, profile_id, profile_revision, target_key, target_kind
       from view_search_vectors_v1
       where (embedding_view_id = ? and embedding_revision = ?)
          or (target_view_id = ? and target_revision = ?)
@@ -265,9 +283,32 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       vector_rowid: number;
       profile_id: string;
       profile_revision: number;
+      target_key: string;
+      target_kind: "envelope" | "representation";
     }>;
     for (const row of rows) {
       const profile = this.requireProfile({ id: row.profile_id, revision: Number(row.profile_revision) });
+      const physical = this.db.prepare(`
+        select profile_id, profile_revision, target_key, target_kind
+        from ${quoteIdentifier(profile.table_name)} where rowid = ?
+      `).get(BigInt(row.vector_rowid)) as {
+        profile_id: string;
+        profile_revision: number;
+        target_key: string;
+        target_kind: string;
+      } | undefined;
+      if (
+        !physical
+        || physical.profile_id !== row.profile_id
+        || Number(physical.profile_revision) !== Number(row.profile_revision)
+        || physical.target_key !== row.target_key
+        || physical.target_kind !== row.target_kind
+      ) {
+        throw new SqliteVecSemanticSearchError(
+          `Vector row ${row.vector_rowid} metadata does not match ${profileKey(profile)}`,
+          "vector_mapping_corrupt",
+        );
+      }
       const deleted = this.db.prepare(`delete from ${quoteIdentifier(profile.table_name)} where rowid = ?`)
         .run(BigInt(row.vector_rowid));
       if (Number(deleted.changes) !== 1) {
@@ -304,7 +345,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       else excluded += 1;
     }
     const repaired = this.inspectIntegrity();
-    if (repaired.orphans !== 0 || repaired.missing !== 0) {
+    if (repaired.orphans !== 0 || repaired.missing !== 0 || repaired.mismatched !== 0) {
       throw new SqliteVecSemanticSearchError("Semantic reindex left inconsistent vector state", "vector_mapping_corrupt");
     }
     return {
@@ -313,7 +354,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       excluded,
       removed: Math.max(0, prior.vector_rows - indexed),
       orphans_repaired: prior.orphans,
-      missing_rows_repaired: prior.missing,
+      missing_rows_repaired: prior.missing + prior.mismatched,
     };
   }
 
@@ -356,18 +397,24 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     }
     const rows = this.db.prepare(`
       with nearest as (
-        select rowid, distance
+        select rowid, distance, target_key, target_kind, profile_id, profile_revision
         from ${quoteIdentifier(profile.table_name)}
         where embedding match ? and k = ?
           and target_key in (${placeholders(refs.length)})
           and target_kind in (${placeholders(targetKinds.length)})
+          and profile_id = ? and profile_revision = ?
       )
       select m.vector_rowid, m.embedding_view_id, m.embedding_revision,
              m.target_view_id, m.target_revision, m.target_kind, m.target_path,
              m.profile_id, m.profile_revision, m.source_digest,
              r.view_json, nearest.distance
       from nearest
-      join view_search_vectors_v1 m on m.vector_rowid = nearest.rowid
+      join view_search_vectors_v1 m
+        on m.vector_rowid = nearest.rowid
+       and m.profile_id = nearest.profile_id
+       and m.profile_revision = nearest.profile_revision
+       and m.target_key = nearest.target_key
+       and m.target_kind = nearest.target_kind
       join view_revisions_v1 r on r.id = m.target_view_id and r.revision = m.target_revision
       order by nearest.distance asc, m.target_view_id asc, m.target_revision desc,
                m.target_kind asc, m.target_path asc, m.embedding_view_id asc, m.embedding_revision desc
@@ -376,6 +423,8 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       BigInt(eligible),
       ...refs.map(refKey),
       ...targetKinds,
+      profile.id,
+      BigInt(profile.revision),
     ) as SemanticRow[];
     if (rows.length !== eligible) {
       throw new SqliteVecSemanticSearchError(
@@ -458,24 +507,51 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     }
   }
 
-  private inspectIntegrity(): { vector_rows: number; orphans: number; missing: number } {
+  private inspectIntegrity(): { vector_rows: number; orphans: number; missing: number; mismatched: number } {
     let vectorRows = 0;
     let orphans = 0;
     let missing = 0;
+    let mismatched = 0;
     for (const profile of this.profiles.values()) {
       vectorRows += Number((this.db.prepare(`select count(*) as count from ${quoteIdentifier(profile.table_name)}`).get() as { count: number }).count);
       orphans += Number((this.db.prepare(`
         select count(*) as count from ${quoteIdentifier(profile.table_name)} v
-        left join view_search_vectors_v1 m on m.vector_rowid = v.rowid
+        left join view_search_vectors_v1 m
+          on m.vector_rowid = v.rowid
+         and m.profile_id = ? and m.profile_revision = ?
         where m.vector_rowid is null
-      `).get() as { count: number }).count);
+      `).get(profile.id, profile.revision) as { count: number }).count);
       missing += Number((this.db.prepare(`
         select count(*) as count from view_search_vectors_v1 m
-        left join ${quoteIdentifier(profile.table_name)} v on v.rowid = m.vector_rowid
+        left join ${quoteIdentifier(profile.table_name)} v
+          on v.rowid = m.vector_rowid
+         and v.profile_id = m.profile_id
+         and v.profile_revision = m.profile_revision
         where m.profile_id = ? and m.profile_revision = ? and v.rowid is null
       `).get(profile.id, profile.revision) as { count: number }).count);
+      mismatched += Number((this.db.prepare(`
+        select count(*) as count from view_search_vectors_v1 m
+        join ${quoteIdentifier(profile.table_name)} v on v.rowid = m.vector_rowid
+        where m.profile_id = ? and m.profile_revision = ?
+          and (v.profile_id != m.profile_id
+            or v.profile_revision != m.profile_revision
+            or v.target_key != m.target_key
+            or v.target_kind != m.target_kind)
+      `).get(profile.id, profile.revision) as { count: number }).count);
     }
-    return { vector_rows: vectorRows, orphans, missing };
+    return { vector_rows: vectorRows, orphans, missing, mismatched };
+  }
+
+  private assertIntegrity(phase: string): void {
+    const integrity = this.inspectIntegrity();
+    // Missing and orphaned rows are non-resolving and remain repairable by the
+    // explicit durable reindex path. Metadata mismatches can resolve to the
+    // wrong evidence, so startup must fail before Search becomes available.
+    if (integrity.mismatched === 0) return;
+    throw new SqliteVecSemanticSearchError(
+      `Semantic vector ${phase} integrity failed: ${integrity.mismatched} profile or target metadata mismatches`,
+      "vector_mapping_corrupt",
+    );
   }
 }
 
@@ -628,7 +704,9 @@ function vectorTableSql(tableName: string, profile: SqliteVecProfile): string {
   return `create virtual table ${quoteIdentifier(tableName)} using vec0(
     embedding float[${profile.dimension}] distance_metric=${profile.distance_metric},
     target_key text,
-    target_kind text
+    target_kind text,
+    profile_id text,
+    profile_revision integer
   )`;
 }
 
@@ -672,6 +750,12 @@ function assertEmbeddingEvidence(view: View, value: EmbeddingValue, target: View
   if (!target.policy.allow_embedding) {
     throw new SqliteVecSemanticSearchError(`Embedding target ${refKey(value.target.ref)} forbids embedding`, "embedding_invalid");
   }
+  if (!policyIsAtLeastAsStrict(view.policy, target.policy)) {
+    throw new SqliteVecSemanticSearchError(
+      `Embedding View policy weakens or changes owner of target ${refKey(value.target.ref)}`,
+      "embedding_invalid",
+    );
+  }
   if (
     value.profile.id !== profile.id
     || value.profile.revision !== profile.revision
@@ -693,6 +777,20 @@ function assertEmbeddingEvidence(view: View, value: EmbeddingValue, target: View
   if (source === undefined || sqliteVecSourceDigest(source) !== value.target.source_digest) {
     throw new SqliteVecSemanticSearchError("Embedding source digest does not match the exact target location", "embedding_invalid");
   }
+}
+
+function policyIsAtLeastAsStrict(candidate: ViewPolicy, inherited: ViewPolicy): boolean {
+  const visibility = { public: 0, shared: 1, private: 2 } as const;
+  const privacy = { public: 0, private: 1, sensitive: 2 } as const;
+  const retention = { archive: 0, normal: 1, session: 2, do_not_store: 3 } as const;
+  return candidate.owner === inherited.owner
+    && visibility[candidate.visibility] >= visibility[inherited.visibility]
+    && privacy[candidate.privacy] >= privacy[inherited.privacy]
+    && retention[candidate.retention] >= retention[inherited.retention]
+    && (!candidate.allow_external_model || inherited.allow_external_model)
+    && (!candidate.allow_embedding || inherited.allow_embedding)
+    && (candidate.allow_local_search === false || inherited.allow_local_search !== false)
+    && inherited.labels.every(label => candidate.labels.includes(label));
 }
 
 function valueAtPointer(root: JsonValue, pointer: string): JsonValue | undefined {

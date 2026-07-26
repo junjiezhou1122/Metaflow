@@ -88,7 +88,9 @@ but there is no separate canonical Worker domain layer.
   location, source digest, profile, model, dimension, metric, provenance, and
   policy pass startup and commit checks. Vector mappings and `vec0` rows share
   commit, rollback, Privacy Forget, reopen, and durable reindex/orphan-repair
-  transactions with View and FTS state. Missing/incompatible extension,
+  transactions with View and FTS state. Physical vector identity includes the
+  exact profile revision; profile/target metadata mismatch fails before Search
+  can return evidence. Missing/incompatible extension,
   profile, ABI, or persisted vector state fails without a cosine or remote
   fallback. It publishes events only after commit and never invokes Automation
   or III directly. The existing Search read adapter also implements the
