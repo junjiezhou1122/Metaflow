@@ -1,5 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { HttpOperationAdapter } from "@info/operation-surfaces";
+import {
+  METAFLOW_AMBIENT_SERVER_NAME,
+  METAFLOW_AMBIENT_SERVER_VERSION,
+  METAFLOW_HTTP_PROTOCOL_NAME,
+  METAFLOW_HTTP_PROTOCOL_VERSION,
+  MetaflowDaemonDoctorSchema,
+  type HttpOperationAdapter,
+} from "@info/operation-surfaces";
 
 const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -73,6 +80,16 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
       if (method === "GET" && path === "/health") {
         status = 200;
         return send(response, status, { ok: true, architecture: "metaflow-v1" });
+      }
+      if (method === "GET" && path === "/metaflow/v1/doctor") {
+        status = 200;
+        return send(response, status, MetaflowDaemonDoctorSchema.parse({
+          ok: true,
+          protocol: { name: METAFLOW_HTTP_PROTOCOL_NAME, version: METAFLOW_HTTP_PROTOCOL_VERSION },
+          server: { name: METAFLOW_AMBIENT_SERVER_NAME, version: METAFLOW_AMBIENT_SERVER_VERSION },
+          authentication: { source: "composition_principal", required: false },
+          endpoints: { operations: "/metaflow/v1/operations/", mcp: "/mcp" },
+        }));
       }
 
       const exactView = path.match(/^\/context\/v1\/views\/([^/]+)$/);

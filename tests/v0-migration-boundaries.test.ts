@@ -49,6 +49,7 @@ test("canonical workspace exposes only v1 capability owners", () => {
     "packages/adapters/*",
     "view-packages/*",
     "apps/ambient-daemon",
+    "apps/mf-cli",
     "apps/website",
   ]);
   for (const name of legacyPackages) {

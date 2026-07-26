@@ -4,6 +4,7 @@ import {
   type OperationEnvelope,
   type OperationService,
 } from "@info/operations";
+import { METAFLOW_HTTP_PROTOCOL_VERSION } from "./daemon.js";
 
 export type OperationHttpRequest = {
   method: string;
@@ -35,7 +36,10 @@ export class HttpOperationAdapter {
     }, context));
     return {
       status: httpStatus(envelope),
-      headers: { "content-type": "application/json; charset=utf-8" },
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "x-metaflow-protocol-version": String(METAFLOW_HTTP_PROTOCOL_VERSION),
+      },
       body: envelope,
     };
   }

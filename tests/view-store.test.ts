@@ -657,9 +657,9 @@ type WorkerOutcome = {
 
 async function commitFromConcurrentWorkers(path: string, drafts: ViewDraft[]): Promise<WorkerOutcome[]> {
   const start = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  const workerUrl = new URL("./helpers/view-store-writer.ts", import.meta.url);
+  const workerUrl = new URL("./helpers/view-store-writer-bootstrap.mjs", import.meta.url);
   const workers = drafts.map(draft => new Worker(workerUrl, {
-    execArgv: ["--experimental-sqlite", "--import", "tsx"],
+    execArgv: ["--experimental-sqlite"],
     workerData: { path, draft, start },
   }));
   const ready = workers.map(worker => new Promise<void>((resolve, reject) => {

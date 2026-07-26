@@ -52,6 +52,10 @@ export async function startAmbientDaemon() {
       void directAssist(request, response);
       return;
     }
+    if (path === "/mcp") {
+      void composition.mcpHandler(request, response);
+      return;
+    }
     void composition.handler(request, response);
   });
   server.listen(port, () => {

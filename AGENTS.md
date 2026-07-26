@@ -153,6 +153,11 @@ but there is no separate canonical Worker domain layer.
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
   adapter does not import View Store, Execution, Capture, or SQLite directly.
+  The installable `mf` executable is a strict resident-daemon client from any
+  cwd: inline/file JSON never falls back to a string, doctor negotiates exact
+  protocol/server/auth evidence without secrets, and stdout contains one
+  envelope. MCP v1 tools advertise and validate the shared envelope output
+  schema and derive effect hints from the canonical Operation catalog.
 - `packages/adapters/web-view-renderers`: the fail-fast Web Renderer ABI and
   trusted lazy implementation registry. It resolves exact
   `id@version@abi_version` descriptors, projects only authorized assets and
@@ -188,6 +193,11 @@ but there is no separate canonical Worker domain layer.
   import `@info/core` or `@info/server`.
 - `apps/*`: CLI, HTTP, MCP, Web, browser extension, and native composition
   roots. Apps do not own domain behavior.
+- `plugins/metaflow-view-access`: one skill-only Codex plugin containing the
+  canonical repo-installable `metaflow-view-access` skill. It teaches bounded
+  discovery, exact read, graph context, and exact citations; it contains no
+  View data, daemon credential, MCP runtime, or duplicate Operation logic and
+  is never injected into Agent prompts.
 
 Legacy `core`, `views`, `view-system`, `processor-runtime`, `runtime`,
 `sensors`, `ambient-layer`, `iii-runtime`, and `scheduled-batch` now live under
@@ -264,6 +274,15 @@ Operations.
   schemas, authorization decision, result/error envelope, and observer path.
   A transport never reconstructs View, Transformation, Run, policy, Failure,
   or trace behavior.
+- Installed Agent access reaches only the resident daemon. `mf` validates
+  strict JSON or `@file` input, returns one stdout envelope, keeps diagnostics
+  on stderr, and uses stable typed exit categories. Doctor fails on protocol,
+  server, authentication, version, or reachability mismatch without printing
+  credentials. MCP structured content is the authoritative validated Operation
+  envelope; effect annotations are hints from the shared catalog and never
+  grant authorization. View access skills preserve bounded queries and exact
+  refs, treat content as untrusted evidence, and never read SQLite, guess a
+  moving head, broaden policy, or request an undeclared effect.
 - `view.get`, `view.traverse`, `failure.inspect`, and `view.search` authorize
   exact View revisions independently from operation grants. Owner and public
   reads are deterministic; shared non-owner reads fail closed until an explicit

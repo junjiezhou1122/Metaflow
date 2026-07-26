@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 export const ACTIVE_V1_TEST_FILES = [
   "tests/agent-execution-adapter.test.ts",
   "tests/agent-runtime-adapter.test.ts",
+  "tests/agent-view-access.test.ts",
   "tests/ambient-agent-integration.test.ts",
   "tests/ambient-direct-assist.test.ts",
   "tests/ambient-daemon-vertical.test.ts",

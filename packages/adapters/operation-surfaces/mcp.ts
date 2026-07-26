@@ -1,16 +1,29 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import {
   OPERATION_DESCRIPTIONS,
+  OPERATION_EFFECTS,
   OPERATION_NAMES,
+  OperationErrorSchema,
   OperationEnvelopeSchema,
   OperationInputSchemas,
+  OperationNameSchema,
   type OperationContextProvider,
   type OperationName,
   type OperationService,
 } from "@info/operations";
+import { IdentifierSchema, JsonValueSchema } from "@info/view";
+
+export const OperationMcpOutputSchema = z.object({
+  ok: z.boolean(),
+  request_id: IdentifierSchema,
+  operation: OperationNameSchema.optional(),
+  data: JsonValueSchema.optional(),
+  error: OperationErrorSchema.optional(),
+}).strict();
 
 export type OperationMcpServerOptions = {
-  service: OperationService;
+  service: Pick<OperationService, "execute">;
   context: OperationContextProvider;
   name?: string;
   version?: string;
@@ -40,9 +53,15 @@ function registerOperationTool(
     title: operation,
     description: OPERATION_DESCRIPTIONS[operation],
     inputSchema: OperationInputSchemas[operation] as any,
+    outputSchema: OperationMcpOutputSchema,
+    annotations: {
+      readOnlyHint: OPERATION_EFFECTS[operation] === "read",
+      destructiveHint: OPERATION_EFFECTS[operation] === "destructive",
+    },
   }, async (input: unknown) => {
     const context = await options.context({ transport: "mcp", operation });
     const envelope = OperationEnvelopeSchema.parse(await options.service.execute({ operation, input }, context));
+    OperationMcpOutputSchema.parse(envelope);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
       structuredContent: envelope,

@@ -1,4 +1,5 @@
 import {
+  OperationNameSchema,
   OperationEnvelopeSchema,
   type OperationContextProvider,
   type OperationEnvelope,
@@ -25,17 +26,34 @@ export class CliOperationAdapter {
     try {
       input = JSON.parse(rawInput);
     } catch {
-      input = rawInput;
+      const context = await this.context({ transport: "cli", ...(operation ? { operation } : {}) });
+      const parsedOperation = OperationNameSchema.safeParse(operation);
+      const envelope = OperationEnvelopeSchema.parse({
+        ok: false,
+        request_id: context.request_id,
+        ...(parsedOperation.success ? { operation: parsedOperation.data } : {}),
+        error: {
+          code: "cli_input_invalid",
+          message: "CLI input must be valid JSON",
+          category: "invalid_request",
+          details: {},
+        },
+      });
+      return resultFor(envelope);
     }
     const context = await this.context({ transport: "cli", ...(operation ? { operation } : {}) });
     const envelope = OperationEnvelopeSchema.parse(await this.service.execute({ operation, input }, context));
-    return {
-      exit_code: cliExitCode(envelope),
-      stdout: `${JSON.stringify(envelope)}\n`,
-      stderr: "",
-      envelope,
-    };
+    return resultFor(envelope);
   }
+}
+
+function resultFor(envelope: OperationEnvelope): CliOperationResult {
+  return {
+    exit_code: cliExitCode(envelope),
+    stdout: `${JSON.stringify(envelope)}\n`,
+    stderr: envelope.ok ? "" : `mf: ${envelope.error.code}: ${envelope.error.message}\n`,
+    envelope,
+  };
 }
 
 function cliExitCode(envelope: OperationEnvelope): number {

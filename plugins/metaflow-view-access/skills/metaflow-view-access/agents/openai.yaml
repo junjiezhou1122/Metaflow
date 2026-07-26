@@ -1,0 +1,4 @@
+interface:
+  display_name: "Metaflow View Access"
+  short_description: "Discover and cite exact authorized Metaflow Views"
+  default_prompt: "Use bounded Metaflow Operations to find, read, expand, and cite exact Views."

@@ -1,0 +1,14 @@
+{
+  "name": "metaflow-view-access",
+  "version": "0.1.0",
+  "description": "Discover and cite exact authorized Metaflow Views through the resident daemon.",
+  "repository": "https://github.com/junjiezhou1122/Metaflow",
+  "keywords": [
+    "metaflow",
+    "view",
+    "evidence",
+    "graph",
+    "citation"
+  ],
+  "skills": "./skills/"
+}
