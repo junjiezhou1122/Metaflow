@@ -6,17 +6,19 @@ category: architecture-design
 tags: [view, search, retrieval, parser, vector, graph, provenance]
 sources: [architecture-discussion, research/view-search-landscape]
 created: 2026-07-26T14:57:38Z
-updated: 2026-07-27T04:00:00Z
+updated: 2026-07-27T09:00:00Z
 ---
 
 # Recursive View Search
 
-> Status: the issue 66 keyword + relation vertical is implemented in
+> Status: the issue 66 keyword + relation vertical and issue 67 pinned
+> sqlite-vec semantic vertical are implemented in
 > `packages/search` and `packages/adapters/storage-sqlite`. The deterministic
 > `search_projection@1` contract in [[architecture/view-core-transformation-runtime|View
-> Core and Transformation Runtime]] remains the indexing authority. Semantic
-> retrieval remains unavailable until the separately gated pinned sqlite-vec
-> work is accepted; it has no fallback.
+> Core and Transformation Runtime]] remains the keyword indexing authority.
+> Semantic retrieval is available only when one exact startup profile and an
+> explicit query-embedding port are configured; otherwise it remains typed
+> unavailable and has no fallback.
 
 ## Decision summary
 
@@ -73,13 +75,28 @@ scope traversal reads relation layers from that same connection; denied nodes
 are discarded before they can count toward limits, become paths, or expand the
 frontier.
 
-The issue branch deliberately does not own public integration files. The
-integration owner must register `packages/search` in the workspace and package
-boundary catalogs, inject `SearchService` into Operations, replace the legacy
-`ViewRepository.query()` implementation of `view.search`, add authorized
-`view.search.reindex`, and register the four-surface vertical in the root test
-catalog. Until that wiring lands, the older public `view.search` operation is
-not evidence of this contract.
+The accepted integration registers `packages/search`, injects `SearchService`
+into Operations, exposes authorized `view.search.reindex`, and runs the same
+contract through in-process, CLI, HTTP, and real MCP surfaces. The semantic
+extension adds exact evidence equivalence to that existing four-surface
+vertical rather than creating another operation or transport.
+
+The accepted semantic storage contract pins `sqlite-vec@0.1.9` and requires
+`vec_version() = v0.1.9`. Startup verifies the loadable package, Node SQLite
+and FTS ABI, WAL for file databases, exact profile/provider/model, dimension,
+metric, and physical `vec0` declaration. Only strict committed
+`metaflow.search.embedding@1` Derived Views may create vector rows. Their exact
+target, location, source digest, evidence ref, Transformation Run, and policy
+are validated before the vector and ordinary mapping row enter the same
+`BEGIN IMMEDIATE` transaction as the View.
+
+The ordinary mapping table remains authoritative; `vec0` only performs KNN.
+Frozen exact target refs and envelope/Representation target kinds are passed as
+metadata constraints inside the KNN query, so denied or out-of-scope vectors
+cannot affect distance order. Privacy Forget removes both sides before View
+payload deletion. Durable reindex rebuilds only from committed embedding Views,
+repairs orphan/missing physical rows without recomputing an embedding, and
+persists the semantic counts in the idempotent reindex report.
 
 ## Scope: where to search
 
@@ -270,11 +287,12 @@ it is part of View commit and repository consistency.
 - Retriever, fusion, and reranker ports;
 - observable partial-mode and unsupported-Representation outcomes.
 
-Concrete parser, embedding, and vector implementations belong in independent
+Concrete parser and embedding implementations belong in independent
 `packages/adapters/*` packages or SQLite-owned internal projections when they
 must share the canonical transaction. The accepted vertical validates keyword,
-relation, authorization, location, Forget, reindex, reopen, and cursor behavior.
-It does not claim that the sqlite-vec adoption gate has passed.
+semantic, relation, authorization, location, Forget, reindex, reopen, cursor,
+ABI, rollback, packaging, and representative-corpus behavior. sqlite-vec is the
+accepted SQLite-owned vector projection; Search still never creates embeddings.
 
 ## First vertical slice
 
@@ -300,7 +318,5 @@ policy.
   than merely semantic adjacency?
 - Should hybrid score fusion be fixed deterministic code or a versioned
   strategy selected by the request?
-- Which semantic index can preserve local-first deletion, policy, and durable
-  rebuild guarantees?
 - When should an internal match be promoted to a reusable child View, and who
   requests that Transformation?

@@ -7,7 +7,9 @@ authorization-first scope freezing, explicit mode outcomes, deterministic
 
 The package has no database, transport, parser, model, vector, or graph runtime.
 Concrete stores receive only the frozen authorized exact-ref set. SQLite FTS and
-relation rows remain owned by `@info/storage-sqlite`; unavailable semantic or
+relation rows remain owned by `@info/storage-sqlite`. Its optional configured
+semantic port uses the exact pinned sqlite-vec adapter and prefilters the frozen
+exact scope inside the vector query; unavailable semantic/query-embedding or
 reranker implementations are reported or fail according to the request rather
 than falling back.
 
@@ -26,6 +28,8 @@ scope. Semantic evidence from any non-semantic mode fails closed.
 and an explicit `view.search.reindex` operation. Ambient composes one
 repository-backed exact View read authorizer into both Search and the other
 public View read operations. SQLite supplies only scope, descriptor, relation,
-and keyword ports after Search freezes authorization. In-process, CLI, HTTP,
-and the official MCP server therefore observe the same result and failure
+keyword, and explicitly configured semantic ports after Search freezes
+authorization. Semantic evidence is an exact strict embedding Derived View
+that must already belong to the authorized scope. In-process, CLI, HTTP, and
+the official MCP server therefore observe the same result and failure
 envelopes.
