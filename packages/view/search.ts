@@ -9,6 +9,8 @@ import {
   type ViewSearchProjectionField,
 } from "./schema.js";
 
+export { compileViewSearchMatchExpression } from "./search-match.js";
+
 export const VIEW_SEARCH_PROJECTION_IMPLEMENTATION_VERSION = 1 as const;
 
 export const ViewSearchDocumentSchema = z.object({
@@ -72,13 +74,6 @@ export function projectViewForSearch(view: View): ViewSearchDocument | undefined
     ...base,
     digest: createHash("sha256").update(canonicalJson({ declaration, document: base })).digest("hex"),
   });
-}
-
-export function compileViewSearchMatchExpression(input: string): string {
-  const tokens = input.normalize("NFKC").match(/[\p{L}\p{N}_]+/gu) ?? [];
-  const unique = [...new Set(tokens.map(token => token.toLocaleLowerCase("und")))];
-  if (unique.length === 0) throw new TypeError("search text must contain at least one letter, number, or underscore token");
-  return unique.map(token => `"${token.replaceAll('"', '""')}"`).join(" AND ");
 }
 
 function resolveSearchPath(root: JsonValue, pointer: string): JsonValue[] {

@@ -1,0 +1,18 @@
+{
+  "contract_version": 1,
+  "compression": "gzip-9",
+  "maximum_bytes": {
+    "initial_shell": 90000,
+    "graph_engine": 42000,
+    "sigma_surface": 5000,
+    "layout_worker": 25000,
+    "total_javascript": 160000
+  },
+  "recorded_2026_07_27": {
+    "initial_shell": 86313,
+    "graph_engine": 36629,
+    "sigma_surface": 2481,
+    "layout_worker": 17441,
+    "total_javascript": 142864
+  }
+}

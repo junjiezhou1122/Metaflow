@@ -174,6 +174,13 @@ but there is no separate canonical Worker domain layer.
   conversation session per `conversation_id`; it injects no MCP servers, does
   not use AgentTask/AgentTaskOutput, and does not create Views. It must never
   import `@info/core` or `@info/server`.
+- `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
+  shared Operations, validates graph/search/exact-View responses, and keeps a
+  disposable Graphology projection plus Sigma camera/layout state in the
+  browser. It never imports a View Store or SQLite, owns traversal or access
+  policy, persists layout as View semantics, or silently falls back when WebGL
+  is unavailable. Its accessible DOM companion and mutually exclusive mobile
+  drawers remain synchronized with the visual graph.
 - `apps/*`: CLI, HTTP, MCP, Web, browser extension, and native composition
   roots. Apps do not own domain behavior.
 

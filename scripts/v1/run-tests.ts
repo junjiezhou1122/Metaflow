@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 export const ACTIVE_V1_TEST_FILES = [
+  "apps/view-explorer/src/explorer-contracts.test.ts",
   "tests/agent-execution-adapter.test.ts",
   "tests/agent-runtime-adapter.test.ts",
   "tests/ambient-agent-integration.test.ts",
