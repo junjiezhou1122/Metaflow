@@ -35,9 +35,11 @@ export const ViewPackageMaterializationProfileSchema = z.object({
 export const ViewPackageRendererSchema = z.object({
   id: IdentifierSchema,
   version: z.number().int().positive(),
+  abi_version: z.literal(1),
   schema: ViewPackageSchemaKeySchema,
   surfaces: z.array(z.enum(["web", "native", "generic"])).min(1),
   representation_kinds: z.array(IdentifierSchema).min(1),
+  media_types: z.array(z.string().trim().min(1)).min(1).optional(),
   priority: z.number().int().default(0),
 }).strict();
 
@@ -90,7 +92,7 @@ export const ViewPackageManifestSchema = z.object({
   assertUnique(manifest.schemas.map(schemaKey), "Schema", ["schemas"], context);
   assertUnique(manifest.representations.map(item => item.id), "Representation profile", ["representations"], context);
   assertUnique(manifest.materializations.map(item => item.id), "Materialization profile", ["materializations"], context);
-  assertUnique(manifest.renderers.map(item => `${item.id}@${item.version}`), "Renderer", ["renderers"], context);
+  assertUnique(manifest.renderers.map(rendererKey), "Renderer", ["renderers"], context);
   assertUnique(manifest.methods.map(item => item.id), "Method", ["methods"], context);
   assertUnique(manifest.evolutions.map(item => item.id), "Evolution", ["evolutions"], context);
 
@@ -156,6 +158,10 @@ export type ViewPackageConformanceReport = {
 
 export function schemaKey(schema: ViewSchemaRef | ViewPackageSchemaKey): string {
   return `${schema.name}@${schema.version}`;
+}
+
+export function rendererKey(renderer: Pick<ViewPackageRenderer, "id" | "version" | "abi_version">): string {
+  return `${renderer.id}@${renderer.version}@${renderer.abi_version}`;
 }
 
 export function transformationKey(ref: ExactTransformationRef): string {

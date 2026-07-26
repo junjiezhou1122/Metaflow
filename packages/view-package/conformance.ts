@@ -1,6 +1,7 @@
 import { validateViewRepresentation } from "@info/view";
 import {
   ViewPackageFixtureSchema,
+  rendererKey,
   schemaKey,
   transformationKey,
   type ViewPackageConformanceInput,
@@ -12,11 +13,16 @@ export function runViewPackageConformance(input: ViewPackageConformanceInput): V
   const manifest = input.package.manifest;
 
   for (const renderer of manifest.renderers) {
-    if (!input.renderers.has(renderer.id)) {
+    const key = rendererKey(renderer);
+    if (!input.renderers.has(key)) {
       throw new ViewPackageError(
-        `View Package renderer is not installed: ${renderer.id}@${renderer.version}`,
+        `View Package renderer is not installed: ${key}`,
         "missing_renderer",
-        { renderer_id: renderer.id, renderer_version: renderer.version },
+        {
+          renderer_id: renderer.id,
+          renderer_version: renderer.version,
+          renderer_abi_version: renderer.abi_version,
+        },
       );
     }
   }

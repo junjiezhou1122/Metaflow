@@ -109,6 +109,13 @@ but there is no separate canonical Worker domain layer.
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
   adapter does not import View Store, Execution, Capture, or SQLite directly.
+- `packages/adapters/web-view-renderers`: the fail-fast Web Renderer ABI and
+  trusted lazy implementation registry. It resolves exact
+  `id@version@abi_version` descriptors, projects only authorized assets and
+  declared Methods through host capabilities, and owns lifecycle evidence for
+  load, mount, abort, and disposal. Its JSON, safe Markdown, image, and bounded
+  Schema-driven table implementations are explicit registrations, never a
+  generic fallback; it does not read View Store/SQLite or fetch arbitrary URLs.
 - `packages/adapters/browser-automation`: validates Browser events, performs
   cheap declarative matching, requests exact page/selection evidence through
   the Browser Capture port, and projects Delivery and interaction transport.
