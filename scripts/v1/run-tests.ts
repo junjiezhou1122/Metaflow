@@ -19,6 +19,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/browser-capture.test.ts",
   "tests/capture-runtime.test.ts",
   "tests/committed-view-trigger.test.ts",
+  "tests/codex-history-capture.test.ts",
   "tests/connector-kit.test.ts",
   "tests/execution-runtime.test.ts",
   "tests/failure-repair.test.ts",
@@ -26,6 +27,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/macos-ambient-vertical.test.ts",
   "tests/metaflow-v1-vertical.test.ts",
   "tests/operation-surfaces.test.ts",
+  "tests/obsidian-capture.test.ts",
   "tests/package-boundaries.test.ts",
   "tests/privacy-forget.test.ts",
   "tests/reactive-cascade.test.ts",
@@ -45,6 +47,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/view-search-service.test.ts",
   "tests/view-store.test.ts",
   "tests/view-v1.test.ts",
+  "packages/adapters/web-view-renderers/web-view-renderers.test.ts",
 ] as const;
 
 if (process.argv[1]?.endsWith("run-tests.ts")) {

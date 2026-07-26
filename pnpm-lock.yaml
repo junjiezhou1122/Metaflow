@@ -32,6 +32,9 @@ importers:
       '@info/capture':
         specifier: workspace:*
         version: link:packages/capture
+      '@info/codex-history-capture-adapter':
+        specifier: workspace:*
+        version: link:packages/adapters/codex-history-capture
       '@info/execution':
         specifier: workspace:*
         version: link:packages/execution
@@ -47,6 +50,9 @@ importers:
       '@info/macos-automation-adapter':
         specifier: workspace:*
         version: link:packages/adapters/macos-automation
+      '@info/obsidian-capture-adapter':
+        specifier: workspace:*
+        version: link:packages/adapters/obsidian-capture
       '@info/operation-surfaces':
         specifier: workspace:*
         version: link:packages/adapters/operation-surfaces
@@ -77,6 +83,9 @@ importers:
       '@info/view-package':
         specifier: workspace:*
         version: link:packages/view-package
+      '@info/web-view-renderers':
+        specifier: workspace:*
+        version: link:packages/adapters/web-view-renderers
       iii-sdk:
         specifier: 0.19.2
         version: 0.19.2
@@ -126,6 +135,9 @@ importers:
       '@info/capture':
         specifier: workspace:*
         version: link:../../packages/capture
+      '@info/codex-history-capture-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/codex-history-capture
       '@info/execution':
         specifier: workspace:*
         version: link:../../packages/execution
@@ -135,6 +147,9 @@ importers:
       '@info/macos-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/macos-automation
+      '@info/obsidian-capture-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/obsidian-capture
       '@info/operation-surfaces':
         specifier: workspace:*
         version: link:../../packages/adapters/operation-surfaces

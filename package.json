@@ -31,6 +31,9 @@
     "test:failure-repair": "node --experimental-sqlite --import tsx --test tests/failure-repair.test.ts",
     "test:browser-capture": "node --experimental-sqlite --import tsx --test tests/browser-capture.test.ts tests/browser-automation.test.ts tests/browser-automation-extension.test.ts tests/browser-automation-http.test.ts tests/ambient-daemon-vertical.test.ts",
     "test:screenpipe-capture": "node --experimental-sqlite --import tsx --test tests/screenpipe-capture.test.ts",
+    "test:obsidian-capture": "node --experimental-sqlite --import tsx --test tests/obsidian-capture.test.ts",
+    "test:codex-history-capture": "node --experimental-sqlite --import tsx --test tests/codex-history-capture.test.ts",
+    "test:web-view-renderers": "node --import tsx --test packages/adapters/web-view-renderers/web-view-renderers.test.ts tests/view-package.test.ts",
     "test:connector-kit": "node --experimental-sqlite --import tsx --test tests/connector-kit.test.ts tests/capture-runtime.test.ts",
     "test:operation-surfaces": "node --experimental-sqlite --import tsx --test tests/operation-surfaces.test.ts",
     "test:view-operators": "node --experimental-sqlite --import tsx --test tests/view-operators.test.ts",
@@ -51,6 +54,7 @@
     "@info/automation-sqlite": "workspace:*",
     "@info/browser-automation-adapter": "workspace:*",
     "@info/browser-capture-adapter": "workspace:*",
+    "@info/codex-history-capture-adapter": "workspace:*",
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
     "@info/function-operator-adapter": "workspace:*",
@@ -58,6 +62,7 @@
     "@info/iii-runtime-adapter": "workspace:*",
     "@info/macos-automation-adapter": "workspace:*",
     "@info/operation-surfaces": "workspace:*",
+    "@info/obsidian-capture-adapter": "workspace:*",
     "@info/operations": "workspace:*",
     "@info/search": "workspace:*",
     "@info/scheduler-automation-adapter": "workspace:*",
@@ -67,6 +72,7 @@
     "@info/transformation-sqlite": "workspace:*",
     "@info/view": "workspace:*",
     "@info/view-package": "workspace:*",
+    "@info/web-view-renderers": "workspace:*",
     "iii-sdk": "0.19.2"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { CaptureIngress, ConnectorRuntime } from "@info/capture";
+import { CaptureIngress, ConnectorRuntime, type SourceConnection } from "@info/capture";
 import {
   AutomationContextResolver,
   AutomationDeliveryCoordinator,
@@ -35,6 +35,14 @@ import {
   ViewBrowserAutomationCatalog,
 } from "@info/browser-automation-adapter";
 import { configureBrowserCapture } from "@info/browser-capture-adapter";
+import {
+  CodexHistoryCaptureConnector,
+  configureCodexHistoryCapture,
+} from "@info/codex-history-capture-adapter";
+import {
+  ObsidianCaptureAdapter,
+  configureObsidianCapture,
+} from "@info/obsidian-capture-adapter";
 import {
   BrowserDomRequestBroker,
   MacAutomationController,
@@ -83,6 +91,16 @@ export type AmbientDaemonCompositionOptions = {
   agent_aliases?: Record<string, string>;
   agent_mcp_servers?: import("@info/agent-runtime-adapter").AgentMcpServerConfig[];
   mac_delivery_mailbox?: MacDeliveryMailbox;
+  capture_sources?: {
+    codex_history?: {
+      connector?: CodexHistoryCaptureConnector;
+      connection?: SourceConnection;
+    };
+    obsidian?: {
+      connector?: ObsidianCaptureAdapter;
+      connections: readonly SourceConnection[];
+    };
+  };
   now?: () => Date;
 };
 
@@ -188,6 +206,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     const connectorRuntime = new ConnectorRuntime(views, capture, {
       now: () => now().toISOString(),
     });
+    const captureSources = await configureExternalCaptureSources(connectorRuntime, options.capture_sources);
     const browserCapture = await configureBrowserCapture({ runtime: connectorRuntime });
     const browserController = new BrowserAutomationController({
       capture: browserCapture,
@@ -301,6 +320,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       inboxAutomation,
       browserAutomation,
       browserCapture,
+      captureSources,
       connectorRuntime,
       macAutomation,
       browserContext,
@@ -327,6 +347,44 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     views.close();
     throw error;
   }
+}
+
+async function configureExternalCaptureSources(
+  runtime: ConnectorRuntime,
+  sources: AmbientDaemonCompositionOptions["capture_sources"],
+) {
+  const configured = new Set<string>();
+  if (sources?.codex_history) {
+    const result = await configureCodexHistoryCapture({
+      runtime,
+      ...(sources.codex_history.connector ? { connector: sources.codex_history.connector } : {}),
+      ...(sources.codex_history.connection ? { connection: sources.codex_history.connection } : {}),
+    });
+    configured.add(result.connection.id);
+  }
+  if (sources?.obsidian) {
+    if (sources.obsidian.connections.length === 0) {
+      throw new TypeError("Obsidian capture configuration requires at least one Source Connection");
+    }
+    const [first, ...rest] = sources.obsidian.connections;
+    const connector = sources.obsidian.connector ?? new ObsidianCaptureAdapter();
+    await configureObsidianCapture({ runtime, connector, connection: first });
+    configured.add(first.id);
+    for (const connection of rest) {
+      await runtime.registerConnection(connection);
+      configured.add(connection.id);
+    }
+  }
+  const connectionIds = Object.freeze([...configured].sort());
+  return Object.freeze({
+    connection_ids: connectionIds,
+    async pull(connectionId: string) {
+      if (!configured.has(connectionId)) {
+        throw new Error(`Capture Source Connection is not configured in this composition: ${connectionId}`);
+      }
+      return runtime.run(connectionId, "pull", {});
+    },
+  });
 }
 
 async function seedTransformation(

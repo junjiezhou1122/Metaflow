@@ -802,6 +802,14 @@ retains REST authentication, health/version negotiation, pagination,
 per-modality cursors, and HTTP error classification. Those source-specific
 responsibilities do not move into Capture Core.
 
+`packages/adapters/codex-history-capture` and
+`packages/adapters/obsidian-capture` are explicit local information-source
+adapters. A composition root must register their exact Source Connections before
+pulling. Registration alone performs no scan, and the default Ambient
+composition reads neither Codex history nor an Obsidian vault. Once explicitly
+configured, both sources still cross the ordinary Connector Runtime and
+CaptureIngress boundary; neither adapter writes Views or checkpoints directly.
+
 Browser Capture emits page, navigation, selection, media, and interaction facts.
 Ambient decisions, writing assistance, learning inference, and browser-control
 tools do not belong in the Connector.

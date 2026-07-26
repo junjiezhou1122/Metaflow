@@ -1,10 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createAmbientDaemonComposition } from "../apps/ambient-daemon/composition.ts";
+import {
+  CodexHistoryCaptureConnector,
+  codexHistorySourceConnection,
+} from "@info/codex-history-capture-adapter";
+import {
+  OBSIDIAN_IDENTITY_POLICY,
+  OBSIDIAN_PARSER_CONTRACT,
+  OBSIDIAN_SECRET_POLICY,
+  obsidianSourceConnection,
+} from "@info/obsidian-capture-adapter";
 import { buildBrowserAutomationEvent, buildBrowserDeliveryInteraction } from "../apps/chrome-acp/packages/chrome-extension/src/lib/ambient/browser-trigger.ts";
 import type {
   AgentRuntimeAdapter,
@@ -152,6 +162,80 @@ test("Ambient composition persists exact Transformation owners and projects cano
     assert.equal(transformation?.operator.reference.kind, "agent");
   } finally {
     await restarted.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Ambient composition registers and pulls explicit Codex and Obsidian Source Connections", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-ambient-sources-"));
+  const codexHome = join(directory, "codex-home");
+  const rolloutDirectory = join(codexHome, "sessions", "2026", "07", "27");
+  const vaultRoot = join(directory, "vault");
+  mkdirSync(rolloutDirectory, { recursive: true });
+  mkdirSync(join(codexHome, "archived_sessions"), { recursive: true });
+  mkdirSync(vaultRoot, { recursive: true });
+  copyFileSync(
+    join(process.cwd(), "tests", "fixtures", "codex-history", "minimal-session.jsonl"),
+    join(rolloutDirectory, "rollout-synthetic.jsonl"),
+  );
+  copyFileSync(
+    join(process.cwd(), "tests", "fixtures", "obsidian-vault", "plain.md"),
+    join(vaultRoot, "plain.md"),
+  );
+  const codexConnection = codexHistorySourceConnection({
+    id: "codex-history:composition",
+    source_root: "both",
+  });
+  const obsidianConnection = obsidianSourceConnection({
+    id: "obsidian:composition",
+    configuration: {
+      vault_id: "vault:composition",
+      vault_root: vaultRoot,
+      include: ["**/*.md"],
+      max_file_bytes: 8_000_000,
+      identity_policy: OBSIDIAN_IDENTITY_POLICY,
+      parser_contract: OBSIDIAN_PARSER_CONTRACT,
+      secret_policy: OBSIDIAN_SECRET_POLICY,
+    },
+  });
+  const composition = await createAmbientDaemonComposition({
+    data_directory: join(directory, "data"),
+    agent_runtime: new DeterministicAcpRuntime(),
+    capture_sources: {
+      codex_history: {
+        connector: new CodexHistoryCaptureConnector({
+          codex_home: codexHome,
+          now: () => "2026-07-27T01:05:00.000Z",
+        }),
+        connection: codexConnection,
+      },
+      obsidian: { connections: [obsidianConnection] },
+    },
+    now: () => new Date("2026-07-27T01:05:00.000Z"),
+  });
+  try {
+    assert.deepEqual(composition.captureSources.connection_ids, [
+      "codex-history:composition",
+      "obsidian:composition",
+    ]);
+    await composition.captureSources.pull(codexConnection.id);
+    await composition.captureSources.pull(obsidianConnection.id);
+    assert.equal((await composition.views.query({
+      schema_name: "capture.codex.session",
+      revisions: "latest",
+      limit: 20,
+    })).length, 1);
+    assert.equal((await composition.views.query({
+      schema_name: "capture.obsidian.document",
+      revisions: "latest",
+      limit: 20,
+    })).length, 1);
+    await assert.rejects(
+      composition.captureSources.pull("obsidian:not-configured"),
+      /not configured/,
+    );
+  } finally {
+    await composition.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

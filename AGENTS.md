@@ -116,6 +116,16 @@ but there is no separate canonical Worker domain layer.
   It preserves accepted native clipboard fields in one occurrence Raw View,
   emits file values as external-reference Raw Views, and delegates admission,
   exact replay, checkpoint, trace, and failure behavior to Capture Runtime.
+- `packages/adapters/codex-history-capture`: reads only complete local Codex
+  rollout records under an explicitly configured Codex home. It admits safe
+  session metadata plus user/assistant text, structurally excludes instructions,
+  reasoning, tools, world state, and token data, and fails before batch formation
+  when Secretlint matches. It never reads Codex preview/index databases.
+- `packages/adapters/obsidian-capture`: reads Markdown below one explicitly
+  configured vault root with no-follow containment, stable file identity,
+  deterministic Markdown/frontmatter/link parsing, and a pre-batch secret gate.
+  It never resolves links, fetches attachments, mutates the vault, or copies an
+  absolute vault path into Views, checkpoints, traces, or failures.
 - `packages/adapters/operation-surfaces`: thin CLI, HTTP, and official MCP SDK
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
