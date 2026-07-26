@@ -23,6 +23,12 @@ stores matching outgoing `application_member` or `application_composition`
 relations; these explicit inverse-style names avoid overloading the earlier
 provisional child-to-parent vocabulary.
 
+`application.space@1` also declares a generic strict-Schema
+`relation_projection@1`. View admission and View Package conformance derive the
+expected managed relations from `/entries` and reject missing, extra, or
+mismatched exact targets, types, and metadata. The JSON Schema rejects
+whitespace-only `view_id` values before that cross-envelope check.
+
 Attach and detach create a new revision of the root with an exact `supersedes`
 edge. Historical roots and members are never mutated or deleted. A member may
 remain the target of any number of exact Application Space revisions.
@@ -31,7 +37,11 @@ remain the target of any number of exact Application Space revisions.
 exact roots, direction, an edge allowlist, and depth/node/edge limits. Every
 discovered revision is authorized before it can affect returned nodes, edges,
 paths, summaries, truncation, or frontier. Denied boundaries expose only the
-coarse `redacted_boundary` boolean. Full content remains an exact `view.get`.
+coarse `redacted_boundary` boolean. Relation pages are validated and authorized
+before consuming the fixed scan budget, so denied-only cardinality cannot turn
+a redacted success into a threshold error. All pages and summaries come from a
+single storage read snapshot, preventing concurrent incoming commits from
+fracturing keyset pagination. Full content remains an exact `view.get`.
 
 ## A space is a subgraph
 

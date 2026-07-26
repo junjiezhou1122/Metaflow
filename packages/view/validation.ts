@@ -2,6 +2,8 @@ import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.
 import { z } from "zod";
 import { canonicalJson } from "./canonical-json.js";
 import {
+  ExactViewRefSchema,
+  IdentifierSchema,
   ViewDraftSchema,
   ViewRevisionSchema,
   SOURCE_TOMBSTONE_REPRESENTATION_KIND,
@@ -9,6 +11,7 @@ import {
   type JsonValue,
   type View,
   type ViewDraft,
+  type ViewRelationTarget,
   type ViewRepresentation,
   type ViewSchemaRef,
 } from "./schema.js";
@@ -16,7 +19,8 @@ import {
 export type ViewValidationCode =
   | "invalid_envelope"
   | "invalid_strict_schema"
-  | "representation_schema_mismatch";
+  | "representation_schema_mismatch"
+  | "relation_projection_mismatch";
 
 export class ViewValidationError extends Error {
   constructor(
@@ -100,6 +104,46 @@ export function validateViewRepresentation(
   );
 }
 
+export function validateViewRelationProjection(
+  schema: ViewSchemaRef,
+  representation: ViewRepresentation,
+  relations: ViewRelationTarget[],
+): void {
+  if (schema.mode !== "strict" || schema.relation_projection === undefined) return;
+  const projection = schema.relation_projection;
+  const entries = resolveJsonPointer(representationSemanticValue(representation), projection.entries_path);
+  if (!Array.isArray(entries)) {
+    throw relationProjectionError("relation projection entries_path must resolve to an array");
+  }
+  const mappings = new Map(projection.mappings.map(mapping => [mapping.discriminator, mapping]));
+  const expected = entries.map((entry, index) => {
+    const ref = ExactViewRefSchema.safeParse(resolveJsonPointer(entry, projection.ref_path));
+    if (!ref.success) {
+      throw relationProjectionError(`relation projection entry ${index} has an invalid exact View ref`);
+    }
+    const discriminator = IdentifierSchema.safeParse(resolveJsonPointer(entry, projection.discriminator_path));
+    if (!discriminator.success) {
+      throw relationProjectionError(`relation projection entry ${index} has an invalid discriminator`);
+    }
+    const mapping = mappings.get(discriminator.data);
+    if (!mapping) {
+      throw relationProjectionError(`relation projection entry ${index} has no declared discriminator mapping`);
+    }
+    return {
+      type: mapping.relation_type,
+      target: ref.data,
+      metadata: mapping.metadata,
+    };
+  });
+  const managedTypes = new Set(projection.mappings.map(mapping => mapping.relation_type));
+  const actual = relations.filter(relation => managedTypes.has(relation.type));
+  const expectedEvidence = expected.map(canonicalJson).sort();
+  const actualEvidence = actual.map(canonicalJson).sort();
+  if (canonicalJson(expectedEvidence) !== canonicalJson(actualEvidence)) {
+    throw relationProjectionError("managed View relations must exactly match the strict Schema relation projection");
+  }
+}
+
 function ajvIssue(error: ErrorObject): z.ZodIssue {
   const instancePath = error.instancePath
     .split("/")
@@ -118,6 +162,7 @@ export function parseViewDraft(input: unknown): ViewDraft {
     throw new ViewValidationError("invalid View draft", "invalid_envelope", parsed.error.issues);
   }
   validateViewRepresentation(parsed.data.schema, parsed.data.representation);
+  validateViewRelationProjection(parsed.data.schema, parsed.data.representation, parsed.data.relations);
   return parsed.data;
 }
 
@@ -127,5 +172,28 @@ export function parseView(input: unknown): View {
     throw new ViewValidationError("invalid View", "invalid_envelope", parsed.error.issues);
   }
   validateViewRepresentation(parsed.data.schema, parsed.data.representation);
+  validateViewRelationProjection(parsed.data.schema, parsed.data.representation, parsed.data.relations);
   return parsed.data;
+}
+
+function resolveJsonPointer(value: unknown, pointer: string): unknown {
+  let current = value;
+  for (const token of pointer.slice(1).split("/").map(part => part.replace(/~1/g, "/").replace(/~0/g, "~"))) {
+    if (Array.isArray(current)) {
+      if (!/^(?:0|[1-9]\d*)$/u.test(token)) return undefined;
+      current = current[Number(token)];
+      continue;
+    }
+    if (current === null || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[token];
+  }
+  return current;
+}
+
+function relationProjectionError(message: string): ViewValidationError {
+  return new ViewValidationError(
+    "View relations do not satisfy the strict Schema relation projection",
+    "relation_projection_mismatch",
+    [customIssue(["relations"], message)],
+  );
 }

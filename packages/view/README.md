@@ -34,6 +34,15 @@ Views through Transformations.
 `query({ text })` is storage-neutral. `reindexSearch` exposes an idempotent,
 durable rebuild operation without making SQLite or FTS part of the View Schema.
 
+## Strict relation projection
+
+A strict Schema may declare `relation_projection@1` to map a bounded
+Representation entry array to managed envelope relations. View parsing derives
+the expected exact target, relation type, and metadata for every entry and
+requires the managed relation multiset to match exactly. This makes package
+helpers ergonomic rather than authoritative: direct commit callers cannot omit
+or contradict the declared relations.
+
 ## Reactive commit boundary
 
 Every durable transaction that creates at least one View revision also creates

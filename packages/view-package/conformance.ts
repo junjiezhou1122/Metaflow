@@ -1,4 +1,4 @@
-import { validateViewRepresentation } from "@info/view";
+import { validateViewRelationProjection, validateViewRepresentation } from "@info/view";
 import {
   ViewPackageFixtureSchema,
   rendererKey,
@@ -78,6 +78,7 @@ export function runViewPackageConformance(input: ViewPackageConformanceInput): V
     }
     try {
       validateViewRepresentation(schema, fixture.representation);
+      validateViewRelationProjection(schema, fixture.representation, fixture.relations);
     } catch (error) {
       throw new ViewPackageError(
         `Fixture ${fixture.id} does not satisfy Schema ${schemaKey(schema)}`,

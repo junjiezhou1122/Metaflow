@@ -10,14 +10,19 @@ import {
 } from "@info/operations";
 import { SqliteViewRepository } from "@info/storage-sqlite";
 import {
+  VIEW_GRAPH_MAX_SCANNED_EDGES,
   ViewGraphProjectionRequestSchema,
   ViewGraphProjectionResultSchema,
+  ViewRepositoryError,
+  ViewValidationError,
   exactViewRef,
   parseViewDraft,
   type ExactViewRef,
+  type ViewGraphProjectionSource,
+  type ViewGraphSnapshotReader,
   type ViewDraft,
 } from "@info/view";
-import { runViewPackageConformance } from "@info/view-package";
+import { ViewPackageError, runViewPackageConformance } from "@info/view-package";
 import {
   APPLICATION_SPACE_COMPOSITION_RELATION,
   APPLICATION_SPACE_MEMBERSHIP_RELATION,
@@ -65,6 +70,74 @@ test("Application Space View Package is strict and binds ordinary read Operation
       metadata: {},
     },
   }));
+  assert.throws(
+    () => parseViewDraft({
+      ...applicationDraft("view:space:whitespace-ref", []),
+      representation: {
+        form: "inline",
+        kind: APPLICATION_SPACE_REPRESENTATION_KIND,
+        media_type: "application/json",
+        value: {
+          version: 1,
+          entries: [{ ref: { view_id: " \t ", revision: 1 }, semantics: "membership" }],
+        },
+        metadata: {},
+      },
+    }),
+    (error: unknown) => error instanceof ViewValidationError && error.code === "representation_schema_mismatch",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: applicationSpaceViewPackage,
+      fixtures: [{ ...applicationSpaceFixtures[0], relations: [] }],
+      operations: new Set(["view.get", "view.graph.project"]),
+      renderers: new Set(["renderer.web.json@1@1"]),
+      transformations: new Map(),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_fixture",
+  );
+});
+
+test("Application Space commit admission rejects missing, extra, and mismatched managed relations", async () => {
+  await withRepository(async views => {
+    const member = await commit(views, memberDraft("view:member:relation-invariant", reader));
+    const extra = await commit(views, memberDraft("view:member:relation-extra", reader));
+    const entries: ApplicationSpaceEntry[] = [{ ref: exactViewRef(member), semantics: "membership" }];
+    const valid = applicationDraft("view:space:relation-invariant", entries);
+    const cases: ViewDraft[] = [
+      { ...valid, id: "view:space:missing-relation", relations: [] },
+      {
+        ...valid,
+        id: "view:space:extra-relation",
+        relations: [
+          ...valid.relations,
+          {
+            type: APPLICATION_SPACE_MEMBERSHIP_RELATION,
+            target: exactViewRef(extra),
+            metadata: { application_semantics: "membership" },
+          },
+        ],
+      },
+      {
+        ...valid,
+        id: "view:space:mismatched-relation",
+        relations: [{
+          type: APPLICATION_SPACE_COMPOSITION_RELATION,
+          target: exactViewRef(member),
+          metadata: { application_semantics: "composition" },
+        }],
+      },
+    ];
+    for (const draft of cases) {
+      await assert.rejects(
+        views.commit({ draft, expected_revision: 0 }),
+        (error: unknown) => error instanceof ViewRepositoryError
+          && error.code === "invalid_request"
+          && error.cause instanceof ViewValidationError
+          && error.cause.code === "relation_projection_mismatch",
+      );
+    }
+  });
 });
 
 test("Application Space attach, detach, and multi-parent reuse are immutable ordinary View revisions", async () => {
@@ -238,6 +311,98 @@ test("paged SQLite traversal reaches an authorized edge after denied pages witho
   });
 });
 
+test("SQLite graph projection freezes incoming relation pages across concurrent commits", async () => {
+  await withRepository(async views => {
+    const root = await commit(views, memberDraft("view:snapshot:root", reader));
+    const parentDrafts = Array.from({ length: 270 }, (_, index) => ({
+      ...memberDraft(`view:snapshot:parent:${String(index).padStart(3, "0")}`, reader),
+      relations: [{ type: APPLICATION_SPACE_MEMBERSHIP_RELATION, target: exactViewRef(root), metadata: {} }],
+    }));
+    await views.commitBatch(parentDrafts.map(draft => ({ draft, expected_revision: 0 })));
+    const concurrentId = "view:snapshot:zz-concurrent-parent";
+    const repositoryAuthorizer = new RepositoryViewReadAuthorizer(views);
+    let concurrentCommitted = false;
+    const result = await projectAuthorizedViewGraph({
+      request: ViewGraphProjectionRequestSchema.parse({
+        roots: [exactViewRef(root)],
+        direction: "incoming",
+        edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
+        max_depth: 1,
+        max_nodes: 2_000,
+        max_edges: 10_000,
+      }),
+      principal: { id: reader },
+      authorization: {
+        async authorize(input) {
+          if (!concurrentCommitted && input.refs.some(ref => ref.view_id.startsWith("view:snapshot:parent:"))) {
+            concurrentCommitted = true;
+            await commit(views, {
+              ...memberDraft(concurrentId, reader),
+              relations: [{ type: APPLICATION_SPACE_MEMBERSHIP_RELATION, target: exactViewRef(root), metadata: {} }],
+            });
+          }
+          return repositoryAuthorizer.authorize(input);
+        },
+      },
+      source: views.search,
+    });
+    assert.equal(concurrentCommitted, true);
+    assert.equal(result.nodes.some(node => node.ref.view_id === concurrentId), false);
+    assert.equal(result.edges.some(edge => edge.source.view_id === concurrentId), false);
+
+    const afterCommit = await project(views, {
+      roots: [exactViewRef(root)],
+      direction: "incoming",
+      edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
+      max_depth: 1,
+      max_nodes: 2_000,
+      max_edges: 10_000,
+    });
+    assert.equal(afterCommit.nodes.some(node => node.ref.view_id === concurrentId), true);
+    assert.equal(afterCommit.edges.some(edge => edge.source.view_id === concurrentId), true);
+  });
+});
+
+test("denied-only relation scans above the fixed cap stay redacted while authorized scans still fail closed", async () => {
+  const root = { view_id: "view:scan-limit:root", revision: 1 };
+  const request = ViewGraphProjectionRequestSchema.parse({
+    roots: [root],
+    direction: "outgoing",
+    edge_types: [APPLICATION_SPACE_MEMBERSHIP_RELATION],
+    max_depth: 1,
+    max_nodes: 1,
+    max_edges: 1,
+  });
+  const source = generatedLayerSource(root, VIEW_GRAPH_MAX_SCANNED_EDGES + 1);
+  const denied = await projectAuthorizedViewGraph({
+    request,
+    principal: { id: reader },
+    authorization: {
+      async authorize(input) {
+        return input.refs.map(ref => ({ ref, status: sameRef(ref, root) ? "allowed" as const : "denied" as const }));
+      },
+    },
+    source,
+  });
+  assert.deepEqual(denied.nodes.map(node => node.ref), [root]);
+  assert.deepEqual(denied.edges, []);
+  assert.equal(denied.redacted_boundary, true);
+  assert.deepEqual(denied.truncation, { truncated: false, reasons: [] });
+
+  await assert.rejects(
+    projectAuthorizedViewGraph({
+      request,
+      principal: { id: reader },
+      authorization: {
+        async authorize(input) { return input.refs.map(ref => ({ ref, status: "allowed" as const })); },
+      },
+      source,
+    }),
+    (error: unknown) => error instanceof ViewGraphProjectionOperationError
+      && error.code === "view_graph_scan_limit_exceeded",
+  );
+});
+
 test("graph projector rejects storage evidence outside the exact frontier before authorization or output", async () => {
   const root = { view_id: "view:root", revision: 1 };
   const privateRef = { view_id: "view:private:invented", revision: 1 };
@@ -259,14 +424,14 @@ test("graph projector rejects storage evidence outside the exact frontier before
           return input.refs.map(ref => ({ ref, status: "allowed" as const }));
         },
       },
-      source: {
+      source: graphSource({
         async readGraphRelationPage() {
           return {
             edges: [{ id: "relation:invented", type: "forbidden", source: root, target: privateRef }],
           };
         },
         async readGraphNodeSummaries() { return []; },
-      },
+      }),
     }),
     (error: unknown) => {
       assert.ok(error instanceof ViewGraphProjectionOperationError);
@@ -304,7 +469,7 @@ test("graph source and result ordering use SQLite-compatible UTF-8 binary order"
     authorization: {
       async authorize(input) { return input.refs.map(ref => ({ ref, status: "allowed" as const })); },
     },
-    source: {
+    source: graphSource({
       async readGraphRelationPage() {
         return { edges: [
           { id: "relation:Z", type: "Z", source: root, target: upper },
@@ -315,7 +480,7 @@ test("graph source and result ordering use SQLite-compatible UTF-8 binary order"
         const keys = new Set(refs.map(ref => `${ref.view_id}@${ref.revision}`));
         return summaries.filter(summary => keys.has(`${summary.ref.view_id}@${summary.ref.revision}`));
       },
-    },
+    }),
   });
   assert.deepEqual(result.edges.map(edge => edge.type), ["Z", "a"]);
 });
@@ -423,6 +588,53 @@ async function commit(views: SqliteViewRepository, draft: ViewDraft, expectedRev
 
 function sameRef(left: ExactViewRef, right: ExactViewRef): boolean {
   return left.view_id === right.view_id && left.revision === right.revision;
+}
+
+function graphSource(reader: ViewGraphSnapshotReader): ViewGraphProjectionSource {
+  return {
+    async withGraphReadSnapshot(read) {
+      return read(reader);
+    },
+  };
+}
+
+function generatedLayerSource(root: ExactViewRef, total: number): ViewGraphProjectionSource {
+  const summary = {
+    ref: root,
+    name: "Scan limit root",
+    purpose: "Prove authorization precedes the observable graph scan bound",
+    schema: { name: "fixture.scan-limit", version: 1 },
+    role: "derived" as const,
+    time: { created_at: createdAt },
+    representation: { kind: "fixture" },
+  };
+  return graphSource({
+    async readGraphRelationPage(input) {
+      const start = input.after === undefined
+        ? 0
+        : Number(input.after.relation_id.slice("relation:scan-limit:".length)) + 1;
+      const end = Math.min(total, start + input.limit);
+      const edges = Array.from({ length: end - start }, (_, offset) => {
+        const sequence = String(start + offset).padStart(6, "0");
+        return {
+          id: `relation:scan-limit:${sequence}`,
+          type: APPLICATION_SPACE_MEMBERSHIP_RELATION,
+          source: root,
+          target: { view_id: `view:scan-limit:target:${sequence}`, revision: 1 },
+        };
+      });
+      const last = edges.at(-1);
+      return {
+        edges,
+        ...(end < total && last ? {
+          next: { type: last.type, source: last.source, target: last.target, relation_id: last.id },
+        } : {}),
+      };
+    },
+    async readGraphNodeSummaries(refs) {
+      return refs.some(ref => sameRef(ref, root)) ? [summary] : [];
+    },
+  });
 }
 
 async function withRepository(run: (views: SqliteViewRepository) => Promise<void>): Promise<void> {

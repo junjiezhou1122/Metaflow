@@ -20,8 +20,13 @@ export const ExactViewRefSchema = z.object({
   revision: z.number().int().positive(),
 }).strict();
 
+export const JsonPointerSchema = z.string().trim().regex(
+  /^\/(?:[^/~]|~[01]|\/)*$/u,
+  "path must be an RFC 6901-compatible JSON Pointer",
+);
+
 export const ViewSearchProjectionFieldSchema = z.object({
-  path: z.string().trim().regex(/^\/(?:[^/~]|~[01]|\/)*$/u, "search projection path must be an RFC 6901-compatible JSON Pointer"),
+  path: JsonPointerSchema,
   category: z.enum(["title", "text", "identifier", "url", "timestamp", "provenance"]),
 }).strict();
 
@@ -43,6 +48,35 @@ const ViewSearchProjectionShape = {
   search_projection: ViewSearchProjectionSchema.optional(),
 } as const;
 
+export const ViewRelationProjectionSchema = z.object({
+  version: z.literal(1),
+  entries_path: JsonPointerSchema,
+  ref_path: JsonPointerSchema,
+  discriminator_path: JsonPointerSchema,
+  mappings: z.array(z.object({
+    discriminator: IdentifierSchema,
+    relation_type: IdentifierSchema,
+    metadata: z.record(JsonValueSchema).default({}),
+  }).strict()).min(1).max(32),
+}).strict().superRefine((value, context) => {
+  const discriminators = value.mappings.map(mapping => mapping.discriminator);
+  if (new Set(discriminators).size !== discriminators.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["mappings"],
+      message: "relation projection discriminators must be unique",
+    });
+  }
+  const relationTypes = value.mappings.map(mapping => mapping.relation_type);
+  if (new Set(relationTypes).size !== relationTypes.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["mappings"],
+      message: "relation projection relation types must be unique",
+    });
+  }
+});
+
 const FreeformViewSchemaRefSchema = z.object({
   name: IdentifierSchema,
   version: z.number().int().positive(),
@@ -56,6 +90,7 @@ const StrictViewSchemaRefSchema = z.object({
   mode: z.literal("strict"),
   dialect: z.literal("https://json-schema.org/draft/2020-12/schema"),
   json_schema: JsonValueSchema,
+  relation_projection: ViewRelationProjectionSchema.optional(),
   ...ViewSearchProjectionShape,
 }).strict();
 

@@ -9,6 +9,12 @@ The Application Space root owns outgoing `application_member` and
 therefore be targeted by several independently versioned roots without being
 copied or reparented.
 
+The strict Schema declares this mapping as `relation_projection@1`. View
+admission and View Package conformance both require the Representation entry set
+to match the managed relation set exactly, including exact ref, type, and
+metadata. Missing, extra, mismatched, and whitespace-only-ref evidence fails
+before persistence.
+
 Attach and detach are ordinary View evolution. Commit a new revision of the
 same root, add the exact `supersedes` relation to the prior root revision, and
 replace both the Representation entry set and its package relations. Historical
@@ -16,5 +22,7 @@ root revisions and their exact membership remain immutable; detaching never
 deletes or revises a member View.
 
 Use `view.graph.project` for bounded authorized navigation and `view.get` for
-full details of one selected exact revision. A projection response is transport
-data, not another durable View.
+full details of one selected exact revision. Projection pages and summaries are
+read from one storage snapshot, and validated discoveries are authorized before
+they consume the server scan budget. A projection response is transport data,
+not another durable View.
