@@ -117,9 +117,13 @@ export function validateViewRelationProjection(
   }
   const mappings = new Map(projection.mappings.map(mapping => [mapping.discriminator, mapping]));
   const expected = entries.map((entry, index) => {
-    const ref = ExactViewRefSchema.safeParse(resolveJsonPointer(entry, projection.ref_path));
+    const rawRef = resolveJsonPointer(entry, projection.ref_path);
+    const ref = ExactViewRefSchema.safeParse(rawRef);
     if (!ref.success) {
       throw relationProjectionError(`relation projection entry ${index} has an invalid exact View ref`);
+    }
+    if (canonicalJson(rawRef) !== canonicalJson(ref.data)) {
+      throw relationProjectionError(`relation projection entry ${index} must contain a normalized exact View ref`);
     }
     const discriminator = IdentifierSchema.safeParse(resolveJsonPointer(entry, projection.discriminator_path));
     if (!discriminator.success) {

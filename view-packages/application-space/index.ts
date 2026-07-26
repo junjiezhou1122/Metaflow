@@ -39,7 +39,12 @@ export const applicationSpaceSchema = {
               additionalProperties: false,
               required: ["view_id", "revision"],
               properties: {
-                view_id: { type: "string", minLength: 1, maxLength: 240, pattern: "\\S" },
+                view_id: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 240,
+                  pattern: "^(?:\\S|\\S[\\s\\S]*\\S)$",
+                },
                 revision: { type: "integer", minimum: 1 },
               },
             },

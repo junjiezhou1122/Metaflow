@@ -28,6 +28,8 @@ provisional child-to-parent vocabulary.
 expected managed relations from `/entries` and reject missing, extra, or
 mismatched exact targets, types, and metadata. The JSON Schema rejects
 whitespace-only `view_id` values before that cross-envelope check.
+Raw exact refs must also already equal their parsed normalized form, so leading
+or trailing whitespace cannot make Representation and relation evidence differ.
 
 Attach and detach create a new revision of the root with an exact `supersedes`
 edge. Historical roots and members are never mutated or deleted. A member may
@@ -38,10 +40,13 @@ exact roots, direction, an edge allowlist, and depth/node/edge limits. Every
 discovered revision is authorized before it can affect returned nodes, edges,
 paths, summaries, truncation, or frontier. Denied boundaries expose only the
 coarse `redacted_boundary` boolean. Relation pages are validated and authorized
-before consuming the fixed scan budget, so denied-only cardinality cannot turn
-a redacted success into a threshold error. All pages and summaries come from a
-single storage read snapshot, preventing concurrent incoming commits from
-fracturing keyset pagination. Full content remains an exact `view.get`.
+before consuming the fixed projection-wide scan budget, so denied-only
+cardinality cannot turn a redacted success into a threshold error. All pages
+and summaries come from a single storage read snapshot, preventing concurrent
+incoming commits from fracturing keyset pagination. File-backed stores use a
+WAL read transaction; in-memory stores freeze an explicit query-only SQLite
+memory backup before traversal without writing that content to disk. Full
+content remains an exact `view.get`.
 
 ## A space is a subgraph
 

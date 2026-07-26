@@ -1,4 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+import { DatabaseSync, backup } from "node:sqlite";
 import {
   ExactViewRefSchema,
   ViewGraphRelationCursorSchema,
@@ -47,20 +48,16 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
 
   async withGraphReadSnapshot<T>(read: (snapshot: ViewGraphSnapshotReader) => Promise<T>): Promise<T> {
     const location = this.db.location();
-    if (!location) {
-      throw new ViewRepositoryError(
-        "View graph projection requires a file-backed SQLite read snapshot",
-        "storage_failure",
-        { operation: "view_graph_project", phase: "open_snapshot" },
-      );
-    }
     let snapshotDb: DatabaseSync | undefined;
+    let snapshotClosed = false;
     try {
-      snapshotDb = new DatabaseSync(location, {
-        readOnly: true,
-        enableForeignKeyConstraints: true,
-        timeout: 5_000,
-      });
+      snapshotDb = location
+        ? new DatabaseSync(location, {
+            readOnly: true,
+            enableForeignKeyConstraints: true,
+            timeout: 5_000,
+          })
+        : await openInMemoryGraphSnapshot(this.db);
       snapshotDb.exec("BEGIN");
       snapshotDb.prepare("select rowid from view_relations_v1 limit 1").get();
     } catch (cause) {
@@ -90,20 +87,23 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
       const result = await read(new SqliteViewSearchAdapter(snapshotDb));
       snapshotDb.exec("COMMIT");
       snapshotDb.close();
+      snapshotClosed = true;
       return result;
     } catch (cause) {
       const cleanupErrors: unknown[] = [];
-      if (snapshotDb.isTransaction) {
+      if (!snapshotClosed && snapshotDb.isTransaction) {
         try {
           snapshotDb.exec("ROLLBACK");
         } catch (error) {
           cleanupErrors.push(error);
         }
       }
-      try {
-        snapshotDb.close();
-      } catch (error) {
-        cleanupErrors.push(error);
+      if (!snapshotClosed) {
+        try {
+          snapshotDb.close();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
       }
       if (cleanupErrors.length > 0) {
         throw graphSnapshotFailure(
@@ -518,4 +518,24 @@ function graphSnapshotFailure(message: string, phase: string, cause: unknown): V
     { operation: "view_graph_project", phase, sqlite_code: sqliteErrorCode(cause) },
     { cause },
   );
+}
+
+async function openInMemoryGraphSnapshot(source: DatabaseSync): Promise<DatabaseSync> {
+  const uri = `file:metaflow-view-graph-snapshot-${randomUUID()}?mode=memory&cache=shared`;
+  const snapshot = new DatabaseSync(uri, {
+    enableForeignKeyConstraints: true,
+    timeout: 5_000,
+  });
+  try {
+    await backup(source, uri);
+    snapshot.exec("PRAGMA query_only = ON");
+    return snapshot;
+  } catch (cause) {
+    try {
+      snapshot.close();
+    } catch (cleanupError) {
+      throw new AggregateError([cause, cleanupError]);
+    }
+    throw cause;
+  }
 }
