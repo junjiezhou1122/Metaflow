@@ -117,6 +117,7 @@ export {
   SQLITE_VEC_EMBEDDING_SCHEMA_NAME,
   SQLITE_VEC_EXTENSION_VERSION,
   SQLITE_VEC_MINIMUM_SQLITE_VERSION,
+  SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS,
   SQLITE_VEC_PACKAGE_VERSION,
   SqliteVecEmbeddingJsonSchema,
   SqliteVecEmbeddingViewSchema,
@@ -3162,6 +3163,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
   private createIndexes(): void {
     this.db.exec(`
       create index if not exists idx_view_revisions_v1_schema on view_revisions_v1(schema_name, schema_version);
+      create index if not exists idx_view_revisions_v1_representation_kind
+        on view_revisions_v1(json_extract(view_json, '$.representation.kind'));
       create index if not exists idx_view_revisions_v1_role on view_revisions_v1(role);
       create index if not exists idx_view_heads_v1_updated on view_heads_v1(updated_at);
       create index if not exists idx_view_relations_v1_source on view_relations_v1(source_view_id, source_revision, type);

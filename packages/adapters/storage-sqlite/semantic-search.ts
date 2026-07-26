@@ -29,6 +29,7 @@ export const SQLITE_VEC_EXTENSION_VERSION = "v0.1.9";
 export const SQLITE_VEC_MINIMUM_SQLITE_VERSION = "3.45.0";
 export const SQLITE_VEC_EMBEDDING_SCHEMA_NAME = "metaflow.search.embedding";
 export const SQLITE_VEC_EMBEDDING_REPRESENTATION_KIND = "metaflow.search.embedding";
+export const SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS = 4_096;
 
 const DIGEST_PATTERN = "^[a-f0-9]{64}$";
 const MAX_VECTOR_DIMENSION = 4_096;
@@ -145,6 +146,14 @@ type IntegrityMappingRow = MappingRow & {
   dimension: number;
   distance_metric: "cosine" | "l2";
 };
+type IntegrityPhysicalRow = {
+  vector_rowid: number;
+  embedding: Uint8Array;
+  target_key: string;
+  target_kind: string;
+  profile_id: string;
+  profile_revision: number;
+};
 type ExpectedEmbedding = {
   view: View;
   value: EmbeddingValue;
@@ -166,6 +175,7 @@ export type SqliteVecCompatibilityEvidence = {
   sqlite_version: string;
   sqlite_source_id: string;
   journal_mode: string;
+  integrity_audit_max_rows: typeof SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS;
   profiles: SqliteVecProfile[];
 };
 
@@ -260,7 +270,25 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     const value = embeddingValue(view);
     if (!value) return "not_embedding";
     this.assertReady("insert");
+    this.assertReservedEmbeddingInventoryWithinBound();
     return this.insertEmbedding(view, value, plannedViews);
+  }
+
+  private assertReservedEmbeddingInventoryWithinBound(): void {
+    const overBound = this.db.prepare(`
+      select 1 as present
+      from view_revisions_v1
+      where schema_name = ?
+         or json_extract(view_json, '$.representation.kind') = ?
+      limit 1 offset ?
+    `).get(
+      SQLITE_VEC_EMBEDDING_SCHEMA_NAME,
+      SQLITE_VEC_EMBEDDING_REPRESENTATION_KIND,
+      SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS,
+    );
+    if (overBound) {
+      assertIntegrityAuditBound("committed reserved embedding View", SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS + 1);
+    }
   }
 
   private insertEmbedding(
@@ -570,28 +598,38 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
              target_view_id, target_revision, target_kind, target_path, target_key,
              profile_id, profile_revision, dimension, distance_metric, source_digest
       from view_search_vectors_v1
-      order by embedding_view_id, embedding_revision
-    `).all() as IntegrityMappingRow[];
+      limit ?
+    `).all(SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS + 1) as IntegrityMappingRow[];
+    assertIntegrityAuditBound("mapping", mappings.length);
     const mappingsByEmbedding = new Map(
       mappings.map(mapping => [refKey({
         view_id: mapping.embedding_view_id,
         revision: Number(mapping.embedding_revision),
       }), mapping]),
     );
+    const mappingPhysicalKeys = new Set(mappings.map(mappingPhysicalKey));
+    const physicalByRow = new Map<string, IntegrityPhysicalRow>();
     let vectorRows = 0;
     let orphans = 0;
     const missingKeys = new Set<string>();
     const metadataMismatchKeys = new Set<string>();
     const payloadMismatchKeys = new Set<string>();
     for (const profile of this.profiles.values()) {
-      vectorRows += Number((this.db.prepare(`select count(*) as count from ${quoteIdentifier(profile.table_name)}`).get() as { count: number }).count);
-      orphans += Number((this.db.prepare(`
-        select count(*) as count from ${quoteIdentifier(profile.table_name)} v
-        left join view_search_vectors_v1 m
-          on m.vector_rowid = v.rowid
-         and m.profile_id = ? and m.profile_revision = ?
-        where m.vector_rowid is null
-      `).get(profile.id, profile.revision) as { count: number }).count);
+      const remaining = SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS - vectorRows;
+      const physicalRows = this.db.prepare(`
+        select rowid as vector_rowid, embedding, target_key, target_kind, profile_id, profile_revision
+        from ${quoteIdentifier(profile.table_name)}
+        limit ?
+      `).all(remaining + 1) as IntegrityPhysicalRow[];
+      if (physicalRows.length > remaining) {
+        assertIntegrityAuditBound("physical vector", SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS + 1);
+      }
+      vectorRows += physicalRows.length;
+      for (const physical of physicalRows) {
+        const key = physicalRowKey(profile.id, profile.revision, physical.vector_rowid);
+        physicalByRow.set(key, physical);
+        if (!mappingPhysicalKeys.has(key)) orphans += 1;
+      }
     }
 
     for (const mapping of mappings) {
@@ -610,16 +648,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       if (!mappingMatchesExpected(mapping, embedding)) {
         metadataMismatchKeys.add(key);
       }
-      const physical = this.db.prepare(`
-        select embedding, target_key, target_kind, profile_id, profile_revision
-        from ${quoteIdentifier(embedding.profile.table_name)} where rowid = ?
-      `).get(BigInt(mapping.vector_rowid)) as {
-        embedding: Uint8Array;
-        target_key: string;
-        target_kind: string;
-        profile_id: string;
-        profile_revision: number;
-      } | undefined;
+      const physical = physicalByRow.get(mappingPhysicalKey(mapping));
       if (!physical) {
         missingKeys.add(key);
         continue;
@@ -652,9 +681,18 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
   }
 
   private expectedEligibleEmbeddings(): Map<string, ExpectedEmbedding> {
-    const rows = this.db.prepare("select view_json from view_revisions_v1 order by id, revision").all() as Array<{
-      view_json: string;
-    }>;
+    const rows = this.db.prepare(`
+      select view_json
+      from view_revisions_v1
+      where schema_name = ?
+         or json_extract(view_json, '$.representation.kind') = ?
+      limit ?
+    `).all(
+      SQLITE_VEC_EMBEDDING_SCHEMA_NAME,
+      SQLITE_VEC_EMBEDDING_REPRESENTATION_KIND,
+      SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS + 1,
+    ) as Array<{ view_json: string }>;
+    assertIntegrityAuditBound("committed reserved embedding View", rows.length);
     const expected = new Map<string, ExpectedEmbedding>();
     for (const row of rows) {
       const view = parseView(JSON.parse(row.view_json));
@@ -733,6 +771,7 @@ export class SqliteVecSemanticSearchError extends Error {
       | "embedding_invalid"
       | "target_missing"
       | "query_vector_mismatch"
+      | "semantic_integrity_audit_too_large"
       | "semantic_scope_too_large"
       | "reindex_required"
       | "vector_mapping_corrupt",
@@ -810,6 +849,7 @@ function verifyRuntimeCompatibility(
     sqlite_version: row.sqlite_version,
     sqlite_source_id: row.sqlite_source_id,
     journal_mode: row.journal_mode,
+    integrity_audit_max_rows: SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS,
     profiles,
   };
 }
@@ -958,6 +998,22 @@ function mappingMatchesExpected(mapping: IntegrityMappingRow, expected: Expected
     && Number(mapping.dimension) === profile.dimension
     && mapping.distance_metric === profile.distance_metric
     && mapping.source_digest === value.target.source_digest;
+}
+
+function mappingPhysicalKey(mapping: Pick<MappingRow, "profile_id" | "profile_revision" | "vector_rowid">): string {
+  return physicalRowKey(mapping.profile_id, Number(mapping.profile_revision), mapping.vector_rowid);
+}
+
+function physicalRowKey(profileId: string, profileRevision: number, vectorRowid: number): string {
+  return `${profileId}@${profileRevision}:${vectorRowid}`;
+}
+
+function assertIntegrityAuditBound(inventory: string, observedRows: number): void {
+  if (observedRows <= SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS) return;
+  throw new SqliteVecSemanticSearchError(
+    `Semantic integrity audit ${inventory} inventory exceeds ${SQLITE_VEC_MAX_INTEGRITY_AUDIT_ROWS} rows`,
+    "semantic_integrity_audit_too_large",
+  );
 }
 
 function policyIsAtLeastAsStrict(candidate: ViewPolicy, inherited: ViewPolicy): boolean {

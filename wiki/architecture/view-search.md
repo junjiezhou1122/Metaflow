@@ -93,6 +93,13 @@ are validated before the vector and ordinary mapping row enter the same
 Committed eligible embedding Views are authoritative; the ordinary mapping and
 `vec0` rows are derived physical state. Integrity binds each physical vector to
 the exact committed payload by canonical float32 bytes before `vec0` may rank it.
+Ordinary retrieval audits only reserved embedding candidates selected through
+indexed Schema and Representation-kind inventories, never every unrelated View.
+The reserved View, mapping, and total physical-row inventories each have an
+explicit 4,096-row ceiling; cap-plus-one fails with typed
+`semantic_integrity_audit_too_large` before ranking or partial results.
+Single and batch View commits reject a cap-crossing embedding within the same
+transaction, leaving the exact-ceiling store ready and unchanged.
 Frozen exact target refs and envelope/Representation target kinds are passed as
 metadata constraints inside the KNN query, so denied or out-of-scope vectors
 cannot affect distance order. Privacy Forget removes both sides before View
