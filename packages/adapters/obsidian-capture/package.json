@@ -1,0 +1,32 @@
+{
+  "name": "@info/obsidian-capture-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/capture": "workspace:*",
+    "@info/view": "workspace:*",
+    "@parcel/watcher": "2.6.0",
+    "@secretlint/node": "13.0.4",
+    "@secretlint/secretlint-rule-preset-recommend": "13.0.4",
+    "github-slugger": "^2.0.0",
+    "mdast-util-from-markdown": "^2.0.2",
+    "mdast-util-to-string": "^4.0.0",
+    "micromark-util-character": "^2.1.1",
+    "micromark-util-symbol": "^2.0.1",
+    "micromark-util-types": "^2.0.2",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0",
+    "yaml": "2.8.1",
+    "zod": "^3.24.4"
+  }
+}
