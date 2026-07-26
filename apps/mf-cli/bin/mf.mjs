@@ -9,6 +9,28 @@ const PROTOCOL_NAME = "metaflow-operations-http";
 const PROTOCOL_VERSION = 1;
 const SERVER_NAME = "ambient-daemon";
 const SERVER_VERSION = "0.1.0";
+const OPERATION_NAMES = Object.freeze([
+  "catalog.list",
+  "capture.ingest",
+  "view.get",
+  "view.graph.project",
+  "view.search",
+  "view.search.reindex",
+  "view.traverse",
+  "view.tombstone",
+  "transformation.submit",
+  "transformation.get",
+  "run.execute",
+  "run.inspect",
+  "run.cancel",
+  "feedback.submit",
+  "failure.inspect",
+  "policy.decision.get",
+  "privacy.forget.request",
+  "privacy.forget.execute",
+  "privacy.forget.inspect",
+  "trace.read",
+]);
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const ERROR_CATEGORIES = new Set([
   "invalid_request",
@@ -18,6 +40,31 @@ const ERROR_CATEGORIES = new Set([
   "failed_dependency",
   "internal",
 ]);
+const HTTP_STATUS_BY_CATEGORY = Object.freeze({
+  invalid_request: 400,
+  forbidden: 403,
+  not_found: 404,
+  conflict: 409,
+  failed_dependency: 502,
+  internal: 500,
+});
+const EXIT_CODE_BY_CATEGORY = Object.freeze({
+  invalid_request: 2,
+  forbidden: 3,
+  not_found: 4,
+  conflict: 5,
+  failed_dependency: 6,
+  internal: 1,
+});
+
+export const MF_WIRE_CONTRACT = Object.freeze({
+  protocol: { name: PROTOCOL_NAME, version: PROTOCOL_VERSION },
+  server: { name: SERVER_NAME, version: SERVER_VERSION },
+  endpoints: { operations: "/metaflow/v1/operations/", mcp: "/mcp" },
+  operations: OPERATION_NAMES,
+  http_status_by_category: HTTP_STATUS_BY_CATEGORY,
+  exit_code_by_category: EXIT_CODE_BY_CATEGORY,
+});
 
 export async function runMfCli(argv, options = {}) {
   const environment = options.env ?? process.env;
@@ -48,19 +95,33 @@ class MfDaemonClient {
     this.endpoint = endpoint;
     this.fetchImpl = fetchImpl;
     this.timeout = timeout(environment);
-    this.authorization = environment.METAFLOW_AUTH_TOKEN
-      ? `Bearer ${environment.METAFLOW_AUTH_TOKEN}`
-      : undefined;
+    const token = environment.METAFLOW_AUTH_TOKEN;
+    if (token !== undefined && (!token.trim() || /[\r\n]/u.test(token))) {
+      throw new CliError("daemon_token_invalid", "invalid_request", "Daemon authentication token is invalid");
+    }
+    this.authorization = token ? `Bearer ${token}` : undefined;
+    this.negotiated = undefined;
   }
 
   async doctor() {
-    const response = await this.request(new URL("/metaflow/v1/doctor", this.endpoint), { method: "GET" });
+    this.negotiated ??= this.fetchDoctor();
+    return this.negotiated;
+  }
+
+  async fetchDoctor() {
+    const response = await this.request(new URL("/metaflow/v1/doctor", this.endpoint), { method: "GET" }, false);
+    assertProtocolHeader(response);
     const body = await responseJson(response);
-    if (!response.ok) throw responseFailure(response.status, body);
-    return validateDoctor(body);
+    if (response.status !== 200) throw responseFailure(response.status, body);
+    const daemon = validateDoctor(body);
+    if (daemon.authentication.required && !this.authorization) {
+      throw new CliError("daemon_auth_required", "forbidden", "Daemon authentication is required");
+    }
+    return daemon;
   }
 
   async operation(operation, input) {
+    await this.doctor();
     const response = await this.request(
       new URL(`/metaflow/v1/operations/${encodeURIComponent(operation)}`, this.endpoint),
       {
@@ -68,18 +129,21 @@ class MfDaemonClient {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(input),
       },
+      true,
     );
-    const protocol = response.headers.get("x-metaflow-protocol-version");
-    if (protocol !== String(PROTOCOL_VERSION)) {
-      throw new CliError("daemon_protocol_mismatch", "failed_dependency", "Daemon protocol version is incompatible");
-    }
+    assertProtocolHeader(response);
     const body = await responseJson(response);
-    return validateOperationEnvelope(body, operation);
+    const envelope = validateOperationEnvelope(body, operation);
+    const expectedStatus = envelope.ok ? 200 : HTTP_STATUS_BY_CATEGORY[envelope.error.category];
+    if (response.status !== expectedStatus) {
+      throw new CliError("daemon_status_mismatch", "failed_dependency", "Daemon HTTP status does not match its Operation envelope");
+    }
+    return envelope;
   }
 
-  async request(url, init) {
+  async request(url, init, authenticated) {
     const headers = new Headers(init.headers);
-    if (this.authorization) headers.set("authorization", this.authorization);
+    if (authenticated && this.authorization) headers.set("authorization", this.authorization);
     try {
       return await this.fetchImpl(url, {
         ...init,
@@ -196,12 +260,14 @@ function daemonEndpoint(environment) {
   } catch (cause) {
     throw new CliError("daemon_url_invalid", "invalid_request", "METAFLOW_DAEMON_URL must be a valid HTTP URL", {}, cause);
   }
-  if (!new Set(["http:", "https:"]).has(endpoint.protocol)
+  if (endpoint.protocol !== "http:"
+    || !new Set(["127.0.0.1", "localhost"]).has(endpoint.hostname)
     || endpoint.username
     || endpoint.password
     || endpoint.search
-    || endpoint.hash) {
-    throw new CliError("daemon_url_invalid", "invalid_request", "METAFLOW_DAEMON_URL must be a credential-free HTTP URL");
+    || endpoint.hash
+    || (endpoint.pathname !== "/" && endpoint.pathname !== "")) {
+    throw new CliError("daemon_url_invalid", "invalid_request", "METAFLOW_DAEMON_URL must be a credential-free loopback HTTP origin");
   }
   return endpoint;
 }
@@ -243,6 +309,9 @@ function validateDoctor(value) {
     || typeof value.authentication.required !== "boolean") {
     throw new CliError("daemon_doctor_invalid", "failed_dependency", "Daemon doctor response is invalid");
   }
+  if (value.endpoints.operations !== "/metaflow/v1/operations/" || value.endpoints.mcp !== "/mcp") {
+    throw new CliError("daemon_doctor_invalid", "failed_dependency", "Daemon doctor endpoints are incompatible");
+  }
   return value;
 }
 
@@ -254,11 +323,13 @@ function validateOperationEnvelope(value, expectedOperation) {
     requireKeys(value, ["ok", "request_id", "operation", "data"], "Operation success envelope");
     if (value.operation !== expectedOperation) throw new CliError("daemon_envelope_invalid", "failed_dependency", "Daemon returned the wrong Operation envelope");
   } else {
+    const expectedKnownOperation = OPERATION_NAMES.includes(expectedOperation);
     const keys = value.operation === undefined
       ? ["ok", "request_id", "error"]
       : ["ok", "request_id", "operation", "error"];
     requireKeys(value, keys, "Operation failure envelope");
-    if (value.operation !== undefined && value.operation !== expectedOperation) {
+    if ((expectedKnownOperation && value.operation !== expectedOperation)
+      || (!expectedKnownOperation && value.operation !== undefined && value.operation !== expectedOperation)) {
       throw new CliError("daemon_envelope_invalid", "failed_dependency", "Daemon returned the wrong Operation envelope");
     }
     requireKeys(value.error, ["code", "message", "category", "details"], "Operation error");
@@ -284,6 +355,12 @@ function responseFailure(status, body) {
   });
 }
 
+function assertProtocolHeader(response) {
+  if (response.headers.get("x-metaflow-protocol-version") !== String(PROTOCOL_VERSION)) {
+    throw new CliError("daemon_protocol_mismatch", "failed_dependency", "Daemon protocol version is incompatible");
+  }
+}
+
 function cliFailure(operation, cause) {
   const error = cause instanceof CliError
     ? cause
@@ -302,14 +379,7 @@ function output(envelope, exit_code, stderr = "") {
 
 function exitCode(envelope) {
   if (envelope.ok) return 0;
-  return {
-    invalid_request: 2,
-    forbidden: 3,
-    not_found: 4,
-    conflict: 5,
-    failed_dependency: 6,
-    internal: 1,
-  }[envelope.error.category] ?? 1;
+  return EXIT_CODE_BY_CATEGORY[envelope.error.category] ?? 1;
 }
 
 function requestId() {

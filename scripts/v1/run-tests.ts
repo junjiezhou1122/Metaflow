@@ -8,6 +8,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/ambient-direct-assist.test.ts",
   "tests/ambient-daemon-vertical.test.ts",
   "tests/ambient-mcp-http.test.ts",
+  "tests/ambient-daemon-security.test.ts",
   "tests/automation-context.test.ts",
   "tests/automation-delivery.test.ts",
   "tests/automation-execution-adapter.test.ts",

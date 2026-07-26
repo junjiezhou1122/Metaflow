@@ -75,11 +75,15 @@ export const OperationCatalogEntrySchema = z.object({
   description: z.string().trim().min(1),
   effect: OperationEffectSchema,
   read_only: z.boolean(),
-  input_schema: z.record(JsonValueSchema).optional(),
+  input_schema: z.record(JsonValueSchema),
   input_example: JsonValueSchema.optional(),
 }).strict();
 
 export type OperationCatalogEntry = z.infer<typeof OperationCatalogEntrySchema>;
+
+export const OPERATION_INPUT_JSON_SCHEMAS: Readonly<Record<OperationName, JsonObject>> = Object.fromEntries(
+  OPERATION_NAMES.map(name => [name, jsonSchemaFor(name)]),
+) as Record<OperationName, JsonObject>;
 
 export const OPERATION_CATALOG: readonly OperationCatalogEntry[] = OPERATION_NAMES.map(name => {
   const example = AGENT_ACCESS_EXAMPLES[name];
@@ -89,14 +93,18 @@ export const OPERATION_CATALOG: readonly OperationCatalogEntry[] = OPERATION_NAM
     description: OPERATION_DESCRIPTIONS[name],
     effect: OPERATION_EFFECTS[name],
     read_only: OPERATION_EFFECTS[name] === "read",
-    ...(example === undefined ? {} : { input_schema: jsonSchemaFor(name) }),
+    input_schema: OPERATION_INPUT_JSON_SCHEMAS[name],
     ...(example === undefined ? {} : { input_example: example }),
   });
 });
 
 function jsonSchemaFor(operation: OperationName): JsonObject {
-  return JsonValueSchema.parse(zodToJsonSchema(OperationInputSchemas[operation], {
-    $refStrategy: "none",
+  const generated = zodToJsonSchema(OperationInputSchemas[operation], {
+    $refStrategy: "root",
     target: "jsonSchema7",
-  })) as JsonObject;
+  });
+  if (!("type" in generated) && "anyOf" in generated) {
+    return JsonValueSchema.parse({ ...generated, type: "object" }) as JsonObject;
+  }
+  return JsonValueSchema.parse(generated) as JsonObject;
 }

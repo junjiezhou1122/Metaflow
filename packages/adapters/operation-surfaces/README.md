@@ -14,7 +14,8 @@ These are thin projections of `@info/operations`:
 `mf --json doctor` checks the exact HTTP protocol, server version,
 authentication source, reachability, and catalog access without printing
 credentials. `mf --json <operation> --help` reads the live catalog; bounded
-View access Operations include their strict input schema and literal example.
+every Operation includes its current generated input schema. The four bounded
+Agent discovery/read Operations also include literal examples.
 Malformed input never becomes a string fallback.
 
 The composition root supplies an authenticated `OperationContext`; principals
@@ -23,5 +24,6 @@ are never accepted from the request body. All three surfaces call the same
 This package has no View Store, SQLite, Transformation, Capture, or Execution
 dependency and cannot reconstruct domain behavior.
 
-The daemon also serves the same MCP server at `/mcp`. The retained stdio entry
-point is a daemon client, not another `OperationService` composition.
+The loopback-only daemon also serves the same MCP server at `/mcp`. The retained
+stdio entry point negotiates the exact doctor contract before exposing tools;
+it is a daemon client, not another `OperationService` composition.

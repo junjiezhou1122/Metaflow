@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AcpStdioAgentRuntimeAdapter } from "@info/agent-runtime-adapter";
 import { createAmbientDaemonComposition } from "./composition.js";
@@ -58,11 +58,15 @@ export async function startAmbientDaemon() {
     }
     void composition.handler(request, response);
   });
-  server.listen(port, () => {
-    console.log(`[ambient-daemon] listening on http://localhost:${port}`);
-    console.log(`[ambient-daemon] ACP backend: ${runtimeCommand.id}${runtimeCommand.model ? ` (${runtimeCommand.model})` : ""}`);
-    console.log(`[ambient-daemon] direct assist available at http://127.0.0.1:${port}/ambient/v1/assist`);
-  });
+  try {
+    await listenAmbientDaemon(server, port);
+  } catch (error) {
+    await Promise.all([composition.close(), directConversation.close()]);
+    throw error;
+  }
+  console.log(`[ambient-daemon] listening on http://${AMBIENT_DAEMON_HOST}:${port}`);
+  console.log(`[ambient-daemon] ACP backend: ${runtimeCommand.id}${runtimeCommand.model ? ` (${runtimeCommand.model})` : ""}`);
+  console.log(`[ambient-daemon] direct assist available at http://${AMBIENT_DAEMON_HOST}:${port}/ambient/v1/assist`);
   let closing: Promise<void> | undefined;
   const close = () => {
     if (closing) return closing;
@@ -97,6 +101,24 @@ export async function startAmbientDaemon() {
     throw error;
   }
   return { server, composition };
+}
+
+export const AMBIENT_DAEMON_HOST = "127.0.0.1" as const;
+
+export async function listenAmbientDaemon(server: Server, port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, AMBIENT_DAEMON_HOST);
+  });
 }
 
 function parsePiThinking(value: string | undefined): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {

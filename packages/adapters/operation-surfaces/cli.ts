@@ -13,6 +13,15 @@ export type CliOperationResult = {
   envelope: OperationEnvelope;
 };
 
+export const OPERATION_EXIT_CODE_BY_CATEGORY = {
+  invalid_request: 2,
+  forbidden: 3,
+  not_found: 4,
+  conflict: 5,
+  failed_dependency: 6,
+  internal: 1,
+} as const;
+
 export class CliOperationAdapter {
   constructor(
     private readonly service: OperationService,
@@ -58,12 +67,5 @@ function resultFor(envelope: OperationEnvelope): CliOperationResult {
 
 function cliExitCode(envelope: OperationEnvelope): number {
   if (envelope.ok) return 0;
-  switch (envelope.error.category) {
-    case "invalid_request": return 2;
-    case "forbidden": return 3;
-    case "not_found": return 4;
-    case "conflict": return 5;
-    case "failed_dependency": return 6;
-    case "internal": return 1;
-  }
+  return OPERATION_EXIT_CODE_BY_CATEGORY[envelope.error.category];
 }

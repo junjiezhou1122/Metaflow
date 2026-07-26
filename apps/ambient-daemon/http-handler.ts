@@ -89,7 +89,7 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
           server: { name: METAFLOW_AMBIENT_SERVER_NAME, version: METAFLOW_AMBIENT_SERVER_VERSION },
           authentication: { source: "composition_principal", required: false },
           endpoints: { operations: "/metaflow/v1/operations/", mcp: "/mcp" },
-        }));
+        }), { "x-metaflow-protocol-version": String(METAFLOW_HTTP_PROTOCOL_VERSION) });
       }
 
       const exactView = path.match(/^\/context\/v1\/views\/([^/]+)$/);

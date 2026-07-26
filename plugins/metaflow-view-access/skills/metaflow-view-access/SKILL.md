@@ -37,8 +37,10 @@ For MCP, use `metaflow_view_search`, `metaflow_view_get`, and
 `structuredContent` as the authoritative Operation envelope; JSON text content
 exists only for compatibility.
 
-Use `mf --json <operation> --help` or `metaflow_catalog_list` to retrieve the
-current input schema, effect classification, and literal bounded examples.
+Use `mf --json <operation> --help` or `metaflow_catalog_list` to retrieve every
+Operation's current input schema and effect classification. Literal bounded
+examples are provided for `catalog.list`, `view.search`, `view.get`, and
+`view.graph.project`.
 Do not copy a stale live catalog into this skill.
 
 ## Safety Rules

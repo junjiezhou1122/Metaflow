@@ -4,7 +4,7 @@ import {
   type OperationEnvelope,
   type OperationService,
 } from "@info/operations";
-import { METAFLOW_HTTP_PROTOCOL_VERSION } from "./daemon.js";
+import { METAFLOW_HTTP_PROTOCOL_VERSION, operationHttpStatus } from "./daemon.js";
 
 export type OperationHttpRequest = {
   method: string;
@@ -35,24 +35,12 @@ export class HttpOperationAdapter {
       input: request.body ?? {},
     }, context));
     return {
-      status: httpStatus(envelope),
+      status: operationHttpStatus(envelope),
       headers: {
         "content-type": "application/json; charset=utf-8",
         "x-metaflow-protocol-version": String(METAFLOW_HTTP_PROTOCOL_VERSION),
       },
       body: envelope,
     };
-  }
-}
-
-function httpStatus(envelope: OperationEnvelope): number {
-  if (envelope.ok) return 200;
-  switch (envelope.error.category) {
-    case "invalid_request": return 400;
-    case "forbidden": return 403;
-    case "not_found": return 404;
-    case "conflict": return 409;
-    case "failed_dependency": return 502;
-    case "internal": return 500;
   }
 }

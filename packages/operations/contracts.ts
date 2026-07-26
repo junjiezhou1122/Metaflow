@@ -154,7 +154,7 @@ export const OperationFailureSchema = z.object({
   error: OperationErrorSchema,
 }).strict();
 
-export const OperationEnvelopeSchema = z.union([OperationSuccessSchema, OperationFailureSchema]);
+export const OperationEnvelopeSchema = z.discriminatedUnion("ok", [OperationSuccessSchema, OperationFailureSchema]);
 
 export const OperationTraceEventSchema = z.object({
   request_id: IdentifierSchema,

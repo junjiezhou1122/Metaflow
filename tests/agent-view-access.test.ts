@@ -11,6 +11,14 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { OperationEnvelopeSchema, OPERATION_NAMES } from "@info/operations";
 import { exactViewRef, parseViewDraft, type ViewDraft } from "@info/view";
 import { createAmbientDaemonComposition } from "../apps/ambient-daemon/composition.ts";
+import {
+  METAFLOW_AMBIENT_SERVER_NAME,
+  METAFLOW_AMBIENT_SERVER_VERSION,
+  METAFLOW_HTTP_PROTOCOL_NAME,
+  METAFLOW_HTTP_PROTOCOL_VERSION,
+  OPERATION_EXIT_CODE_BY_CATEGORY,
+  OPERATION_HTTP_STATUS_BY_CATEGORY,
+} from "@info/operation-surfaces";
 import type {
   AgentRuntimeAdapter,
   AgentRuntimeContext,
@@ -141,8 +149,11 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
     assert.deepEqual(requests.slice(agentRequestStart).map(request => [request.method, request.path]), [
       ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/catalog.list"],
+      ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/view.search"],
+      ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/view.get"],
+      ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/view.graph.project"],
     ]);
 
@@ -152,6 +163,8 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
       const listed = await client.listTools();
       assert.equal(listed.tools.length, OPERATION_NAMES.length);
       assert.ok(listed.tools.every(tool => tool.outputSchema?.type === "object"));
+      assert.ok(listed.tools.every(tool => Array.isArray((tool.outputSchema as { oneOf?: unknown[] }).oneOf)));
+      assert.ok(listed.tools.every(tool => (tool.outputSchema as { oneOf: unknown[] }).oneOf.length === 2));
       const viewGet = listed.tools.find(tool => tool.name === "metaflow_view_get")!;
       assert.equal(viewGet.annotations?.readOnlyHint, true);
       assert.equal(viewGet.annotations?.destructiveHint, false);
@@ -200,6 +213,34 @@ test("the skill-only plugin has one canonical validated skill body and no runtim
   assert.equal(skill.includes("data/ambient-v1"), false);
 });
 
+test("the installable two-file CLI wire contract cannot drift from the shared adapter contract", async () => {
+  const { MF_WIRE_CONTRACT } = await import("../apps/mf-cli/bin/mf.mjs") as {
+    MF_WIRE_CONTRACT: {
+      protocol: unknown;
+      server: unknown;
+      endpoints: unknown;
+      operations: unknown;
+      http_status_by_category: unknown;
+      exit_code_by_category: unknown;
+    };
+  };
+  assert.deepEqual(MF_WIRE_CONTRACT.protocol, {
+    name: METAFLOW_HTTP_PROTOCOL_NAME,
+    version: METAFLOW_HTTP_PROTOCOL_VERSION,
+  });
+  assert.deepEqual(MF_WIRE_CONTRACT.server, {
+    name: METAFLOW_AMBIENT_SERVER_NAME,
+    version: METAFLOW_AMBIENT_SERVER_VERSION,
+  });
+  assert.deepEqual(MF_WIRE_CONTRACT.endpoints, {
+    operations: "/metaflow/v1/operations/",
+    mcp: "/mcp",
+  });
+  assert.deepEqual(MF_WIRE_CONTRACT.operations, OPERATION_NAMES);
+  assert.deepEqual(MF_WIRE_CONTRACT.http_status_by_category, OPERATION_HTTP_STATUS_BY_CATEGORY);
+  assert.deepEqual(MF_WIRE_CONTRACT.exit_code_by_category, OPERATION_EXIT_CODE_BY_CATEGORY);
+});
+
 test("mf doctor fails closed on protocol, authentication, and credential-bearing URL configuration", async () => {
   const { runMfCli } = await import("../apps/mf-cli/bin/mf.mjs") as {
     runMfCli(argv: string[], options: { env: NodeJS.ProcessEnv; fetch: typeof fetch }): Promise<{
@@ -216,12 +257,13 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
     authentication: { source: "composition_principal", required: false },
     endpoints: { operations: "/metaflow/v1/operations/", mcp: "/mcp" },
   };
+  const doctorHeaders = { "x-metaflow-protocol-version": "1" };
   const mismatch = await runMfCli(["--json", "doctor"], {
     env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
     fetch: async () => new Response(JSON.stringify({
       ...doctorBody,
       protocol: { ...doctorBody.protocol, version: 2 },
-    }), { status: 200 }),
+    }), { status: 200, headers: doctorHeaders }),
   });
   assert.equal(mismatch.exit_code, 6);
   assert.equal(mismatch.envelope.error?.code, "daemon_protocol_mismatch");
@@ -232,7 +274,7 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   ] as const) {
     const incompatible = await runMfCli(["--json", "doctor"], {
       env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
-      fetch: async () => new Response(JSON.stringify({ ...doctorBody, server }), { status: 200 }),
+      fetch: async () => new Response(JSON.stringify({ ...doctorBody, server }), { status: 200, headers: doctorHeaders }),
     });
     assert.equal(incompatible.exit_code, 6);
     assert.equal(incompatible.envelope.error?.code, code);
@@ -246,7 +288,7 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
       return new Response(JSON.stringify({
         ...doctorBody,
         authentication: { ...doctorBody.authentication, required: true },
-      }), { status: 200 });
+      }), { status: 200, headers: doctorHeaders });
     },
   });
   assert.equal(authRequired.exit_code, 3);
@@ -254,13 +296,13 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   assert.equal(authRequiredRequests, 1);
 
   let request = 0;
-  let authorization: string | null = null;
+  const authorizations: Array<string | null> = [];
   const auth = await runMfCli(["--json", "doctor"], {
     env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111", METAFLOW_AUTH_TOKEN: "do-not-print" },
     fetch: async (_input, init) => {
       request += 1;
-      authorization = new Headers(init?.headers).get("authorization");
-      if (request === 1) return new Response(JSON.stringify(doctorBody), { status: 200 });
+      authorizations.push(new Headers(init?.headers).get("authorization"));
+      if (request === 1) return new Response(JSON.stringify(doctorBody), { status: 200, headers: doctorHeaders });
       return new Response(JSON.stringify({
         ok: false,
         request_id: "request:test:auth",
@@ -271,7 +313,7 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   });
   assert.equal(auth.exit_code, 3);
   assert.equal(auth.envelope.error?.code, "operation_forbidden");
-  assert.equal(authorization, "Bearer do-not-print");
+  assert.deepEqual(authorizations, [null, "Bearer do-not-print"]);
   assert.equal(auth.stdout.includes("do-not-print"), false);
   assert.equal(auth.stderr.includes("do-not-print"), false);
 
@@ -283,6 +325,27 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   assert.equal(configuredSecret.envelope.error?.code, "daemon_url_invalid");
   assert.equal(configuredSecret.stdout.includes("password"), false);
   assert.equal(configuredSecret.stderr.includes("password"), false);
+
+  let unknownRequest = 0;
+  const unknown = await runMfCli(["--json", "typo.operation"], {
+    env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
+    fetch: async () => {
+      unknownRequest += 1;
+      if (unknownRequest === 1) return new Response(JSON.stringify(doctorBody), { status: 200, headers: doctorHeaders });
+      return new Response(JSON.stringify({
+        ok: false,
+        request_id: "request:unknown-operation",
+        error: {
+          code: "operation_request_invalid",
+          message: "Operation request is invalid",
+          category: "invalid_request",
+          details: {},
+        },
+      }), { status: 400, headers: doctorHeaders });
+    },
+  });
+  assert.equal(unknown.exit_code, 2);
+  assert.equal(unknown.envelope.error?.code, "operation_request_invalid");
 });
 
 function installCli(directory: string): string {

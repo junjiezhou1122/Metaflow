@@ -3,7 +3,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { DaemonOperationClient, createOperationMcpServer } from "@info/operation-surfaces";
 
 const endpoint = new URL(process.env.METAFLOW_DAEMON_URL ?? `http://127.0.0.1:${process.env.CONTEXT_HTTP_PORT ?? "3111"}`);
-const operations = new DaemonOperationClient(endpoint);
+const timeout = Number(process.env.METAFLOW_DAEMON_TIMEOUT_MS ?? "10000");
+const operations = new DaemonOperationClient({
+  endpoint,
+  timeout_ms: timeout,
+  ...(process.env.METAFLOW_AUTH_TOKEN === undefined ? {} : { token: process.env.METAFLOW_AUTH_TOKEN }),
+});
+await operations.negotiate();
 const server = createOperationMcpServer({
   service: operations,
   context: () => ({

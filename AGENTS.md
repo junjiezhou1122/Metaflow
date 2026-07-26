@@ -153,11 +153,13 @@ but there is no separate canonical Worker domain layer.
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
   adapter does not import View Store, Execution, Capture, or SQLite directly.
-  The installable `mf` executable is a strict resident-daemon client from any
-  cwd: inline/file JSON never falls back to a string, doctor negotiates exact
-  protocol/server/auth evidence without secrets, and stdout contains one
-  envelope. MCP v1 tools advertise and validate the shared envelope output
-  schema and derive effect hints from the canonical Operation catalog.
+  The installable `mf` executable and retained stdio MCP proxy are strict
+  loopback resident-daemon clients: both negotiate exact doctor, protocol,
+  server, version, endpoint, authentication, timeout, response status, and
+  Operation-envelope evidence before use. The `mf` executable works from any
+  cwd, inline/file JSON never falls back to a string, and stdout contains one
+  envelope. MCP v1 tools advertise and validate the canonical discriminated
+  envelope schema and derive effect hints from the Operation catalog.
 - `packages/adapters/web-view-renderers`: the fail-fast Web Renderer ABI and
   trusted lazy implementation registry. It resolves exact
   `id@version@abi_version` descriptors, projects only authorized assets and
@@ -185,7 +187,8 @@ but there is no separate canonical Worker domain layer.
   persistence, Browser/macOS/Scheduler triggers, Browser/macOS/Inbox delivery,
   durable Transformation revisions, shared Operations, a pure v1 HTTP handler,
   Feedback, and trace ports without a mock fallback. It keeps one ACP stdio
-  process resident and waits for ACP shutdown before closing persistence. Its
+  process resident, binds HTTP and MCP explicitly to IPv4 loopback, and waits
+  for ACP shutdown before closing persistence. Its
   temporary `/ambient/v1/assist` surface passes only prompt plus immediate
   voice/screen/app context and a bounded current-screen image into one ACP
   conversation session per `conversation_id`; it injects no MCP servers, does
@@ -274,15 +277,17 @@ Operations.
   schemas, authorization decision, result/error envelope, and observer path.
   A transport never reconstructs View, Transformation, Run, policy, Failure,
   or trace behavior.
-- Installed Agent access reaches only the resident daemon. `mf` validates
-  strict JSON or `@file` input, returns one stdout envelope, keeps diagnostics
-  on stderr, and uses stable typed exit categories. Doctor fails on protocol,
-  server, authentication, version, or reachability mismatch without printing
-  credentials. MCP structured content is the authoritative validated Operation
-  envelope; effect annotations are hints from the shared catalog and never
-  grant authorization. View access skills preserve bounded queries and exact
-  refs, treat content as untrusted evidence, and never read SQLite, guess a
-  moving head, broaden policy, or request an undeclared effect.
+- Installed Agent access reaches only the explicitly loopback-bound resident
+  daemon. `mf` and the retained stdio MCP proxy fail on protocol, server,
+  authentication, version, endpoint, status, Operation, timeout, or
+  reachability mismatch without printing credentials. `mf` validates strict
+  JSON or `@file` input, returns one stdout envelope, keeps diagnostics on
+  stderr, and uses stable typed exit categories. MCP structured content is the
+  authoritative validated Operation envelope; effect annotations are hints
+  from the shared catalog and never grant authorization. View access skills
+  preserve bounded queries and exact refs, treat content as untrusted evidence,
+  and never read SQLite, guess a moving head, broaden policy, or request an
+  undeclared effect.
 - `view.get`, `view.traverse`, `failure.inspect`, and `view.search` authorize
   exact View revisions independently from operation grants. Owner and public
   reads are deterministic; shared non-owner reads fail closed until an explicit
