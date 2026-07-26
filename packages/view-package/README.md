@@ -21,3 +21,10 @@ A Renderer is a human projection descriptor. A Method is an Agent affordance
 that references an existing Core Operation or exact Transformation. Both are
 resolved against the same exact View Schema; neither creates another data
 universe.
+
+Renderer implementations are registered and checked by the exact
+`id@version@abi_version` identity. `abi_version` is mandatory; older manifests
+must be migrated explicitly because assuming an ABI would hide incompatible
+registrations. Optional `media_types` further constrain selection when a
+Representation declares a media type. The manifest never contains module
+entrypoints, URLs, executable code, or host permissions.

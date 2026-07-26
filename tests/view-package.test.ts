@@ -15,7 +15,7 @@ import {
 
 const environment = {
   operations: new Set(["view.get", "view.traverse", "run.execute"]),
-  renderers: new Set(["renderer.github.repository-summary"]),
+  renderers: new Set(["renderer.github.repository-summary@1@1"]),
   transformations: new Map([[
     "transformation.github.repository_summary@1",
     {
@@ -44,6 +44,7 @@ test("one View Package binds Schema, Materialization, human Renderer, and Agent 
   assert.equal(githubRepositorySummaryViewPackage.schema(githubRepositorySummarySchemaKey).mode, "freeform");
   assert.equal(githubRepositorySummaryViewPackage.renderers(githubRepositorySummarySchemaKey, "web")[0]?.id,
     "renderer.github.repository-summary");
+  assert.equal(githubRepositorySummaryViewPackage.renderers(githubRepositorySummarySchemaKey, "web")[0]?.abi_version, 1);
   assert.equal(githubRepositorySummaryViewPackage.method("regenerate")?.effect, "creates_view");
 });
 
@@ -89,6 +90,15 @@ test("View Package conformance fails on unavailable implementations and output d
 });
 
 test("View Package manifest and strict fixtures fail fast", () => {
+  assert.throws(
+    () => defineViewPackage({
+      ...githubRepositorySummaryViewPackage.manifest,
+      id: "view-package.renderer-without-abi",
+      renderers: githubRepositorySummaryViewPackage.manifest.renderers.map(({ abi_version: _abi, ...renderer }) => renderer),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
+  );
+
   assert.throws(
     () => defineViewPackage({
       manifest_version: 1,

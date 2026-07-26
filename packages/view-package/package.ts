@@ -1,6 +1,7 @@
 import { canonicalJson, type ViewSchemaRef } from "@info/view";
 import {
   ViewPackageManifestSchema,
+  rendererKey,
   schemaKey,
   type ViewPackage,
   type ViewPackageManifest,
@@ -67,7 +68,10 @@ export function defineViewPackage(input: unknown): ViewPackage {
       return manifest.renderers
         .filter(renderer => schemaKey(renderer.schema) === schemaKey(key))
         .filter(renderer => surface === undefined || renderer.surfaces.includes(surface))
-        .sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id));
+        .sort((left, right) => right.priority - left.priority
+          || left.id.localeCompare(right.id)
+          || right.version - left.version
+          || rendererKey(left).localeCompare(rendererKey(right)));
     },
     method(id: string): ViewPackageMethod | undefined {
       return methods.get(id);

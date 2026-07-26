@@ -35,6 +35,7 @@ export const githubRepositorySummaryViewPackage = defineViewPackage({
   renderers: [{
     id: "renderer.github.repository-summary",
     version: 1,
+    abi_version: 1,
     schema: githubRepositorySummarySchemaKey,
     surfaces: ["web", "generic"],
     representation_kinds: ["agent_output"],
