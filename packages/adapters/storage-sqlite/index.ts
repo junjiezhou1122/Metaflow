@@ -1133,7 +1133,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       return undefined;
     });
     if (existingReport) {
-      if (this.semantic_search?.maintenance.status === "reindex_required") {
+      if (this.semantic_search?.refreshMaintenanceState().status === "reindex_required") {
         throw new ViewRepositoryError(
           `Search reindex run ${input.run_id} predates current semantic corruption; retry with a new run id`,
           "conflict",

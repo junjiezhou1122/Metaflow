@@ -66,11 +66,15 @@ Node's built-in `node:sqlite` driver.
 - Physical row identity is `(profile_id, profile_revision, vector_rowid)`.
   The same rowid may exist in multiple profile tables; startup and retrieval
   validate exact profile and target metadata before evidence can resolve.
-- Missing mappings or physical orphans reopen in an observable
+- Committed strict embedding Views whose target and policies remain eligible
+  are the authoritative expected set. Missing mappings, missing physical rows,
+  loss of both rows, or physical orphans reopen in an observable
   `reindex_required` maintenance state. Semantic retrieval, insertion, and
   deletion fail with that typed error until a new durable reindex transaction
   commits; replaying an older successful run cannot claim to repair new
-  corruption. Profile or target metadata mismatch fails startup outright.
+  corruption. A mapping or physical mismatch discovered on a live connection
+  latches the same state before returning; subsequent semantic reads and writes
+  stay blocked. Profile or target metadata mismatch fails startup outright.
 - Vector mapping and `vec0` insertion share the View `BEGIN IMMEDIATE`
   transaction. Privacy Forget deletes mappings and vector rows before governed
   payloads, and durable reindex reconstructs only from committed embedding
