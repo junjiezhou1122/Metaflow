@@ -55,8 +55,10 @@ but there is no separate canonical Worker domain layer.
   conformance contracts; it never owns provider API or SDK access.
 - `packages/operations`: the transport-neutral v1 operation catalog,
   call-level authorization, active Run cancellation, shared structured error
-  envelopes, and operation observer events. It coordinates public domain ports
-  and never imports SQLite or transport code.
+  envelopes, and operation observer events. Exact View reads use the same
+  deterministic read-authorizer port as Search; an operation grant never grants
+  content access. It coordinates public domain ports and never imports SQLite
+  or transport code.
 - `packages/search`: strict transport-neutral View Search request, evidence,
   cursor, error, and observer contracts; deterministic batch read
   authorization; exact, bounded subgraph, and bounded all-visible scope
@@ -222,6 +224,11 @@ Operations.
   schemas, authorization decision, result/error envelope, and observer path.
   A transport never reconstructs View, Transformation, Run, policy, Failure,
   or trace behavior.
+- `view.get`, `view.traverse`, `failure.inspect`, and `view.search` authorize
+  exact View revisions independently from operation grants. Owner and public
+  reads are deterministic; shared non-owner reads fail closed until an explicit
+  sharing ACL exists. Compatibility HTTP reads must delegate to Operations and
+  cannot access the View Repository directly.
 - `run.execute` resolves one exact committed Transformation revision before
   Execution. `run.cancel` aborts only an active invocation owned by the same
   operation service; Execution still persists the terminal cancelled Run,

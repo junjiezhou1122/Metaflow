@@ -41,7 +41,7 @@
     "test:boundaries": "node --import tsx --test tests/package-boundaries.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.v1.json",
     "typecheck:v1": "tsc --noEmit -p tsconfig.v1.json",
-    "check:boundaries": "depcruise --config dependency-cruiser.config.cjs packages/view packages/view-package packages/transformation packages/execution packages/automation packages/capture packages/operations packages/adapters view-packages && tsx scripts/check-v1-package-manifests.ts",
+    "check:boundaries": "depcruise --config dependency-cruiser.config.cjs packages/view packages/view-package packages/transformation packages/execution packages/automation packages/capture packages/search packages/operations packages/adapters view-packages && tsx scripts/check-v1-package-manifests.ts",
     "verify:v1:boundaries": "pnpm typecheck:v1 && pnpm check:boundaries && pnpm test:boundaries"
   },
   "dependencies": {
@@ -59,6 +59,7 @@
     "@info/macos-automation-adapter": "workspace:*",
     "@info/operation-surfaces": "workspace:*",
     "@info/operations": "workspace:*",
+    "@info/search": "workspace:*",
     "@info/scheduler-automation-adapter": "workspace:*",
     "@info/screenpipe-capture-adapter": "workspace:*",
     "@info/storage-sqlite": "workspace:*",

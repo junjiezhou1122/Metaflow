@@ -34,6 +34,12 @@ import {
   type ConnectorRuntime,
 } from "@info/capture";
 import {
+  SearchError,
+  type SearchService,
+  type ViewReadAuthorizationDecision,
+  type ViewReadAuthorizationPort,
+} from "@info/search";
+import {
   OPERATION_DESCRIPTIONS,
   OPERATION_NAMES,
   OperationContextSchema,
@@ -55,6 +61,8 @@ import {
 
 export type OperationServiceDependencies = {
   views: ViewRepository;
+  search: Pick<SearchService, "search">;
+  view_reads: ViewReadAuthorizationPort;
   transformations: TransformationRepository;
   execution: ExecutionRuntime;
   runs: Pick<ExecutionRepository, "getRun" | "getTrace">;
@@ -173,14 +181,26 @@ export class OperationService {
       case "capture.ingest":
         return this.dependencies.capture.submitBatch(input.batch);
       case "view.get": {
+        await this.requireViewRead(context, [input.ref], "read");
         const view = await this.dependencies.views.get(input.ref);
         if (!view) throw new OperationServiceError("Exact View revision does not exist", "view_not_found", "not_found", { ref: input.ref });
         return view;
       }
       case "view.search":
-        return this.dependencies.views.query(input.query);
-      case "view.traverse":
-        return this.dependencies.views.traverseRelations(input.query);
+        return this.dependencies.search.search({
+          request_id: context.request_id,
+          principal: { id: context.principal.id },
+          request: input.request,
+        });
+      case "view.search.reindex":
+        return this.dependencies.views.reindexSearch(input);
+      case "view.traverse": {
+        await this.requireViewRead(context, [input.query.ref], "traverse");
+        const relations = await this.dependencies.views.traverseRelations(input.query);
+        const refs = uniqueRefs(relations.flatMap(relation => [relation.source, relation.target]));
+        await this.requireViewRead(context, refs, "traverse");
+        return relations;
+      }
       case "view.tombstone": {
         const source = await this.dependencies.views.get(input.source);
         if (!source) {
@@ -261,6 +281,7 @@ export class OperationService {
       case "feedback.submit":
         return this.dependencies.feedback.record(input.feedback);
       case "failure.inspect": {
+        await this.requireViewRead(context, [input.ref], "read");
         const view = await this.dependencies.views.get(input.ref);
         if (!view) throw new OperationServiceError("Failure View does not exist", "failure_not_found", "not_found", { ref: input.ref });
         try {
@@ -286,6 +307,29 @@ export class OperationService {
         }
         return this.dependencies.capture_traces.getCaptureTrace(input.connection_id);
     }
+  }
+
+  private async requireViewRead(
+    context: OperationContext,
+    refs: Array<{ view_id: string; revision: number }>,
+    purpose: "read" | "traverse",
+  ): Promise<void> {
+    if (refs.length === 0) return;
+    const decisions = await this.dependencies.view_reads.authorize({
+      principal: { id: context.principal.id },
+      refs,
+      purpose,
+    });
+    validateReadDecisions(refs, decisions);
+    const rejected = decisions.find(decision => decision.status !== "allowed");
+    if (!rejected) return;
+    if (rejected.status === "missing") {
+      throw new OperationServiceError("Exact View revision does not exist", "view_not_found", "not_found", { ref: rejected.ref });
+    }
+    throw new OperationServiceError("Principal cannot read exact View revision", "view_read_forbidden", "forbidden", {
+      ref: rejected.ref,
+      reason: rejected.code ?? "view_read_forbidden",
+    });
   }
 
   private async requireRun(runId: string) {
@@ -338,6 +382,14 @@ function flattenZodIssues(issues: z.ZodIssue[], parentPath: string[] = []): Json
 function operationError(cause: unknown): OperationError {
   if (cause instanceof OperationServiceError) {
     return OperationErrorSchema.parse({ code: cause.code, message: cause.message, category: cause.category, details: cause.details });
+  }
+  if (cause instanceof SearchError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: searchCategory(cause.code),
+      details: { stage: cause.stage, retryable: cause.retryable },
+    });
   }
   if (cause instanceof z.ZodError) {
     const error = zodError("domain_validation_failed", "Domain input failed validation", cause);
@@ -407,6 +459,37 @@ function operationError(cause: unknown): OperationError {
     category: "internal",
     details: {},
   });
+}
+
+function validateReadDecisions(
+  refs: Array<{ view_id: string; revision: number }>,
+  decisions: ViewReadAuthorizationDecision[],
+): void {
+  const expected = refs.map(refKey).sort();
+  const actual = decisions.map(decision => refKey(decision.ref)).sort();
+  if (JSON.stringify(expected) !== JSON.stringify(actual) || new Set(actual).size !== actual.length) {
+    throw new OperationServiceError(
+      "View read authorizer returned incomplete or duplicate decisions",
+      "view_read_authorizer_invalid",
+      "internal",
+    );
+  }
+}
+
+function uniqueRefs(refs: Array<{ view_id: string; revision: number }>): Array<{ view_id: string; revision: number }> {
+  return [...new Map(refs.map(ref => [refKey(ref), ref])).values()];
+}
+
+function refKey(ref: { view_id: string; revision: number }): string {
+  return `${ref.view_id}@${ref.revision}`;
+}
+
+function searchCategory(code: string): OperationErrorCategory {
+  if (code === "view_not_found") return "not_found";
+  if (code === "view_read_forbidden" || code === "mode_forbidden") return "forbidden";
+  if (code.includes("stale") || code === "cursor_request_mismatch") return "conflict";
+  if (code === "observer_failed" || code.endsWith("_failed")) return "failed_dependency";
+  return "invalid_request";
 }
 
 function executionCategory(code: string): OperationErrorCategory {

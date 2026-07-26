@@ -42,6 +42,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/view-package.test.ts",
   "tests/view-query-time-range.test.ts",
   "tests/view-search-projection.test.ts",
+  "tests/view-search-service.test.ts",
   "tests/view-store.test.ts",
   "tests/view-v1.test.ts",
 ] as const;

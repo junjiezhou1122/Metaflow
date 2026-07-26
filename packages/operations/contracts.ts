@@ -6,12 +6,13 @@ import {
   IdentifierSchema,
   JsonValueSchema,
   RelationTraversalQuerySchema,
+  ReindexViewSearchInputSchema,
   SourceTombstoneParametersSchema,
   TimestampSchema,
-  ViewQuerySchema,
   type JsonObject,
   type JsonValue,
 } from "@info/view";
+import { SearchRequestV1Schema } from "@info/search";
 import {
   ExactTransformationRefSchema,
   TransformationSchema,
@@ -27,6 +28,7 @@ export const OPERATION_NAMES = [
   "capture.ingest",
   "view.get",
   "view.search",
+  "view.search.reindex",
   "view.traverse",
   "view.tombstone",
   "transformation.submit",
@@ -49,7 +51,8 @@ export const OperationInputSchemas = {
   "catalog.list": z.object({}).strict(),
   "capture.ingest": z.object({ batch: CaptureBatchSchema }).strict(),
   "view.get": z.object({ ref: ExactViewRefSchema }).strict(),
-  "view.search": z.object({ query: ViewQuerySchema.default({}) }).strict(),
+  "view.search": z.object({ request: SearchRequestV1Schema }).strict(),
+  "view.search.reindex": ReindexViewSearchInputSchema,
   "view.traverse": z.object({ query: RelationTraversalQuerySchema }).strict(),
   "view.tombstone": SourceTombstoneParametersSchema,
   "transformation.submit": z.object({
@@ -80,7 +83,8 @@ export const OPERATION_DESCRIPTIONS: Record<OperationName, string> = {
   "catalog.list": "List the canonical Metaflow v1 operation catalog.",
   "capture.ingest": "Atomically admit one provider-neutral Capture Batch as Raw View revisions.",
   "view.get": "Read one exact immutable View revision.",
-  "view.search": "Search View revisions through the View Store port.",
+  "view.search": "Search one authorized exact View scope with declared keyword, semantic, or relation modes.",
+  "view.search.reindex": "Explicitly rebuild the deterministic local View Search projection.",
   "view.traverse": "Traverse typed relations from one exact View revision.",
   "view.tombstone": "Append an immutable source-deletion tombstone without claiming privacy erasure.",
   "transformation.submit": "Commit one immutable Transformation revision.",

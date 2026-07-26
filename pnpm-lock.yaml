@@ -59,6 +59,9 @@ importers:
       '@info/screenpipe-capture-adapter':
         specifier: workspace:*
         version: link:packages/adapters/screenpipe-capture
+      '@info/search':
+        specifier: workspace:*
+        version: link:packages/search
       '@info/storage-sqlite':
         specifier: workspace:*
         version: link:packages/adapters/storage-sqlite
@@ -141,6 +144,9 @@ importers:
       '@info/scheduler-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/scheduler-automation
+      '@info/search':
+        specifier: workspace:*
+        version: link:../../packages/search
       '@info/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/adapters/storage-sqlite
@@ -192,7 +198,7 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: ^0.22.1
-        version: 0.22.1(zod@3.25.76)
+        version: 0.22.1(zod@4.4.3)
       '@info/execution':
         specifier: workspace:*
         version: link:../../execution
@@ -364,6 +370,9 @@ importers:
       '@info/execution':
         specifier: workspace:*
         version: link:../../execution
+      '@info/search':
+        specifier: workspace:*
+        version: link:../../search
       '@info/view':
         specifier: workspace:*
         version: link:../../view
@@ -421,6 +430,9 @@ importers:
       '@info/execution':
         specifier: workspace:*
         version: link:../execution
+      '@info/search':
+        specifier: workspace:*
+        version: link:../search
       '@info/transformation':
         specifier: workspace:*
         version: link:../transformation
@@ -429,6 +441,15 @@ importers:
         version: link:../view
       zod:
         specifier: ^3.25.76
+        version: 3.25.76
+
+  packages/search:
+    dependencies:
+      '@info/view':
+        specifier: workspace:*
+        version: link:../view
+      zod:
+        specifier: ^3.24.4
         version: 3.25.76
 
   packages/transformation:
@@ -1772,10 +1793,6 @@ snapshots:
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
       - '@modelcontextprotocol/sdk'
-
-  '@agentclientprotocol/sdk@0.22.1(zod@3.25.76)':
-    dependencies:
-      zod: 3.25.76
 
   '@agentclientprotocol/sdk@0.22.1(zod@4.4.3)':
     dependencies:

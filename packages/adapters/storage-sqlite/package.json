@@ -9,6 +9,7 @@
   "dependencies": {
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
+    "@info/search": "workspace:*",
     "@info/view": "workspace:*"
   }
 }

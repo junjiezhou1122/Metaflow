@@ -142,11 +142,39 @@ test("v1 HTTP reads only an exact View revision", async () => {
       }),
       expected_revision: 0,
     });
-    const handler = handlerWith({ views });
+    const operationCalls: unknown[] = [];
+    const handler = handlerWith({
+      operations: {
+        async handle(input) {
+          operationCalls.push(input);
+          const ref = (input.body as { ref: { view_id: string; revision: number } }).ref;
+          const view = await views.get(ref);
+          return view ? {
+            status: 200,
+            headers: { "content-type": "application/json; charset=utf-8" },
+            body: { ok: true, request_id: "request:view", operation: "view.get", data: view },
+          } : {
+            status: 404,
+            headers: { "content-type": "application/json; charset=utf-8" },
+            body: {
+              ok: false,
+              request_id: "request:view",
+              operation: "view.get",
+              error: { code: "view_not_found", message: "Exact View revision does not exist", category: "not_found", details: { ref } },
+            },
+          };
+        },
+      },
+    });
     const exact = await request(handler, "GET", `/context/v1/views/${encodeURIComponent(committed.view.id)}?revision=1`);
     assert.equal(exact.status, 200);
     assert.equal(exact.body.view.id, committed.view.id);
     assert.equal(exact.body.view.revision, 1);
+    assert.deepEqual(operationCalls[0], {
+      method: "POST",
+      path: "/metaflow/v1/operations/view.get",
+      body: { ref: { view_id: committed.view.id, revision: 1 } },
+    });
 
     const latest = await request(handler, "GET", `/context/v1/views/${encodeURIComponent(committed.view.id)}`);
     assert.equal(latest.status, 400);
@@ -197,7 +225,6 @@ function baseOptions(): AmbientV1HttpHandlerOptions {
     async interact() { return {}; },
   };
   return {
-    views: { async get() { return undefined; } },
     browser_capture: { async submit() { return {}; } },
     browser_automation: automation,
     mac_automation: {

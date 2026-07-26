@@ -27,12 +27,14 @@ import {
   GrantOperationAuthorizer,
   OperationEnvelopeSchema,
   OperationService,
+  RepositoryViewReadAuthorizer,
   type OperationContext,
   type OperationEnvelope,
   type OperationName,
   type OperationObserver,
   type OperationTraceEvent,
 } from "@info/operations";
+import { SearchService } from "@info/search";
 import {
   CliOperationAdapter,
   HttpOperationAdapter,
@@ -162,8 +164,19 @@ test("Browser and Screenpipe evidence evolves through Function, Agent, feedback,
   const privacy = new PrivacyForgetService({ views, requests: views, now: clock });
   const repairs = new RepairExecutionService({ views, runtime: execution });
   const observer = new MemoryOperationObserver();
+  const viewReads = new RepositoryViewReadAuthorizer(views);
+  const search = new SearchService({
+    authorization: viewReads,
+    scope_source: views.search,
+    descriptors: views.search,
+    keyword: views.search,
+    observer: { async record() {} },
+    now: clock,
+  });
   const operations = new OperationService({
     views,
+    search,
+    view_reads: viewReads,
     transformations,
     execution,
     runs: views,
@@ -415,15 +428,20 @@ test("Browser and Screenpipe evidence evolves through Function, Agent, feedback,
     const surfaces = await createSurfaces(operations);
     try {
       const graphQueries = await Promise.all(surfaces.map(surface => surface.call("view.search", {
-        query: { revisions: "all", limit: 200 },
+        request: {
+          contract_version: 1,
+          query: { text: "Codex" },
+          scope: { kind: "exact_views", refs: [exactViewRef(page)] },
+          target: { envelope: true, internal: true, related_views: false },
+          modes: ["keyword"],
+          fusion: { strategy: "rrf@1", k: 60, weights: { keyword: 1 } },
+          failure_mode: "require_all",
+          page: { limit: 20 },
+        },
       })));
       for (const graph of graphQueries.slice(1)) assert.deepEqual(graph, graphQueries[0]);
-      const graphViews = successData(graphQueries[0]) as View[];
-      assert.ok(graphViews.some(view => view.id === page.id && view.role === "raw"));
-      assert.ok(graphViews.some(view => view.id === frame.id && view.role === "raw"));
-      assert.ok(graphViews.some(view => view.id === evolvedSummary.id && view.revision === 2));
-      assert.ok(graphViews.some(view => view.schema.name === "metaflow.execution.failure"));
-      assert.ok(graphViews.some(view => view.schema.name === "metaflow.repair.decision"));
+      const graphHits = (successData(graphQueries[0]) as { hits: Array<{ ref: ExactViewRef }> }).hits;
+      assert.deepEqual(graphHits.map(hit => hit.ref), [exactViewRef(page)]);
 
       const traversals = await Promise.all(surfaces.map(surface => surface.call("view.traverse", {
         query: { ref: exactViewRef(evolvedSummary), direction: "outgoing", limit: 50 },

@@ -20,10 +20,12 @@ equal the frozen canonical path, locations must honor the frozen target flags,
 and related or semantic evidence refs must already belong to the authorized
 scope. Semantic evidence from any non-semantic mode fails closed.
 
-## Issue 66 integration boundary
+## Runtime integration
 
-This package and the SQLite Search ports are the bounded issue 66 worker
-artifact. Root workspace registration, dependency-boundary catalog updates,
-`OperationService` injection, `view.search`/`view.search.reindex` catalog
-projection, and CLI/HTTP/MCP vertical registration are intentionally left to
-the integration owner so this branch does not edit shared composition files.
+`OperationService` exposes `view.search` with the complete `SearchRequestV1`
+and an explicit `view.search.reindex` operation. Ambient composes one
+repository-backed exact View read authorizer into both Search and the other
+public View read operations. SQLite supplies only scope, descriptor, relation,
+and keyword ports after Search freezes authorization. In-process, CLI, HTTP,
+and the official MCP server therefore observe the same result and failure
+envelopes.

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { CaptureIngress, ConnectorRuntime } from "@info/capture";
 import {
   AutomationContextResolver,
@@ -54,7 +54,9 @@ import {
   GrantOperationAuthorizer,
   JsonConsoleOperationObserver,
   OperationService,
+  RepositoryViewReadAuthorizer,
 } from "@info/operations";
+import { SearchService } from "@info/search";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
 import { exactTransformationRef, type Transformation } from "@info/transformation";
 import {
@@ -234,8 +236,30 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     });
     const feedback = new FeedbackEvolutionService({ views, runs: views, transformations });
     const privacy = new PrivacyForgetService({ views, requests: views, now: () => now().toISOString() });
+    const viewReads = new RepositoryViewReadAuthorizer(views);
+    const search = new SearchService({
+      authorization: viewReads,
+      scope_source: views.search,
+      descriptors: views.search,
+      keyword: views.search,
+      observer: {
+        async record(event, cause) {
+          console.info(JSON.stringify({
+            component: "metaflow-search",
+            ...event,
+            ...(cause instanceof Error ? {
+              cause_name: cause.name,
+              cause_message_digest: createHash("sha256").update(cause.message).digest("hex"),
+            } : {}),
+          }));
+        },
+      },
+      now: () => now().toISOString(),
+    });
     const operationService = new OperationService({
       views,
+      search,
+      view_reads: viewReads,
       transformations,
       execution,
       runs: views,
@@ -252,7 +276,6 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       principal: { id: "user:local", grants: ["*"] },
     }));
     const handler = createAmbientV1HttpHandler({
-      views,
       browser_capture: browserCapture,
       browser_automation: browserAutomation,
       mac_automation: macAutomation,

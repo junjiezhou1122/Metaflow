@@ -479,7 +479,7 @@ test("Chrome canonical event crosses HTTP and shared Runtime into one exact Raw 
     const ingress = new CaptureIngress({ repository });
     const runtime = new ConnectorRuntime(repository, ingress);
     const controller = await configureBrowserCapture({ runtime });
-    const handler = captureHttpHandler(repository, controller);
+    const handler = captureHttpHandler(controller);
     const event = buildBrowserCaptureEvent({
       ...browserEvent(),
       source: { connector: "chrome-extension", connection_id: "chrome:default" },
@@ -511,7 +511,6 @@ test("Chrome canonical event crosses HTTP and shared Runtime into one exact Raw 
 });
 
 function captureHttpHandler(
-  views: SqliteViewRepository,
   browserCapture: { submit(input: unknown): Promise<unknown> },
 ) {
   const automation = {
@@ -520,7 +519,6 @@ function captureHttpHandler(
     async interact() { return {}; },
   };
   return createAmbientV1HttpHandler({
-    views,
     browser_capture: browserCapture,
     browser_automation: automation,
     mac_automation: {

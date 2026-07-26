@@ -23,13 +23,15 @@ import {
   OPERATION_NAMES,
   OperationEnvelopeSchema,
   OperationService,
+  RepositoryViewReadAuthorizer,
   type OperationContext,
   type OperationEnvelope,
   type OperationName,
   type OperationObserver,
   type OperationTraceEvent,
 } from "@info/operations";
-import { PrivacyForgetService, exactViewRef } from "@info/view";
+import { SearchService } from "@info/search";
+import { PrivacyForgetService, exactViewRef, parseViewDraft } from "@info/view";
 import {
   CliOperationAdapter,
   HttpOperationAdapter,
@@ -89,6 +91,54 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
   });
 });
 
+test("operation grants cannot bypass exact private View read authorization", async () => {
+  await withHarness(async harness => {
+    const committed = await harness.views.commit({
+      draft: parseViewDraft({
+        id: "view:private:other-owner",
+        name: "Other owner's private English notes",
+        purpose: "Prove operation grants do not grant content access",
+        schema: {
+          name: "private.notes",
+          version: 1,
+          mode: "freeform",
+          search_projection: { version: 1, fields: [{ path: "/name", category: "title" }] },
+        },
+        role: "derived",
+        time: { created_at: "2026-07-26T14:00:04.000Z" },
+        representation: { form: "inline", kind: "markdown", media_type: "text/markdown", value: "private" },
+        materialization: {
+          primary: { id: "canonical", format: "markdown", media_type: "text/markdown", location: { kind: "inline" } },
+        },
+        provenance: { inputs: [], actor: "user:other" },
+        policy: {
+          owner: "user:other",
+          visibility: "private",
+          privacy: "private",
+          retention: "normal",
+          allow_external_model: false,
+          allow_embedding: false,
+          labels: [],
+        },
+      }),
+      expected_revision: 0,
+    });
+    const ref = exactViewRef(committed.view);
+    for (const [operation, input] of [
+      ["view.get", { ref }],
+      ["view.search", { request: searchRequest(ref, "English") }],
+      ["view.traverse", { query: { ref, direction: "both", limit: 10 } }],
+    ] as const) {
+      const result = await harness.service.execute({ operation, input }, context(`request:private:${operation}`));
+      assert.equal(result.ok, false, operation);
+      if (!result.ok) {
+        assert.equal(result.error.code, "view_read_forbidden", operation);
+        assert.equal(result.error.category, "forbidden", operation);
+      }
+    }
+  });
+});
+
 for (const surfaceName of ["in-process", "cli", "http", "mcp"] as const) {
   test(`${surfaceName} completes the full v1 operation catalog scenario`, async () => {
     await withHarness(async harness => {
@@ -104,9 +154,14 @@ for (const surfaceName of ["in-process", "cli", "http", "mcp"] as const) {
         const exact = await ok(surface.call("view.get", { ref: source }));
         assert.equal((exact.data as any).schema.name, "capture.operation.page");
         const searched = await ok(surface.call("view.search", {
-          query: { schema_name: "capture.operation.page", revisions: "all", limit: 10 },
+          request: searchRequest(source, "Operation"),
         }));
-        assert.equal((searched.data as unknown[]).length, 1);
+        assert.equal((searched.data as { hits: unknown[] }).hits.length, 1);
+        const reindexed = await ok(surface.call("view.search.reindex", {
+          run_id: `reindex:${surfaceName}`,
+          requested_at: "2026-07-26T14:00:05.000Z",
+        }));
+        assert.equal((reindexed.data as { status: string }).status, "succeeded");
         const traversed = await ok(surface.call("view.traverse", { query: { ref: source, direction: "both", limit: 10 } }));
         assert.deepEqual(traversed.data, []);
 
@@ -291,8 +346,19 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
   const feedback = new FeedbackEvolutionService({ views, runs: views, transformations });
   const privacy = new PrivacyForgetService({ views, requests: views, now: clock });
   const observer = new MemoryObserver();
+  const viewReads = new RepositoryViewReadAuthorizer(views);
+  const search = new SearchService({
+    authorization: viewReads,
+    scope_source: views.search,
+    descriptors: views.search,
+    keyword: views.search,
+    observer: { async record() {} },
+    now: clock,
+  });
   const service = new OperationService({
     views,
+    search,
+    view_reads: viewReads,
     transformations,
     execution,
     runs: views,
@@ -313,6 +379,19 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     views.close();
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function searchRequest(ref: { view_id: string; revision: number }, text: string) {
+  return {
+    contract_version: 1 as const,
+    query: { text },
+    scope: { kind: "exact_views" as const, refs: [ref] },
+    target: { envelope: true, internal: true, related_views: false },
+    modes: ["keyword" as const],
+    fusion: { strategy: "rrf@1" as const, k: 60 as const, weights: { keyword: 1 } },
+    failure_mode: "require_all" as const,
+    page: { limit: 10 },
+  };
 }
 
 class MemoryObserver implements OperationObserver {
@@ -389,7 +468,18 @@ function manualConnector(): ConnectorPort {
       protocols: ["filesystem"],
       capabilities: ["manual_import"],
       delivery_kinds: ["manual_import"],
-      emitted_schemas: [{ name: "capture.operation.page", version: 1, mode: "freeform" }],
+      emitted_schemas: [{
+        name: "capture.operation.page",
+        version: 1,
+        mode: "freeform",
+        search_projection: {
+          version: 1,
+          fields: [
+            { path: "/name", category: "title" },
+            { path: "/representation/value/text", category: "text" },
+          ],
+        },
+      }],
     },
     async health() { return { capabilities: ["manual_import"] }; },
     async *open() { throw new Error("Manual-import connector must not be opened"); },
@@ -412,7 +502,18 @@ function captureRequest(id: string) {
           name: "Captured operation page",
           purpose: "Exercise the shared v1 operation surfaces",
           aliases: ["https://example.com/operations"],
-          schema: { name: "capture.operation.page", version: 1, mode: "freeform" },
+          schema: {
+            name: "capture.operation.page",
+            version: 1,
+            mode: "freeform",
+            search_projection: {
+              version: 1,
+              fields: [
+                { path: "/name", category: "title" },
+                { path: "/representation/value/text", category: "text" },
+              ],
+            },
+          },
           observed_at: "2026-07-26T14:00:00.000Z",
           captured_at: "2026-07-26T14:00:01.000Z",
           source: {

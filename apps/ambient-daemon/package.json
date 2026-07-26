@@ -18,6 +18,7 @@
     "@info/inbox-automation-adapter": "workspace:*",
     "@info/operation-surfaces": "workspace:*",
     "@info/operations": "workspace:*",
+    "@info/search": "workspace:*",
     "@info/scheduler-automation-adapter": "workspace:*",
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",

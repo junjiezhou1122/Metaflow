@@ -10,6 +10,7 @@
     "packages/execution/**/*.ts",
     "packages/automation/**/*.ts",
     "packages/capture/**/*.ts",
+    "packages/search/**/*.ts",
     "packages/operations/**/*.ts",
     "packages/adapters/**/*.ts",
     "view-packages/**/*.ts",

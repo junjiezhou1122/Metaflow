@@ -6,22 +6,15 @@ import {
   type ExactViewRef,
   type View,
 } from "@info/view";
-
-type SearchTarget = { envelope: boolean; internal: boolean; related_views: boolean };
-type SearchPathStep = { relation_id: string; type: string; from: ExactViewRef; to: ExactViewRef };
-type SearchMatch = {
-  location: { kind: "envelope" | "representation"; path: string };
-  snippet?: string;
-  value_digest: string;
-  modes: ["keyword"];
-};
-type RankedCandidate = {
-  ref: ExactViewRef;
-  owner_ref: ExactViewRef;
-  matched_schema: { name: string; version: number };
-  representation_kind: string;
-  matches: SearchMatch[];
-};
+import {
+  type KeywordRetriever,
+  type RankedSearchCandidate,
+  type SearchMatchV1,
+  type SearchPathStep,
+  type SearchScopeSource,
+  type SearchTarget,
+  type SearchViewDescriptorReader,
+} from "@info/search";
 
 type ViewJsonRow = { view_json: string };
 type RankedViewRow = { view_json: string; search_score: number };
@@ -41,7 +34,7 @@ type RelationRow = {
   target_revision: number;
 };
 
-export class SqliteViewSearchAdapter {
+export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDescriptorReader, KeywordRetriever {
   constructor(private readonly db: DatabaseSync) {}
 
   async listLatestExactRefs(input: {
@@ -119,7 +112,7 @@ export class SqliteViewSearchAdapter {
     refs: ExactViewRef[];
     target: SearchTarget;
     candidate_limit: number;
-  }): Promise<RankedCandidate[]> {
+  }): Promise<RankedSearchCandidate[]> {
     if (input.refs.length === 0) return [];
     const refs = uniqueRefs(input.refs);
     const candidateLimit = boundedInteger(input.candidate_limit, 1, 1_000, "candidate_limit");
@@ -130,7 +123,7 @@ export class SqliteViewSearchAdapter {
     if (candidates.length === 0) return [];
     const candidateViews = candidates.map(row => parseStoredView(row.view_json));
     const evidence = this.unitEvidence(candidateViews.map(exactViewRef), expression.replaceAll(" AND ", " OR "), input.target);
-    const evidenceByRef = new Map<string, SearchMatch[]>();
+    const evidenceByRef = new Map<string, SearchMatchV1[]>();
     for (const row of evidence) {
       const key = `${row.view_id}@${row.revision}`;
       const location = row.expanded_path === "/representation" || row.expanded_path.startsWith("/representation/")
@@ -152,7 +145,7 @@ export class SqliteViewSearchAdapter {
         owner_ref: exactViewRef(view),
         matched_schema: { name: view.schema.name, version: view.schema.version },
         representation_kind: view.representation.kind,
-        matches: matches.sort((left, right) => left.location.path.localeCompare(right.location.path) || left.value_digest.localeCompare(right.value_digest)),
+        matches: matches.sort((left, right) => locationKey(left).localeCompare(locationKey(right)) || left.value_digest.localeCompare(right.value_digest)),
       }] : [];
     });
   }
@@ -225,6 +218,12 @@ export class SqliteViewSearchAdapter {
     `);
     return refs.flatMap(ref => statement.all(ref.view_id, ref.revision, expression) as UnitEvidenceRow[]);
   }
+}
+
+function locationKey(match: SearchMatchV1): string {
+  return match.location.kind === "related_view"
+    ? `related:${match.location.ref.view_id}@${match.location.ref.revision}`
+    : `${match.location.kind}:${match.location.path}`;
 }
 
 export class SqliteSearchError extends Error {

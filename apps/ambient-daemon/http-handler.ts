@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HttpOperationAdapter } from "@info/operation-surfaces";
-import type { ViewRepository } from "@info/view";
 
 const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -28,7 +27,6 @@ type InboxAutomationHttpPort = {
 };
 
 export type AmbientV1HttpHandlerOptions = {
-  views: Pick<ViewRepository, "get">;
   browser_capture: BrowserCaptureHttpPort;
   browser_automation: AutomationHttpPort;
   mac_automation: MacAutomationHttpPort;
@@ -47,7 +45,6 @@ export type AmbientHttpEvent = {
 };
 
 export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions) {
-  assertMethod(options.views, "get", "View Repository");
   assertMethod(options.browser_capture, "submit", "Browser Capture");
   for (const method of ["submit", "listDeliveries", "interact"] as const) {
     assertMethod(options.browser_automation, method, "Browser Automation");
@@ -87,14 +84,15 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
           return send(response, status, problem(code, "A positive exact View revision is required"));
         }
         const viewId = decodeURIComponent(exactView[1]!);
-        const view = await options.views.get({ view_id: viewId, revision });
-        if (!view) {
-          status = 404;
-          code = "exact_view_not_found";
-          return send(response, status, problem(code, `View is missing: ${viewId}@${revision}`));
-        }
-        status = 200;
-        return send(response, status, { ok: true, view });
+        const operation = await options.operations.handle({
+          method: "POST",
+          path: "/metaflow/v1/operations/view.get",
+          body: { ref: { view_id: viewId, revision } },
+        });
+        status = operation.status;
+        if (operation.body.ok) return send(response, status, { ok: true, view: operation.body.data });
+        code = operation.body.error.code === "view_not_found" ? "exact_view_not_found" : operation.body.error.code;
+        return send(response, status, problem(code, operation.body.error.message, operation.body.error.details));
       }
 
       if (method === "POST" && path === "/capture/v1/browser-events") {

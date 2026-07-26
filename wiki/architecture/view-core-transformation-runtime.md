@@ -947,12 +947,13 @@ on their public ports:
 authenticated principal
   -> OperationService.execute(operation, input)
   -> operation authorization
-  -> Capture / View / Transformation / Execution ports
+  -> exact View read authorization where content is involved
+  -> Capture / View / Search / Transformation / Execution ports
   -> one structured success or error envelope
   -> required operation observer event
 ```
 
-The catalog covers Capture Batch admission, exact View get/search/traversal,
+The catalog covers Capture Batch admission, exact View get/search/reindex/traversal,
 Transformation submit/get, Run execute/inspect/cancel, Feedback submission,
 Failure inspection, frozen policy-decision lookup, and Run or Capture trace
 reads. `run.execute` accepts an exact Transformation reference and loads that
@@ -965,6 +966,15 @@ only from the shared error category. MCP uses the official TypeScript SDK and
 registers one tool per catalog operation. The composition root supplies the
 authenticated principal out of band, so payloads cannot self-assign grants.
 No surface imports SQLite or reimplements domain behavior.
+
+Operation authorization and View content authorization are separate. A grant
+permits a principal to call `view.get`, `view.search`, `view.traverse`, or
+`failure.inspect`; the shared exact View authorizer still decides whether each
+requested revision is readable. Owner and public reads are deterministic.
+Shared non-owner reads fail closed until a versioned sharing ACL is introduced.
+Search freezes this authorized scope before SQLite FTS or relation retrieval,
+and the retained exact-View compatibility HTTP route delegates to `view.get`
+instead of reading the repository directly.
 
 Active cancellation is coordinated by an AbortController in the operation
 service. The controller only signals Execution Runtime; Execution remains the
