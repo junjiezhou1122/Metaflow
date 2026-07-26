@@ -9,6 +9,7 @@ import {
   exactViewRef,
   type JsonObject,
   type PrivacyForgetService,
+  type ViewGraphProjectionSource,
   type ViewRepository,
 } from "@info/view";
 import {
@@ -58,9 +59,14 @@ import {
   type OperationName,
   type OperationObserver,
 } from "./contracts.js";
+import {
+  ViewGraphProjectionOperationError,
+  projectAuthorizedViewGraph,
+} from "./graph-project.js";
 
 export type OperationServiceDependencies = {
   views: ViewRepository;
+  graph: ViewGraphProjectionSource;
   search: Pick<SearchService, "search">;
   view_reads: ViewReadAuthorizationPort;
   transformations: TransformationRepository;
@@ -186,6 +192,13 @@ export class OperationService {
         if (!view) throw new OperationServiceError("Exact View revision does not exist", "view_not_found", "not_found", { ref: input.ref });
         return view;
       }
+      case "view.graph.project":
+        return projectAuthorizedViewGraph({
+          request: input.request,
+          principal: { id: context.principal.id },
+          authorization: this.dependencies.view_reads,
+          source: this.dependencies.graph,
+        });
       case "view.search":
         return this.dependencies.search.search({
           request_id: context.request_id,
@@ -389,6 +402,14 @@ function operationError(cause: unknown): OperationError {
       message: cause.message,
       category: searchCategory(cause.code),
       details: { stage: cause.stage, retryable: cause.retryable },
+    });
+  }
+  if (cause instanceof ViewGraphProjectionOperationError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: "internal",
+      details: cause.details,
     });
   }
   if (cause instanceof z.ZodError) {

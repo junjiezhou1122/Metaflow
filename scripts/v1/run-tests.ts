@@ -39,6 +39,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/v0-migration-boundaries.test.ts",
   "tests/view-access-policy.test.ts",
   "tests/view-contract.test.ts",
+  "tests/view-graph-project.test.ts",
   "tests/view-commit-events.test.ts",
   "tests/view-operators.test.ts",
   "tests/view-package.test.ts",

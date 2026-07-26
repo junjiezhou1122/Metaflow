@@ -1,10 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  ExactViewRefSchema,
+  ViewGraphRelationCursorSchema,
+  ViewRepositoryError,
   compileViewSearchMatchExpression,
   exactViewRef,
   parseView,
   type ExactViewRef,
   type View,
+  type ViewGraphNodeSummary,
+  type ViewGraphProjectionSource,
+  type ViewGraphRelationCursor,
+  type ViewGraphRelationEdge,
 } from "@info/view";
 import {
   type KeywordRetriever,
@@ -34,7 +41,7 @@ type RelationRow = {
   target_revision: number;
 };
 
-export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDescriptorReader, KeywordRetriever {
+export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDescriptorReader, KeywordRetriever, ViewGraphProjectionSource {
   constructor(private readonly db: DatabaseSync) {}
 
   async listLatestExactRefs(input: {
@@ -88,6 +95,92 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
       from: { view_id: row.source_view_id, revision: Number(row.source_revision) },
       to: { view_id: row.target_view_id, revision: Number(row.target_revision) },
     }));
+  }
+
+  async readGraphRelationPage(input: {
+    frontier: ExactViewRef[];
+    direction: "incoming" | "outgoing" | "both";
+    edge_types: string[];
+    after?: ViewGraphRelationCursor;
+    limit: number;
+  }): Promise<{ edges: ViewGraphRelationEdge[]; next?: ViewGraphRelationCursor }> {
+    if (input.frontier.length === 0) return { edges: [] };
+    const frontier = uniqueRefs(input.frontier.map(ref => ExactViewRefSchema.parse(ref)));
+    const edgeTypes = uniqueStrings(input.edge_types, "edge_types");
+    const limit = boundedInteger(input.limit, 1, 256, "limit");
+    const after = input.after === undefined ? undefined : ViewGraphRelationCursorSchema.parse(input.after);
+    const frontierCte = valuesCte(frontier.length);
+    const match = input.direction === "outgoing"
+      ? "r.source_view_id = f.view_id and r.source_revision = f.revision"
+      : input.direction === "incoming"
+        ? "r.target_view_id = f.view_id and r.target_revision = f.revision"
+        : "((r.source_view_id = f.view_id and r.source_revision = f.revision) or (r.target_view_id = f.view_id and r.target_revision = f.revision))";
+    const afterClause = after
+      ? `and (r.type, r.source_view_id, r.source_revision, r.target_view_id, r.target_revision, r.id)
+           > (?, ?, ?, ?, ?, ?)`
+      : "";
+    try {
+      const rows = this.db.prepare(`
+        with frontier(view_id, revision) as (${frontierCte})
+        select distinct r.id, r.type, r.source_view_id, r.source_revision, r.target_view_id, r.target_revision
+        from frontier f
+        join view_relations_v1 r on ${match}
+        where r.type in (${placeholders(edgeTypes.length)})
+          ${afterClause}
+        order by r.type asc, r.source_view_id asc, r.source_revision asc,
+                 r.target_view_id asc, r.target_revision asc, r.id asc
+        limit ?
+      `).all(
+        ...flattenRefs(frontier),
+        ...edgeTypes,
+        ...(after ? [
+          after.type,
+          after.source.view_id,
+          after.source.revision,
+          after.target.view_id,
+          after.target.revision,
+          after.relation_id,
+        ] : []),
+        limit + 1,
+      ) as RelationRow[];
+      const hasMore = rows.length > limit;
+      const pageRows = rows.slice(0, limit);
+      const edges = pageRows.map(graphEdge);
+      const last = edges.at(-1);
+      return {
+        edges,
+        ...(hasMore && last ? { next: graphCursor(last) } : {}),
+      };
+    } catch (cause) {
+      throw new ViewRepositoryError(
+        "failed to read the deterministic View graph relation page",
+        "storage_failure",
+        { operation: "view_graph_project", phase: "read_relations", sqlite_code: sqliteErrorCode(cause) },
+        { cause },
+      );
+    }
+  }
+
+  async readGraphNodeSummaries(refsValue: ExactViewRef[]): Promise<ViewGraphNodeSummary[]> {
+    if (refsValue.length === 0) return [];
+    const refs = uniqueRefs(refsValue.map(ref => ExactViewRefSchema.parse(ref)));
+    try {
+      const rows = this.db.prepare(`
+        with requested(view_id, revision) as (${valuesCte(refs.length)})
+        select r.view_json
+        from requested q
+        join view_revisions_v1 r on r.id = q.view_id and r.revision = q.revision
+        order by r.id asc, r.revision asc
+      `).all(...flattenRefs(refs)) as ViewJsonRow[];
+      return rows.map(row => graphSummary(parseStoredView(row.view_json)));
+    } catch (cause) {
+      throw new ViewRepositoryError(
+        "failed to read authorized View graph node summaries",
+        "storage_failure",
+        { operation: "view_graph_project", phase: "read_summaries", sqlite_code: sqliteErrorCode(cause) },
+        { cause },
+      );
+    }
   }
 
   async describe(refsValue: ExactViewRef[]): Promise<Array<{
@@ -241,6 +334,39 @@ function descriptor(view: View) {
   };
 }
 
+function graphEdge(row: RelationRow): ViewGraphRelationEdge {
+  return {
+    id: row.id,
+    type: row.type,
+    source: { view_id: row.source_view_id, revision: Number(row.source_revision) },
+    target: { view_id: row.target_view_id, revision: Number(row.target_revision) },
+  };
+}
+
+function graphCursor(edge: ViewGraphRelationEdge): ViewGraphRelationCursor {
+  return {
+    type: edge.type,
+    source: edge.source,
+    target: edge.target,
+    relation_id: edge.id,
+  };
+}
+
+function graphSummary(view: View): ViewGraphNodeSummary {
+  return {
+    ref: exactViewRef(view),
+    name: view.name,
+    purpose: view.purpose,
+    schema: { name: view.schema.name, version: view.schema.version },
+    role: view.role,
+    time: view.time,
+    representation: {
+      kind: view.representation.kind,
+      ...(view.representation.media_type ? { media_type: view.representation.media_type } : {}),
+    },
+  };
+}
+
 function parseStoredView(value: string): View {
   return parseView(JSON.parse(value));
 }
@@ -306,4 +432,9 @@ function compareViewJsonIdentity(leftJson: string, rightJson: string): number {
   const left = parseStoredView(leftJson);
   const right = parseStoredView(rightJson);
   return left.id.localeCompare(right.id) || right.revision - left.revision;
+}
+
+function sqliteErrorCode(cause: unknown): string | undefined {
+  if (typeof cause !== "object" || cause === null || !("code" in cause)) return "unknown";
+  return typeof cause.code === "string" ? cause.code : "unknown";
 }

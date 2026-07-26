@@ -277,6 +277,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     });
     const operationService = new OperationService({
       views,
+      graph: views.search,
       search,
       view_reads: viewReads,
       transformations,

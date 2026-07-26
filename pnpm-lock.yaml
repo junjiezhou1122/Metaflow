@@ -603,6 +603,15 @@ importers:
         specifier: ^3.24.4
         version: 3.25.76
 
+  view-packages/application-space:
+    dependencies:
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../packages/view
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../../packages/view-package
+
   view-packages/github-repository-summary:
     dependencies:
       '@info/view-package':
