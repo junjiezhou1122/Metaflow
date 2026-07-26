@@ -89,12 +89,27 @@ suite passed with 403 tests, one intentional live Screenpipe skip, and zero
 failures alongside the focused semantic, View Store, Forget, vertical,
 typecheck, boundary, frozen-install, and production-deploy gates.
 
+The final integrity repair makes committed strict, policy-eligible embedding
+Views the authoritative expected set rather than treating mappings as the
+inventory. A regression removes both the mapping and physical row, reopens in
+`reindex_required` with one honest missing count, rejects an older successful
+run, and proves a new durable reindex reconstructs the exact evidence. A second
+regression corrupts physical metadata through a live connection: the detecting
+Search fails with `vector_mapping_corrupt`, maintenance latches before return,
+all later semantic reads/writes and stale replay stay blocked, and only the new
+committed reindex clears the state. On Node `v24.14.0`, the final focused run
+passed `16/16`; the 49-file full runner passed `405` with one intentional live
+Screenpipe skip and zero failures. View Store passed `12/12`, Privacy
+Forget/Capture `20/20`, and deploy, vertical, typecheck, dependency boundaries,
+23 boundary regressions, and frozen-lockfile installation also passed.
+
 ## Failure behavior
 
 A database with stored vector profiles refuses to reopen without the same
 semantic configuration. Extension/profile/version/dimension/metric/table
 incompatibility or cross-profile physical metadata fails initialization.
-Missing mappings and physical orphans instead open in an explicit
+Missing mappings, missing physical rows, loss of both rows, and physical
+orphans instead open in an explicit
 `reindex_required` maintenance state so only a new durable reindex can proceed.
 Invalid embedding provenance, policy,
 target location, digest, or vector fails the whole View transaction. An

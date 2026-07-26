@@ -140,6 +140,22 @@ type MappingRow = {
   source_digest: string;
 };
 type SemanticRow = MappingRow & { view_json: string; distance: number };
+type IntegrityMappingRow = MappingRow & {
+  target_key: string;
+  dimension: number;
+  distance_metric: "cosine" | "l2";
+};
+type ExpectedEmbedding = {
+  view: View;
+  value: EmbeddingValue;
+  profile: ProfileRow;
+};
+type IntegrityInspection = {
+  vector_rows: number;
+  orphans: number;
+  missing: number;
+  mismatched: number;
+};
 
 export type SqliteVecCompatibilityEvidence = {
   package_version: typeof SQLITE_VEC_PACKAGE_VERSION;
@@ -218,6 +234,11 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     return this.reindexRequired
       ? { status: "reindex_required", ...this.reindexRequired }
       : { status: "ready" };
+  }
+
+  refreshMaintenanceState(): SqliteVecMaintenanceState {
+    if (!this.reindexRequired) this.latchIntegrity(this.inspectIntegrity());
+    return this.maintenance;
   }
 
   static assertUnconfiguredDatabase(db: DatabaseSync): void {
@@ -325,6 +346,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
         || physical.target_key !== row.target_key
         || physical.target_kind !== row.target_kind
       ) {
+        this.latchDetectedIntegrity();
         throw new SqliteVecSemanticSearchError(
           `Vector row ${row.vector_rowid} metadata does not match ${profileKey(profile)}`,
           "vector_mapping_corrupt",
@@ -333,6 +355,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       const deleted = this.db.prepare(`delete from ${quoteIdentifier(profile.table_name)} where rowid = ?`)
         .run(BigInt(row.vector_rowid));
       if (Number(deleted.changes) !== 1) {
+        this.latchDetectedIntegrity();
         throw new SqliteVecSemanticSearchError(
           `Vector row ${row.vector_rowid} is missing for ${profileKey(profile)}`,
           "vector_mapping_corrupt",
@@ -393,7 +416,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     target: SearchTarget;
     candidate_limit: number;
   }): Promise<RankedSearchCandidate[]> {
-    this.assertReady("retrieve");
+    this.assertLiveIntegrityForRetrieve();
     if (input.refs.length === 0) return [];
     const vector = QueryVectorSchema.parse(input.vector);
     const profile = this.requireProfile(input.profile);
@@ -456,6 +479,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       BigInt(profile.revision),
     ) as SemanticRow[];
     if (rows.length !== eligible) {
+      this.latchDetectedIntegrity();
       throw new SqliteVecSemanticSearchError(
         `Semantic profile ${profileKey(profile)} has inconsistent mapping and vec0 rows in the authorized scope`,
         "vector_mapping_corrupt",
@@ -528,6 +552,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
           and profile_id = ? and profile_revision = ?
       `).get(view.id, view.revision, profile.id, profile.revision);
       if (!mapping) {
+        this.latchDetectedIntegrity();
         throw new SqliteVecSemanticSearchError(
           `Committed embedding ${view.id}@${view.revision} requires explicit semantic reindex`,
           "vector_mapping_corrupt",
@@ -536,7 +561,21 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     }
   }
 
-  private inspectIntegrity(): { vector_rows: number; orphans: number; missing: number; mismatched: number } {
+  private inspectIntegrity(): IntegrityInspection {
+    const expected = this.expectedEligibleEmbeddings();
+    const mappings = this.db.prepare(`
+      select vector_rowid, embedding_view_id, embedding_revision,
+             target_view_id, target_revision, target_kind, target_path, target_key,
+             profile_id, profile_revision, dimension, distance_metric, source_digest
+      from view_search_vectors_v1
+      order by embedding_view_id, embedding_revision
+    `).all() as IntegrityMappingRow[];
+    const mappingsByEmbedding = new Map(
+      mappings.map(mapping => [refKey({
+        view_id: mapping.embedding_view_id,
+        revision: Number(mapping.embedding_revision),
+      }), mapping]),
+    );
     let vectorRows = 0;
     let orphans = 0;
     let missing = 0;
@@ -550,25 +589,67 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
          and m.profile_id = ? and m.profile_revision = ?
         where m.vector_rowid is null
       `).get(profile.id, profile.revision) as { count: number }).count);
-      missing += Number((this.db.prepare(`
-        select count(*) as count from view_search_vectors_v1 m
-        left join ${quoteIdentifier(profile.table_name)} v
-          on v.rowid = m.vector_rowid
-         and v.profile_id = m.profile_id
-         and v.profile_revision = m.profile_revision
-        where m.profile_id = ? and m.profile_revision = ? and v.rowid is null
-      `).get(profile.id, profile.revision) as { count: number }).count);
-      mismatched += Number((this.db.prepare(`
-        select count(*) as count from view_search_vectors_v1 m
-        join ${quoteIdentifier(profile.table_name)} v on v.rowid = m.vector_rowid
-        where m.profile_id = ? and m.profile_revision = ?
-          and (v.profile_id != m.profile_id
-            or v.profile_revision != m.profile_revision
-            or v.target_key != m.target_key
-            or v.target_kind != m.target_kind)
-      `).get(profile.id, profile.revision) as { count: number }).count);
+    }
+
+    for (const mapping of mappings) {
+      const key = refKey({
+        view_id: mapping.embedding_view_id,
+        revision: Number(mapping.embedding_revision),
+      });
+      if (!expected.has(key)) mismatched += 1;
+    }
+    for (const [key, embedding] of expected) {
+      const mapping = mappingsByEmbedding.get(key);
+      if (!mapping) {
+        missing += 1;
+        continue;
+      }
+      if (!mappingMatchesExpected(mapping, embedding)) {
+        mismatched += 1;
+        continue;
+      }
+      const physical = this.db.prepare(`
+        select target_key, target_kind, profile_id, profile_revision
+        from ${quoteIdentifier(embedding.profile.table_name)} where rowid = ?
+      `).get(BigInt(mapping.vector_rowid)) as {
+        target_key: string;
+        target_kind: string;
+        profile_id: string;
+        profile_revision: number;
+      } | undefined;
+      if (!physical) {
+        missing += 1;
+        continue;
+      }
+      if (
+        physical.target_key !== mapping.target_key
+        || physical.target_kind !== mapping.target_kind
+        || physical.profile_id !== mapping.profile_id
+        || Number(physical.profile_revision) !== Number(mapping.profile_revision)
+      ) {
+        mismatched += 1;
+      }
     }
     return { vector_rows: vectorRows, orphans, missing, mismatched };
+  }
+
+  private expectedEligibleEmbeddings(): Map<string, ExpectedEmbedding> {
+    const rows = this.db.prepare("select view_json from view_revisions_v1 order by id, revision").all() as Array<{
+      view_json: string;
+    }>;
+    const expected = new Map<string, ExpectedEmbedding>();
+    for (const row of rows) {
+      const view = parseView(JSON.parse(row.view_json));
+      if (!isReservedEmbeddingView(view)) continue;
+      const value = embeddingValue(view);
+      if (!value) continue;
+      const profile = this.requireProfile(value.profile);
+      const target = this.readTarget(value.target.ref);
+      assertEmbeddingEvidence(view, value, target, profile);
+      if (view.policy.allow_local_search === false || target.policy.allow_local_search === false) continue;
+      expected.set(refKey(exactViewRef(view)), { view, value, profile });
+    }
+    return expected;
   }
 
   private initializeMaintenanceState(): void {
@@ -580,11 +661,35 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       );
     }
     if (integrity.orphans !== 0 || integrity.missing !== 0) {
-      this.reindexRequired = {
-        orphan_rows: integrity.orphans,
-        missing_rows: integrity.missing,
-      };
+      this.latchIntegrity(integrity);
     }
+  }
+
+  private assertLiveIntegrityForRetrieve(): void {
+    this.assertReady("retrieve");
+    const integrity = this.inspectIntegrity();
+    this.latchIntegrity(integrity);
+    if (integrity.mismatched !== 0) {
+      throw new SqliteVecSemanticSearchError(
+        `Semantic vector live integrity failed: ${integrity.mismatched} profile or target metadata mismatches`,
+        "vector_mapping_corrupt",
+      );
+    }
+    this.assertReady("retrieve");
+  }
+
+  private latchDetectedIntegrity(): void {
+    this.latchIntegrity(this.inspectIntegrity());
+    this.reindexRequired ??= { orphan_rows: 0, missing_rows: 1 };
+  }
+
+  private latchIntegrity(integrity: IntegrityInspection): void {
+    if (this.reindexRequired) return;
+    if (integrity.orphans === 0 && integrity.missing === 0 && integrity.mismatched === 0) return;
+    this.reindexRequired = {
+      orphan_rows: integrity.orphans,
+      missing_rows: integrity.missing + integrity.mismatched,
+    };
   }
 
   private assertReady(operation: "retrieve" | "insert" | "delete"): void {
@@ -819,6 +924,22 @@ function assertEmbeddingEvidence(view: View, value: EmbeddingValue, target: View
   if (source === undefined || sqliteVecSourceDigest(source) !== value.target.source_digest) {
     throw new SqliteVecSemanticSearchError("Embedding source digest does not match the exact target location", "embedding_invalid");
   }
+}
+
+function mappingMatchesExpected(mapping: IntegrityMappingRow, expected: ExpectedEmbedding): boolean {
+  const { view, value, profile } = expected;
+  return mapping.embedding_view_id === view.id
+    && Number(mapping.embedding_revision) === view.revision
+    && mapping.target_view_id === value.target.ref.view_id
+    && Number(mapping.target_revision) === value.target.ref.revision
+    && mapping.target_kind === value.target.location.kind
+    && mapping.target_path === value.target.location.path
+    && mapping.target_key === refKey(value.target.ref)
+    && mapping.profile_id === profile.id
+    && Number(mapping.profile_revision) === profile.revision
+    && Number(mapping.dimension) === profile.dimension
+    && mapping.distance_metric === profile.distance_metric
+    && mapping.source_digest === value.target.source_digest;
 }
 
 function policyIsAtLeastAsStrict(candidate: ViewPolicy, inherited: ViewPolicy): boolean {

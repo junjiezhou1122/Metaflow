@@ -135,6 +135,77 @@ test("semantic startup rejects missing or incompatible profile configuration", (
   }
 });
 
+test("committed eligible embeddings remain authoritative when mapping and vec rows are both missing", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-double-missing-"));
+  const database = join(directory, "views.sqlite");
+  let repository: SqliteViewRepository | undefined = semanticRepository(database);
+  const staleRun = { run_id: "semantic:reindex:before-double-missing", requested_at: "2026-07-27T08:05:00.000Z" };
+  try {
+    const target = await commit(repository, targetDraft("view:double-missing:target", "double missing target"));
+    const embedding = await commit(
+      repository,
+      embeddingDraft("view:double-missing:embedding", target, [1, 0, 0]),
+    );
+    await repository.reindexSearch(staleRun);
+
+    const extensionPath = repository.semantic_search!.compatibility.extension_path;
+    repository.close();
+    repository = undefined;
+    const audit = new DatabaseSync(database, { allowExtension: true });
+    audit.loadExtension(extensionPath);
+    const profile = audit.prepare("select table_name from view_search_vector_profiles_v1").get() as { table_name: string };
+    const mapping = audit.prepare(`
+      select vector_rowid from view_search_vectors_v1 where embedding_view_id = ? and embedding_revision = ?
+    `).get(embedding.id, embedding.revision) as { vector_rowid: number };
+    audit.prepare(`delete from "${profile.table_name}" where rowid = ?`).run(BigInt(mapping.vector_rowid));
+    audit.prepare(`
+      delete from view_search_vectors_v1 where embedding_view_id = ? and embedding_revision = ?
+    `).run(embedding.id, embedding.revision);
+    audit.close();
+
+    repository = semanticRepository(database);
+    assert.deepEqual(repository.semantic_search!.maintenance, {
+      status: "reindex_required",
+      orphan_rows: 0,
+      missing_rows: 1,
+    });
+    await assert.rejects(
+      semanticSearch(repository, [target], [1, 0, 0]),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "retrieval_failed"
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "reindex_required",
+    );
+    await assert.rejects(
+      repository.reindexSearch(staleRun),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "conflict",
+    );
+
+    const repaired = await repository.reindexSearch({
+      run_id: "semantic:reindex:repair-double-missing",
+      requested_at: "2026-07-27T08:06:00.000Z",
+    });
+    assert.deepEqual(repaired.semantic, {
+      adapter: "sqlite-vec",
+      extension_version: SQLITE_VEC_EXTENSION_VERSION,
+      profiles: 1,
+      scanned: 1,
+      indexed: 1,
+      excluded: 0,
+      removed: 0,
+      orphans_repaired: 0,
+      missing_rows_repaired: 1,
+    });
+    assert.deepEqual(repository.semantic_search!.maintenance, { status: "ready" });
+    const result = await semanticSearch(repository, [target, embedding], [1, 0, 0]);
+    assert.deepEqual(result.hits.map(hit => hit.ref), [exactViewRef(target)]);
+    assert.deepEqual(result.hits[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(embedding));
+  } finally {
+    repository?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("profile-scoped rowids cannot cross-resolve and metadata corruption fails query and reopen", async () => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-profile-integrity-"));
   const database = join(directory, "views.sqlite");
@@ -207,6 +278,90 @@ test("profile-scoped rowids cannot cross-resolve and metadata corruption fails q
     );
   } finally {
     repository?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("live semantic corruption latches reindex-required until a new durable reindex commits", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-live-corruption-"));
+  const database = join(directory, "views.sqlite");
+  const repository = semanticRepository(database);
+  const staleRun = { run_id: "semantic:reindex:before-live-corruption", requested_at: "2026-07-27T08:07:00.000Z" };
+  try {
+    const target = await commit(repository, targetDraft("view:live-corruption:target", "live corruption target"));
+    const embedding = await commit(
+      repository,
+      embeddingDraft("view:live-corruption:embedding", target, [0, 1, 0]),
+    );
+    await repository.reindexSearch(staleRun);
+
+    const audit = new DatabaseSync(database, { allowExtension: true });
+    audit.loadExtension(repository.semantic_search!.compatibility.extension_path);
+    const profile = audit.prepare("select table_name from view_search_vector_profiles_v1").get() as { table_name: string };
+    const mapping = audit.prepare(`
+      select vector_rowid from view_search_vectors_v1 where embedding_view_id = ? and embedding_revision = ?
+    `).get(embedding.id, embedding.revision) as { vector_rowid: number };
+    audit.prepare(`delete from "${profile.table_name}" where rowid = ?`).run(BigInt(mapping.vector_rowid));
+    audit.prepare(`
+      insert into "${profile.table_name}" (
+        rowid, embedding, target_key, target_kind, profile_id, profile_revision
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(
+      BigInt(mapping.vector_rowid),
+      new Float32Array([0, 1, 0]),
+      "view:wrong-target@1",
+      "representation",
+      PROFILE.id,
+      BigInt(PROFILE.revision),
+    );
+    audit.close();
+
+    await assert.rejects(
+      semanticSearch(repository, [target], [0, 1, 0]),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "retrieval_failed"
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "vector_mapping_corrupt",
+    );
+    assert.deepEqual(repository.semantic_search!.maintenance, {
+      status: "reindex_required",
+      orphan_rows: 0,
+      missing_rows: 1,
+    });
+    await assert.rejects(
+      semanticSearch(repository, [target], [0, 1, 0]),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "retrieval_failed"
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "reindex_required",
+    );
+    const blockedEmbedding = embeddingDraft("view:live-corruption:blocked", target, [1, 0, 0]);
+    await assert.rejects(
+      repository.commit({ draft: blockedEmbedding, expected_revision: 0 }),
+      (error: unknown) => semanticErrorCode(error) === "reindex_required",
+    );
+    assert.equal(await repository.get({ view_id: blockedEmbedding.id, revision: 1 }), undefined);
+    assert.throws(
+      () => repository.semantic_search!.delete(exactViewRef(target)),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "reindex_required",
+    );
+    await assert.rejects(
+      repository.reindexSearch(staleRun),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "conflict",
+    );
+
+    const repaired = await repository.reindexSearch({
+      run_id: "semantic:reindex:repair-live-corruption",
+      requested_at: "2026-07-27T08:08:00.000Z",
+    });
+    assert.equal(repaired.semantic?.missing_rows_repaired, 1);
+    assert.equal(repaired.semantic?.orphans_repaired, 0);
+    assert.deepEqual(repository.semantic_search!.maintenance, { status: "ready" });
+    const result = await semanticSearch(repository, [target, embedding], [0, 1, 0]);
+    assert.deepEqual(result.hits.map(hit => hit.ref), [exactViewRef(target)]);
+    assert.deepEqual(result.hits[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(embedding));
+  } finally {
+    repository.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -336,7 +491,7 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
     assert.deepEqual(repository.semantic_search!.maintenance, {
       status: "reindex_required",
       orphan_rows: 2,
-      missing_rows: 0,
+      missing_rows: 1,
     });
     await assert.rejects(
       semanticSearch(repository, [retainedTarget], [0, 1, 0]),
@@ -368,7 +523,7 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
       excluded: 0,
       removed: 1,
       orphans_repaired: 2,
-      missing_rows_repaired: 0,
+      missing_rows_repaired: 1,
     });
     assert.deepEqual(repository.semantic_search!.maintenance, { status: "ready" });
     assert.deepEqual(

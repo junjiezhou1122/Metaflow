@@ -86,13 +86,17 @@ but there is no separate canonical Worker domain layer.
   Pointer evidence in per-scalar FTS units, resolves exact relation layers, and
   indexes only strict committed embedding Derived Views whose exact target,
   location, source digest, profile, model, dimension, metric, provenance, and
-  policy pass startup and commit checks. Vector mappings and `vec0` rows share
+  policy pass startup and commit checks. Those committed eligible embedding
+  Views are the authoritative expected set: losing both a mapping and its
+  physical row still requires explicit repair. Vector mappings and `vec0` rows share
   commit, rollback, Privacy Forget, reopen, and durable reindex/orphan-repair
   transactions with View and FTS state. Physical vector identity includes the
   exact profile revision; profile/target metadata mismatch fails before Search
   can return evidence. Missing or orphaned rows open an observable
   `reindex_required` maintenance state that blocks semantic retrieval and
-  mutation until a new durable reindex commits. Missing/incompatible extension,
+  mutation until a new durable reindex commits. Integrity discovered after
+  startup latches the same state before returning, and an older successful
+  reindex cannot clear it. Missing/incompatible extension,
   profile, ABI, or unsafe persisted vector state fails without a cosine or
   remote fallback. It publishes events only after commit and never invokes
   Automation or III directly. The existing Search read adapter also implements
