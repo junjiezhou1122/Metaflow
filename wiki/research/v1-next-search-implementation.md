@@ -195,7 +195,7 @@ type SearchRequestV1 = {
         max_depth: number;
         max_nodes: number;
       }
-    | { kind: "all_visible" };
+    | { kind: "all_visible"; max_nodes: number; max_scan: number };
   target: {
     envelope: boolean;
     internal: boolean;
@@ -221,8 +221,10 @@ type SearchRequestV1 = {
 
 Rules:
 
-- Arrays are non-empty, unique, and bounded. `max_depth`, `max_nodes`, candidate
-  counts, snippet bytes, and total execution time have hard maxima.
+- Arrays are non-empty, unique, and bounded. `max_depth`, `max_nodes`,
+  `max_scan`, candidate counts, snippet bytes, and total execution time have
+  hard maxima. For `all_visible`, `max_nodes` bounds authorized output while
+  `max_scan` bounds every enumerated ref, including denied refs.
 - `latest` is not a scope value. A caller resolves it before submitting the
   request so the request and cursor fingerprint contain only exact refs.
 - `semantic` requires one exact embedding profile. Document vectors indexed
@@ -316,6 +318,11 @@ Scope authorization must happen before a retriever computes candidates. Do not
 retrieve globally and filter later: result counts, ranks, snippets, distances,
 and paths would leak denied content. Intermediate nodes in a returned path must
 also be authorized; otherwise the path is unavailable, not partially redacted.
+Scope-source edges must match the exact requested frontier, direction, and
+relation type. Retriever paths must equal the frozen canonical path, locations
+must honor the frozen target, and related or semantic evidence refs must already
+be part of the authorized scope. Semantic evidence is valid only from semantic
+mode; there is no post-retrieval repair or filtering.
 
 The existing Execution `ViewAccessAuthorizer` is Operator-use specific and
 freezes an Operator and policy snapshot. Do not call it with fake Operator
