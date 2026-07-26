@@ -9,10 +9,10 @@
     "total_javascript": 160000
   },
   "recorded_2026_07_27": {
-    "initial_shell": 86313,
-    "graph_engine": 36629,
-    "sigma_surface": 2481,
-    "layout_worker": 17441,
-    "total_javascript": 142864
+    "initial_shell": 87171,
+    "graph_engine": 36627,
+    "sigma_surface": 3466,
+    "layout_worker": 17501,
+    "total_javascript": 144765
   }
 }

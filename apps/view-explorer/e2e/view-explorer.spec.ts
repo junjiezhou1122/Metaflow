@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PNG } from "pngjs";
+import { createFixtureTransport, type FixtureTransport } from "../src/fixtures.js";
+import type { ExplorerOperation } from "../src/contracts.js";
 
 const viewports = [
   { name: "desktop", width: 1_440, height: 900 },
@@ -17,6 +19,8 @@ for (const viewport of viewports) {
     const errors = watchErrors(page);
     await page.goto("/?fixture=10");
     await ready(page, 10);
+    await expect(page.getByRole("checkbox", { name: "application_composition" })).toBeChecked();
+    await expect(page.getByLabel("Relations in projection")).toContainText("application_composition:");
     const histogram = await canvasHistogram(page);
     expect(histogram).toMatchObject({ nonBackgroundPixels: expect.any(Number) });
     expect(histogram.nonBackgroundPixels).toBeGreaterThan(20);
@@ -72,6 +76,8 @@ test("search focus, pointer and keyboard selection, expansion, filters, history,
   await page.getByRole("search").getByRole("textbox").fill("Research View 0003");
   await page.getByRole("button", { name: "Focus search result" }).click();
   await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
   await page.getByRole("button", { name: "Next neighbor" }).click();
   await expect(page.locator(".detail-heading code")).not.toHaveText("view:fixture:0003@1");
   await page.getByRole("search").getByRole("textbox").fill("Research View 0003");
@@ -102,6 +108,162 @@ test("WebGL unavailability is a visible typed failure", async ({ page }) => {
   await expect(page.locator(".sigma-container")).toHaveCount(0);
 });
 
+test("Worker SecurityError is a typed layout failure without unmount or page error", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      value: class {
+        constructor() { throw new DOMException("Worker creation blocked by policy", "SecurityError"); }
+      },
+    });
+  });
+  const errors = watchErrors(page);
+  await page.goto("/?fixture=10");
+  await expect(page.locator('[data-error-code="graph_layout_worker_start_failed"]')).toBeVisible();
+  await expect(page.locator(".sigma-container canvas").first()).toBeVisible();
+  await expect(page.locator(".explorer-shell")).toHaveAttribute("data-layout-state", "failed");
+  expect(errors).toEqual([]);
+});
+
+test("malformed current Worker response fails closed without mutating or unmounting Sigma", async ({ page }) => {
+  await page.addInitScript(() => {
+    class MalformedWorker extends EventTarget {
+      postMessage(request: { generation: number; request_id: string }) {
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: {
+          protocol_version: 1,
+          generation: request.generation,
+          request_id: request.request_id,
+          ok: true,
+          positions: [],
+        } })));
+      }
+      terminate() {}
+    }
+    Object.defineProperty(window, "Worker", { configurable: true, value: MalformedWorker });
+  });
+  const errors = watchErrors(page);
+  await page.goto("/?fixture=10");
+  await expect(page.locator('[data-error-code="graph_layout_protocol_failed"]')).toBeVisible();
+  await expect(page.locator(".sigma-container canvas").first()).toBeVisible();
+  const lifecycle = await explorerDebug(page);
+  expect(lifecycle.workersCreated).toBe(lifecycle.workersTerminated);
+  expect(errors).toEqual([]);
+});
+
+test("stale Worker generation is ignored before one complete current response becomes ready", async ({ page }) => {
+  await page.addInitScript(() => {
+    class StaleThenReadyWorker extends EventTarget {
+      postMessage(request: { generation: number; request_id: string; nodes: Array<{ key: string; x: number; y: number }> }) {
+        queueMicrotask(() => {
+          this.dispatchEvent(new MessageEvent("message", { data: { generation: request.generation - 1, request_id: "stale" } }));
+          this.dispatchEvent(new MessageEvent("message", { data: {
+            protocol_version: 1,
+            generation: request.generation,
+            request_id: request.request_id,
+            ok: true,
+            positions: request.nodes.map(node => ({ key: node.key, x: node.x, y: node.y })),
+          } }));
+        });
+      }
+      terminate() {}
+    }
+    Object.defineProperty(window, "Worker", { configurable: true, value: StaleThenReadyWorker });
+  });
+  const errors = watchErrors(page);
+  await page.goto("/?fixture=10");
+  await ready(page, 10);
+  const lifecycle = await explorerDebug(page);
+  expect(lifecycle.workersCreated).toBe(lifecycle.workersTerminated);
+  expect(errors).toEqual([]);
+});
+
+test("daemon-shaped Search atomically loads, focuses, persists, and reloads one exact View", async ({ page }, testInfo) => {
+  const transport = createFixtureTransport(10);
+  await installOperationRoute(page, transport);
+  const errors = watchErrors(page);
+  await page.goto("/");
+  await page.getByLabel("Authorized Search").fill("Research View 0003");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await ready(page, 2);
+  expect(new URL(page.url()).searchParams.get("root")).toBe("view:fixture:0003@1");
+  expect(new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0003@1");
+  await expect(page.locator(".history-strip").getByRole("button", { name: "Research View 0003" })).toBeVisible();
+  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+  expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
+  await page.screenshot({ path: testInfo.outputPath("real-operation-search.png"), animations: "disabled" });
+  await page.reload();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await ready(page, 2);
+  expect(new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0003@1");
+  await expect(page.locator(".history-strip").getByRole("button", { name: "Research View 0003" })).toBeVisible();
+  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+  expect(transport.calls.some(call => call.operation === "view.search")).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("new Search supersedes stale Search, expansion, and projection responses", async ({ page }) => {
+  const base = createFixtureTransport(10);
+  const slowSearch = deferred();
+  const slowSearchStarted = deferred();
+  const slowExpand = deferred();
+  const slowExpandStarted = deferred();
+  const slowLoad = deferred();
+  const slowLoadStarted = deferred();
+  let holdNextLoad = false;
+  const transport: FixtureTransport = {
+    calls: base.calls,
+    async call(operation, input, signal) {
+      const request = input as { request?: { query?: { text?: string }; max_nodes?: number; roots?: Array<{ view_id: string }> } };
+      if (operation === "view.search" && request.request?.query?.text === "Slow Search") {
+        slowSearchStarted.resolve();
+        await slowSearch.promise;
+      }
+      if (operation === "view.graph.project" && request.request?.max_nodes === 500) {
+        slowExpandStarted.resolve();
+        await slowExpand.promise;
+      } else if (operation === "view.graph.project" && holdNextLoad && request.request?.roots?.[0]?.view_id === "view:fixture:0004") {
+        holdNextLoad = false;
+        slowLoadStarted.resolve();
+        await slowLoad.promise;
+      }
+      return base.call(operation, input, signal);
+    },
+  };
+  await installOperationRoute(page, transport);
+  const errors = watchErrors(page);
+  await page.goto("/");
+
+  await page.getByLabel("Authorized Search").fill("Slow Search");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await slowSearchStarted.promise;
+  await page.getByLabel("Authorized Search").fill("Research View 0002");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0002@3");
+  slowSearch.resolve();
+  await expect.poll(() => new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0002@3");
+
+  await page.getByRole("button", { name: "Expand one hop" }).click();
+  await slowExpandStarted.promise;
+  await page.getByRole("search").getByRole("textbox").fill("Research View 0004");
+  await page.getByRole("button", { name: "Focus search result" }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0004@2");
+  slowExpand.resolve();
+  await expect.poll(() => new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0004@2");
+
+  holdNextLoad = true;
+  await page.getByRole("checkbox", { name: "references" }).uncheck();
+  await page.getByRole("button", { name: "Apply projection" }).click();
+  await slowLoadStarted.promise;
+  await page.getByRole("search").getByRole("textbox").fill("Research View 0006");
+  await page.getByRole("button", { name: "Focus search result" }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0006@1");
+  slowLoad.resolve();
+  await expect.poll(() => new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0006@1");
+  await assertFocusedNodeVisible(page, "view:fixture:0006@1");
+  expect(errors).toEqual([]);
+});
+
 function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -113,6 +275,43 @@ async function ready(page: Page, size: number): Promise<void> {
   await expect(page.locator(".explorer-shell")).toHaveAttribute("data-node-count", String(size));
   await expect(page.locator(".sigma-container canvas").first()).toBeVisible();
   await expect(page.locator(".explorer-shell")).toHaveAttribute("data-layout-state", "ready");
+}
+
+async function installOperationRoute(page: Page, transport: FixtureTransport): Promise<void> {
+  await page.route("**/metaflow/v1/operations/*", async route => {
+    const operation = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "") as ExplorerOperation;
+    try {
+      const result = await transport.call(operation, route.request().postDataJSON(), new AbortController().signal);
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(result) });
+    } catch {
+      await route.abort("failed").catch(() => undefined);
+    }
+  });
+}
+
+async function assertFocusedNodeVisible(page: Page, key: string): Promise<void> {
+  await expect.poll(async () => {
+    const focused = (await explorerDebug(page)).focusedNode;
+    return focused?.key === key && focused.visible && focused.x >= 0 && focused.x <= focused.width && focused.y >= 0 && focused.y <= focused.height;
+  }).toBe(true);
+}
+
+async function explorerDebug(page: Page): Promise<{
+  workersCreated: number;
+  workersTerminated: number;
+  focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+}> {
+  return page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__: {
+    workersCreated: number;
+    workersTerminated: number;
+    focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+  } }).__METAFLOW_EXPLORER__);
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(next => { resolve = next; });
+  return { promise, resolve };
 }
 
 async function canvasHistogram(page: Page): Promise<{ uniqueColors: number; nonBackgroundPixels: number }> {

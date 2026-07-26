@@ -1,4 +1,5 @@
 import {
+  EXPLORER_DEFAULT_EDGE_TYPES,
   refKey,
   type ExactViewRef,
   type ExplorerOperation,
@@ -13,7 +14,7 @@ import type { OperationTransport } from "./operation-client.js";
 export const FIXTURE_SIZES = [1, 10, 500, 2_000] as const;
 export type FixtureSize = typeof FIXTURE_SIZES[number];
 const CREATED_AT = "2026-07-27T08:00:00.000Z";
-const EDGE_TYPES = ["derived_from", "member_of", "references", "application_member"] as const;
+const EDGE_TYPES = EXPLORER_DEFAULT_EDGE_TYPES;
 
 export type FixtureTransport = OperationTransport & {
   calls: Array<{ operation: ExplorerOperation; input: unknown }>;
@@ -190,7 +191,7 @@ function makeNode(ref: ExactViewRef, index: number, depth: number, path: string[
   };
 }
 
-function makeFixtureView(node: ViewGraphProjectionNode): View {
+export function makeFixtureView(node: ViewGraphProjectionNode): View {
   const raw = node.role === "raw";
   return {
     id: node.ref.view_id,
