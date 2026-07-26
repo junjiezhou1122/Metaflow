@@ -90,7 +90,9 @@ target, location, source digest, evidence ref, Transformation Run, and policy
 are validated before the vector and ordinary mapping row enter the same
 `BEGIN IMMEDIATE` transaction as the View.
 
-The ordinary mapping table remains authoritative; `vec0` only performs KNN.
+Committed eligible embedding Views are authoritative; the ordinary mapping and
+`vec0` rows are derived physical state. Integrity binds each physical vector to
+the exact committed payload by canonical float32 bytes before `vec0` may rank it.
 Frozen exact target refs and envelope/Representation target kinds are passed as
 metadata constraints inside the KNN query, so denied or out-of-scope vectors
 cannot affect distance order. Privacy Forget removes both sides before View

@@ -366,6 +366,99 @@ test("live semantic corruption latches reindex-required until a new durable rein
   }
 });
 
+test("physical vector payload is bound to the committed embedding View across live detection and reopen", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-payload-integrity-"));
+  const database = join(directory, "views.sqlite");
+  let repository: SqliteViewRepository | undefined = semanticRepository(database);
+  const staleRun = { run_id: "semantic:reindex:before-payload-corruption", requested_at: "2026-07-27T08:09:00.000Z" };
+  try {
+    const target = await commit(repository, targetDraft("view:payload-integrity:target", "payload integrity target"));
+    const embedding = await commit(
+      repository,
+      embeddingDraft("view:payload-integrity:embedding", target, [1, 0, 0]),
+    );
+    await repository.reindexSearch(staleRun);
+    const extensionPath = repository.semantic_search!.compatibility.extension_path;
+
+    replaceStoredVector(database, extensionPath, embedding, [0, 0, 1]);
+    await assert.rejects(
+      semanticSearch(repository, [target, embedding], [1, 0, 0]),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "retrieval_failed"
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "reindex_required",
+    );
+    assert.deepEqual(repository.semantic_search!.maintenance, {
+      status: "reindex_required",
+      orphan_rows: 0,
+      missing_rows: 1,
+    });
+    const blockedEmbedding = embeddingDraft("view:payload-integrity:blocked", target, [0, 1, 0]);
+    await assert.rejects(
+      repository.commit({ draft: blockedEmbedding, expected_revision: 0 }),
+      (error: unknown) => semanticErrorCode(error) === "reindex_required",
+    );
+    assert.equal(await repository.get({ view_id: blockedEmbedding.id, revision: 1 }), undefined);
+    assert.throws(
+      () => repository!.semantic_search!.delete(exactViewRef(target)),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "reindex_required",
+    );
+    await assert.rejects(
+      repository.reindexSearch(staleRun),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "conflict",
+    );
+
+    repository.close();
+    repository = undefined;
+    repository = semanticRepository(database);
+    assert.deepEqual(repository.semantic_search!.maintenance, {
+      status: "reindex_required",
+      orphan_rows: 0,
+      missing_rows: 1,
+    });
+    await assert.rejects(
+      repository.reindexSearch(staleRun),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "conflict",
+    );
+    const repaired = await repository.reindexSearch({
+      run_id: "semantic:reindex:repair-payload-corruption",
+      requested_at: "2026-07-27T08:10:00.000Z",
+    });
+    assert.equal(repaired.semantic?.missing_rows_repaired, 1);
+    const result = await semanticSearch(repository, [target, embedding], [1, 0, 0]);
+    assert.deepEqual(result.hits.map(hit => hit.ref), [exactViewRef(target)]);
+    assert.deepEqual(result.hits[0]!.matches[0]!.semantic_evidence_ref, exactViewRef(embedding));
+    assert.equal(readStoredVectorJson(database, extensionPath, embedding), "[1.000000,0.000000,0.000000]");
+
+    replaceStoredVector(database, extensionPath, embedding, [0, 0, 1], true);
+    await assert.rejects(
+      repository.semantic_search!.retrieve({
+        vector: { values: [1, 0, 0], dimension: 3, distance_metric: "cosine" },
+        profile: { id: PROFILE.id, revision: PROFILE.revision },
+        refs: [exactViewRef(target)],
+        target: { envelope: false, internal: true, related_views: false },
+        candidate_limit: 10,
+      }),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "vector_mapping_corrupt"
+        && /1 metadata.*1 payload/u.test(error.message),
+    );
+    assert.deepEqual(repository.semantic_search!.maintenance, {
+      status: "reindex_required",
+      orphan_rows: 0,
+      missing_rows: 1,
+    });
+    await repository.reindexSearch({
+      run_id: "semantic:reindex:repair-combined-corruption",
+      requested_at: "2026-07-27T08:11:00.000Z",
+    });
+    assert.equal(readStoredVectorJson(database, extensionPath, embedding), "[1.000000,0.000000,0.000000]");
+  } finally {
+    repository?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("embedding policies cannot weaken sensitive targets or cross owners", async () => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-sqlite-vec-policy-"));
   const repository = semanticRepository(join(directory, "views.sqlite"));
@@ -800,4 +893,78 @@ function fixtureVector(index: number, dimension: number): number[] {
   const values = Array.from({ length: dimension }, (_, item) => ((index + 1) * (item + 3)) % 101 + 1);
   const magnitude = Math.sqrt(values.reduce((total, value) => total + value * value, 0));
   return values.map(value => value / magnitude);
+}
+
+function replaceStoredVector(
+  database: string,
+  extensionPath: string,
+  embedding: View,
+  vector: number[],
+  corruptMapping = false,
+): void {
+  const audit = new DatabaseSync(database, { allowExtension: true });
+  try {
+    audit.loadExtension(extensionPath);
+    const mapping = audit.prepare(`
+      select vector_rowid, target_key, target_kind, profile_id, profile_revision
+      from view_search_vectors_v1 where embedding_view_id = ? and embedding_revision = ?
+    `).get(embedding.id, embedding.revision) as {
+      vector_rowid: number;
+      target_key: string;
+      target_kind: string;
+      profile_id: string;
+      profile_revision: number;
+    };
+    const profile = audit.prepare(`
+      select table_name from view_search_vector_profiles_v1
+      where profile_id = ? and profile_revision = ?
+    `).get(mapping.profile_id, mapping.profile_revision) as { table_name: string };
+    audit.prepare(`delete from "${profile.table_name}" where rowid = ?`).run(BigInt(mapping.vector_rowid));
+    audit.prepare(`
+      insert into "${profile.table_name}" (
+        rowid, embedding, target_key, target_kind, profile_id, profile_revision
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(
+      BigInt(mapping.vector_rowid),
+      new Float32Array(vector),
+      mapping.target_key,
+      mapping.target_kind,
+      mapping.profile_id,
+      BigInt(mapping.profile_revision),
+    );
+    if (corruptMapping) {
+      audit.prepare(`
+        update view_search_vectors_v1
+        set target_path = ?, source_digest = ?
+        where embedding_view_id = ? and embedding_revision = ?
+      `).run(
+        "/representation/value/tampered",
+        sqliteVecSourceDigest("tampered"),
+        embedding.id,
+        embedding.revision,
+      );
+    }
+  } finally {
+    audit.close();
+  }
+}
+
+function readStoredVectorJson(database: string, extensionPath: string, embedding: View): string {
+  const audit = new DatabaseSync(database, { allowExtension: true });
+  try {
+    audit.loadExtension(extensionPath);
+    const row = audit.prepare(`
+      select p.table_name, m.vector_rowid
+      from view_search_vectors_v1 m
+      join view_search_vector_profiles_v1 p
+        on p.profile_id = m.profile_id and p.profile_revision = m.profile_revision
+      where m.embedding_view_id = ? and m.embedding_revision = ?
+    `).get(embedding.id, embedding.revision) as { table_name: string; vector_rowid: number };
+    const vector = audit.prepare(`
+      select vec_to_json(embedding) as vector_json from "${row.table_name}" where rowid = ?
+    `).get(BigInt(row.vector_rowid)) as { vector_json: string };
+    return vector.vector_json;
+  } finally {
+    audit.close();
+  }
 }

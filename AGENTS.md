@@ -88,7 +88,9 @@ but there is no separate canonical Worker domain layer.
   location, source digest, profile, model, dimension, metric, provenance, and
   policy pass startup and commit checks. Those committed eligible embedding
   Views are the authoritative expected set: losing both a mapping and its
-  physical row still requires explicit repair. Vector mappings and `vec0` rows share
+  physical row still requires explicit repair, and physical vector bytes must
+  exactly match the committed float32 payload rather than a mutable mapping
+  field. Vector mappings and `vec0` rows share
   commit, rollback, Privacy Forget, reopen, and durable reindex/orphan-repair
   transactions with View and FTS state. Physical vector identity includes the
   exact profile revision; profile/target metadata mismatch fails before Search

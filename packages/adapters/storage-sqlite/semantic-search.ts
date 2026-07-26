@@ -155,6 +155,8 @@ type IntegrityInspection = {
   orphans: number;
   missing: number;
   mismatched: number;
+  metadata_mismatched: number;
+  payload_mismatched: number;
 };
 
 export type SqliteVecCompatibilityEvidence = {
@@ -304,7 +306,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       ) values (?, ?, ?, ?, ?, ?)
     `).run(
       BigInt(vectorRowid),
-      float32Vector(value.vector, profile.distance_metric),
+      canonicalFloat32Bytes(value.vector, profile.distance_metric),
       refKey(value.target.ref),
       value.target.location.kind,
       profile.id,
@@ -578,8 +580,9 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     );
     let vectorRows = 0;
     let orphans = 0;
-    let missing = 0;
-    let mismatched = 0;
+    const missingKeys = new Set<string>();
+    const metadataMismatchKeys = new Set<string>();
+    const payloadMismatchKeys = new Set<string>();
     for (const profile of this.profiles.values()) {
       vectorRows += Number((this.db.prepare(`select count(*) as count from ${quoteIdentifier(profile.table_name)}`).get() as { count: number }).count);
       orphans += Number((this.db.prepare(`
@@ -596,41 +599,56 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
         view_id: mapping.embedding_view_id,
         revision: Number(mapping.embedding_revision),
       });
-      if (!expected.has(key)) mismatched += 1;
+      if (!expected.has(key)) metadataMismatchKeys.add(key);
     }
     for (const [key, embedding] of expected) {
       const mapping = mappingsByEmbedding.get(key);
       if (!mapping) {
-        missing += 1;
+        missingKeys.add(key);
         continue;
       }
       if (!mappingMatchesExpected(mapping, embedding)) {
-        mismatched += 1;
-        continue;
+        metadataMismatchKeys.add(key);
       }
       const physical = this.db.prepare(`
-        select target_key, target_kind, profile_id, profile_revision
+        select embedding, target_key, target_kind, profile_id, profile_revision
         from ${quoteIdentifier(embedding.profile.table_name)} where rowid = ?
       `).get(BigInt(mapping.vector_rowid)) as {
+        embedding: Uint8Array;
         target_key: string;
         target_kind: string;
         profile_id: string;
         profile_revision: number;
       } | undefined;
       if (!physical) {
-        missing += 1;
+        missingKeys.add(key);
         continue;
       }
       if (
-        physical.target_key !== mapping.target_key
-        || physical.target_kind !== mapping.target_kind
-        || physical.profile_id !== mapping.profile_id
-        || Number(physical.profile_revision) !== Number(mapping.profile_revision)
+        physical.target_key !== refKey(embedding.value.target.ref)
+        || physical.target_kind !== embedding.value.target.location.kind
+        || physical.profile_id !== embedding.profile.id
+        || Number(physical.profile_revision) !== embedding.profile.revision
       ) {
-        mismatched += 1;
+        metadataMismatchKeys.add(key);
+      }
+      if (!bytesEqual(
+        physical.embedding,
+        canonicalFloat32Bytes(embedding.value.vector, embedding.profile.distance_metric),
+      )) {
+        payloadMismatchKeys.add(key);
       }
     }
-    return { vector_rows: vectorRows, orphans, missing, mismatched };
+    const mismatchKeys = new Set([...metadataMismatchKeys, ...payloadMismatchKeys]);
+    for (const key of missingKeys) mismatchKeys.delete(key);
+    return {
+      vector_rows: vectorRows,
+      orphans,
+      missing: missingKeys.size,
+      mismatched: mismatchKeys.size,
+      metadata_mismatched: metadataMismatchKeys.size,
+      payload_mismatched: payloadMismatchKeys.size,
+    };
   }
 
   private expectedEligibleEmbeddings(): Map<string, ExpectedEmbedding> {
@@ -654,13 +672,13 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
 
   private initializeMaintenanceState(): void {
     const integrity = this.inspectIntegrity();
-    if (integrity.mismatched !== 0) {
+    if (integrity.metadata_mismatched !== 0) {
       throw new SqliteVecSemanticSearchError(
-        `Semantic vector startup integrity failed: ${integrity.mismatched} profile or target metadata mismatches`,
+        `Semantic vector startup integrity failed: ${integrity.metadata_mismatched} profile or target metadata mismatches`,
         "vector_mapping_corrupt",
       );
     }
-    if (integrity.orphans !== 0 || integrity.missing !== 0) {
+    if (integrity.orphans !== 0 || integrity.missing !== 0 || integrity.mismatched !== 0) {
       this.latchIntegrity(integrity);
     }
   }
@@ -669,9 +687,9 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     this.assertReady("retrieve");
     const integrity = this.inspectIntegrity();
     this.latchIntegrity(integrity);
-    if (integrity.mismatched !== 0) {
+    if (integrity.metadata_mismatched !== 0) {
       throw new SqliteVecSemanticSearchError(
-        `Semantic vector live integrity failed: ${integrity.mismatched} profile or target metadata mismatches`,
+        `Semantic vector live integrity failed: ${integrity.metadata_mismatched} metadata and ${integrity.payload_mismatched} payload mismatches`,
         "vector_mapping_corrupt",
       );
     }
@@ -1022,6 +1040,24 @@ function float32Vector(values: number[], metric: "cosine" | "l2"): Float32Array 
     throw new SqliteVecSemanticSearchError("Cosine vectors must have non-zero magnitude", "embedding_invalid");
   }
   return vector;
+}
+
+function canonicalFloat32Bytes(values: number[], metric: "cosine" | "l2"): Uint8Array {
+  const vector = float32Vector(values.map(value => Object.is(value, -0) ? 0 : value), metric);
+  const bytes = new Uint8Array(vector.length * Float32Array.BYTES_PER_ELEMENT);
+  const data = new DataView(bytes.buffer);
+  for (let index = 0; index < vector.length; index += 1) {
+    data.setFloat32(index * Float32Array.BYTES_PER_ELEMENT, vector[index]!, true);
+  }
+  return bytes;
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function compareVersions(left: string, right: string): number {

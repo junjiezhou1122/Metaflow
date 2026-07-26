@@ -68,13 +68,16 @@ Node's built-in `node:sqlite` driver.
   validate exact profile and target metadata before evidence can resolve.
 - Committed strict embedding Views whose target and policies remain eligible
   are the authoritative expected set. Missing mappings, missing physical rows,
-  loss of both rows, or physical orphans reopen in an observable
+  loss of both rows, physical orphans, or vector bytes that differ from the
+  committed payload reopen in an observable
   `reindex_required` maintenance state. Semantic retrieval, insertion, and
   deletion fail with that typed error until a new durable reindex transaction
   commits; replaying an older successful run cannot claim to repair new
   corruption. A mapping or physical mismatch discovered on a live connection
   latches the same state before returning; subsequent semantic reads and writes
-  stay blocked. Profile or target metadata mismatch fails startup outright.
+  stay blocked. Vector payload comparison uses bounded canonical little-endian
+  float32 bytes derived directly from the committed View, never a mutable
+  mapping digest. Profile or target metadata mismatch fails startup outright.
 - Vector mapping and `vec0` insertion share the View `BEGIN IMMEDIATE`
   transaction. Privacy Forget deletes mappings and vector rows before governed
   payloads, and durable reindex reconstructs only from committed embedding
