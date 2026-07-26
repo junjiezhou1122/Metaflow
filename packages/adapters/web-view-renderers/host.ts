@@ -76,11 +76,21 @@ export function createWebRendererHostSession(input: {
         || resolved.byte_length > request.max_bytes
         || resolved.byte_length > materialization.max_bytes
         || (materialization.byte_length !== undefined && resolved.byte_length !== materialization.byte_length)) {
-        input.emit({ event: "renderer.asset.failed", error_code: "asset_resolution_failed", duration_ms: elapsed(startedAt, now()) });
-        await releaseRejectedAsset(input.services, resolved);
+        const cleanupFailures: unknown[] = [];
+        try {
+          await releaseRejectedAsset(input.services, resolved);
+        } catch (error) {
+          cleanupFailures.push(error);
+        }
+        const emissionFailure = captureFailure(() => input.emit({
+          event: "renderer.asset.failed",
+          error_code: "asset_resolution_failed",
+          duration_ms: elapsed(startedAt, now()),
+        }));
+        if (emissionFailure !== undefined) cleanupFailures.push(emissionFailure);
         throw new WebRendererError(`Renderer asset response exceeded its authorization: ${request.asset_id}`, "asset_resolution_failed", {
           asset_id: request.asset_id,
-        });
+        }, { cause: aggregateFailures(cleanupFailures, "Rejected asset cleanup failed") });
       }
       resolvedAssets.set(`${resolved.asset_id}:${resolved.object_url}`, resolved);
       input.emit({
@@ -175,6 +185,21 @@ function parseDeclaredMethods(values: readonly string[]): ReadonlySet<string> {
     }, parsed.success ? undefined : { cause: parsed.error });
   }
   return new Set(parsed.data);
+}
+
+function captureFailure(operation: () => void): unknown | undefined {
+  try {
+    operation();
+    return undefined;
+  } catch (error) {
+    return error ?? new Error("Renderer lifecycle observer threw without an error value");
+  }
+}
+
+function aggregateFailures(failures: readonly unknown[], message: string): unknown | undefined {
+  if (failures.length === 0) return undefined;
+  if (failures.length === 1) return failures[0];
+  return new AggregateError(failures, message);
 }
 
 function assertNotAborted(signal: AbortSignal): void {

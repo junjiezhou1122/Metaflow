@@ -29,7 +29,9 @@ The future Web composition root must do all of the following explicitly:
 4. Supply `RendererHostServices` backed by the app's authenticated Operation,
    asset, link, telemetry, and background-error observer ports. The background
    observer is required because an aborted non-cooperative factory can resolve
-   only after the caller has already received its abort error.
+   only after the caller has already received its abort error. It must not
+   throw; an observer contract violation is forwarded to the host's standard
+   error reporter (or logged as a terminal error where that API is unavailable).
 5. Call `registry.mount(...)`, retain the returned handle, and await
    `dispose()` or `disposed` during navigation and abort.
 
@@ -56,7 +58,8 @@ Lifecycle events contain renderer identity, exact View ref, stage, duration, and
 bounded error codes; they never contain Representation content, asset URLs, or
 link URLs.
 Lifecycle observer failures are propagated only after required renderer and
-asset cleanup has run.
+asset cleanup has run. Markdown links do not expose an external browser `href`;
+mouse and keyboard activation always crosses the host `openLink` capability.
 
 ## Built-ins
 

@@ -1,4 +1,11 @@
-import { createElement, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  createElement,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { SafeLinkRequest, WebRendererHostV1, WebRendererInput } from "../contracts.js";
@@ -32,16 +39,25 @@ function MarkdownView(props: {
     a({ href, children }) {
       const safeHref = href && parseSafeMarkdownHref(href);
       if (!safeHref) return createElement("span", null, children);
+      const open = (disposition: SafeLinkRequest["disposition"]) => {
+        const request: SafeLinkRequest = {
+          contract_version: 1,
+          href: safeHref,
+          disposition,
+        };
+        void openMarkdownLink(host, request, signal, setLinkErrorCode);
+      };
       return createElement("a", {
-        href: safeHref,
+        role: "link",
+        tabIndex: 0,
         onClick(event: MouseEvent<HTMLAnchorElement>) {
           event.preventDefault();
-          const request: SafeLinkRequest = {
-            contract_version: 1,
-            href: safeHref,
-            disposition: event.metaKey || event.ctrlKey ? "new_context" : "same_context",
-          };
-          void openMarkdownLink(host, request, signal, setLinkErrorCode);
+          open(event.metaKey || event.ctrlKey ? "new_context" : "same_context");
+        },
+        onKeyDown(event: KeyboardEvent<HTMLAnchorElement>) {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          open(event.metaKey || event.ctrlKey ? "new_context" : "same_context");
         },
       }, children);
     },

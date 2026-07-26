@@ -225,7 +225,6 @@ export class WebRendererRegistry {
       });
     }
 
-    let disposePromise: Promise<void> | undefined;
     const pendingDisposeFailures: unknown[] = [];
     let resolveDisposed!: () => void;
     let rejectDisposed!: (error: unknown) => void;
@@ -233,12 +232,17 @@ export class WebRendererRegistry {
       resolveDisposed = resolve;
       rejectDisposed = reject;
     });
+    // Automatic abort may start disposal before the caller observes the handle.
+    // Keep the original promise rejected for callers while marking it handled.
+    void disposed.catch(() => undefined);
+    let disposalStarted = false;
     let abortHandled = false;
     const disposeWithFailures = (initialFailures: readonly unknown[] = []): Promise<void> => {
       pendingDisposeFailures.push(...initialFailures.filter(failure => failure !== undefined));
-      if (disposePromise) return disposePromise;
+      if (disposalStarted) return disposed;
+      disposalStarted = true;
       request.signal.removeEventListener("abort", onAbort);
-      disposePromise = (async () => {
+      void (async () => {
         const cleanupFailures = await cleanupMountedWithLifecycle({
           disposable,
           lifecycle,
@@ -252,9 +256,8 @@ export class WebRendererRegistry {
             renderer: rendererIdentityKey(descriptor),
           }, { cause: aggregateFailures(failures, "Renderer disposal failed") });
         }
-      })();
-      disposePromise.then(resolveDisposed, rejectDisposed);
-      return disposePromise;
+      })().then(resolveDisposed, rejectDisposed);
+      return disposed;
     };
     const onAbort = () => {
       if (abortHandled) return;
@@ -439,11 +442,29 @@ function scheduleLateMountDisposal(input: {
       aborted: true,
     }, { cause: mountError });
   });
-  void cleanup.catch(error => {
-    input.services.reportBackgroundError(error instanceof Error
-      ? error
-      : new Error("Late Web Renderer cleanup failed", { cause: error }));
-  });
+  void cleanup.catch(error => reportBackgroundFailure(input.services, error));
+}
+
+function reportBackgroundFailure(services: RendererHostServices, error: unknown): void {
+  const cleanupError = error instanceof Error
+    ? error
+    : new Error("Late Web Renderer cleanup failed", { cause: error });
+  try {
+    services.reportBackgroundError(cleanupError);
+  } catch (observerError) {
+    const aggregate = new AggregateError(
+      [cleanupError, observerError],
+      "Web Renderer background error observer failed",
+    );
+    const globalReporter = (globalThis as typeof globalThis & {
+      reportError?: (reported: unknown) => void;
+    }).reportError;
+    if (typeof globalReporter === "function") {
+      globalReporter(aggregate);
+      return;
+    }
+    console.error(aggregate);
+  }
 }
 
 function captureFailure(operation: () => void): unknown | undefined {

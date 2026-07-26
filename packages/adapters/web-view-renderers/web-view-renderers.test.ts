@@ -136,6 +136,7 @@ test("zero match, missing registration, ABI mismatch, load, mount, abort, and di
     }]);
     const mounted = await registry.mount(mountRequest([], [exactDescriptor]));
     const disposeResult = mounted.dispose();
+    assert.equal(disposeResult, mounted.disposed);
     const disposedResult = assertRendererError(mounted.disposed, "dispose_failed");
     await assertRendererError(disposeResult, "dispose_failed");
     await disposedResult;
@@ -243,6 +244,39 @@ test("mount abort wins promptly and a late disposable is still cleaned", async (
 
   resolveMount({ dispose: markDisposed });
   await disposed;
+});
+
+test("late cleanup observer failure reaches the host error reporter without an unhandled rejection", async () => {
+  let resolveMount!: (disposable: { dispose(): void }) => void;
+  let reported: unknown;
+  const priorReporter = (globalThis as typeof globalThis & { reportError?: (error: unknown) => void }).reportError;
+  (globalThis as typeof globalThis & { reportError?: (error: unknown) => void }).reportError = error => { reported = error; };
+  try {
+    const registry = registryFor({
+      mount: async () => new Promise(resolve => { resolveMount = resolve; }),
+    });
+    const controller = new AbortController();
+    const request = mountRequest([], [exactDescriptor]);
+    const mounting = registry.mount({
+      ...request,
+      signal: controller.signal,
+      services: createServices([], {
+        reportBackgroundError() { throw new Error("synthetic observer failure"); },
+      }),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    controller.abort();
+    await assertRendererError(mounting, "aborted");
+    resolveMount({ dispose() { throw new Error("synthetic late dispose failure"); } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(reported instanceof AggregateError);
+  } finally {
+    if (priorReporter === undefined) {
+      Reflect.deleteProperty(globalThis, "reportError");
+    } else {
+      (globalThis as typeof globalThis & { reportError?: (error: unknown) => void }).reportError = priorReporter;
+    }
+  }
 });
 
 test("host exposes only authorized assets, declared Methods, and safe links", async () => {
@@ -367,6 +401,7 @@ test("strict input and asset contracts reject unknown fields and network URLs", 
 
 test("host releases a resolved blob that violates its frozen asset authorization", async () => {
   const released: string[] = [];
+  let assetFailures = 0;
   const registry = new WebRendererRegistry([{
     descriptor: { id: exactDescriptor.id, version: 1, abi_version: 1 },
     load: async () => ({
@@ -400,6 +435,11 @@ test("host releases a resolved blob that violates its frozen asset authorization
         byte_length: 101,
       }),
       releaseAsset: asset => { released.push(asset.object_url); },
+      emit(event) {
+        if (event.event === "renderer.asset.failed" && ++assetFailures === 2) {
+          throw new Error("synthetic asset observer failure");
+        }
+      },
     }),
   });
   await mounted.dispose();
@@ -544,7 +584,8 @@ test("JSON, Markdown, and table security fixtures escape content without raw HTM
     },
   }), noOpHost, new AbortController().signal));
   assert.doesNotMatch(markdownHtml, /<script|<img|javascript:/i);
-  assert.match(markdownHtml, /href="https:\/\/example\.com\/"/);
+  assert.doesNotMatch(markdownHtml, /href=/i);
+  assert.match(markdownHtml, /<a role="link" tabindex="0">good<\/a>/);
 
   const tableInput = strictTableInput(hostile);
   const parsed = parseSchemaDrivenTable(tableInput);
