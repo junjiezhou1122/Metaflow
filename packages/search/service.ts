@@ -177,21 +177,34 @@ export class SearchService {
     if (request.kind === "all_visible") {
       const allowed: ExactViewRef[] = [];
       let afterViewId: string | undefined;
+      let scanned = 0;
       do {
+        const remaining = request.max_scan - scanned;
+        if (remaining <= 0) {
+          throw new SearchError("All-visible scope exceeds max_scan", "scope_scan_limit_exceeded", "scope");
+        }
+        const pageLimit = Math.min(ALL_VISIBLE_AUTHORIZATION_BATCH, remaining);
         let page: z.infer<typeof LatestRefsPageSchema>;
         try {
           page = LatestRefsPageSchema.parse(await this.dependencies.scope_source.listLatestExactRefs({
             ...(afterViewId ? { after_view_id: afterViewId } : {}),
-            limit: ALL_VISIBLE_AUTHORIZATION_BATCH,
+            limit: pageLimit,
           }));
         } catch (cause) {
           throw searchError(cause, "scope_resolution_failed", "scope");
         }
-        assertLatestRefPage(page, afterViewId);
+        assertLatestRefPage(page, afterViewId, pageLimit);
+        scanned += page.refs.length;
+        if (scanned > request.max_scan) {
+          throw new SearchError("All-visible scope exceeds max_scan", "scope_scan_limit_exceeded", "scope");
+        }
         const decisions = await this.authorize(principal, page.refs);
         allowed.push(...decisions.filter(decision => decision.status === "allowed").map(decision => decision.ref));
         if (allowed.length > request.max_nodes) {
           throw new SearchError("Authorized all-visible scope exceeds max_nodes", "scope_limit_exceeded", "scope");
+        }
+        if (page.next_after_view_id !== undefined && scanned >= request.max_scan) {
+          throw new SearchError("All-visible scope exceeds max_scan", "scope_scan_limit_exceeded", "scope");
         }
         afterViewId = page.next_after_view_id;
       } while (afterViewId !== undefined);
@@ -221,6 +234,7 @@ export class SearchService {
           direction: request.direction,
           relation_types: request.relation_types,
         }));
+        validateScopeEdges(edges, frontier, request.direction, request.relation_types);
       } catch (cause) {
         throw searchError(cause, "scope_resolution_failed", "scope");
       }
@@ -310,7 +324,7 @@ export class SearchService {
         if (result.length > SEARCH_MAX_CANDIDATES) {
           throw new SearchError(`${mode} retriever exceeded the candidate limit`, "retrieval_failed", "retrieval");
         }
-        validateModeCandidates(mode, result, scope, descriptors);
+        validateModeCandidates(mode, result, scope, descriptors, input.request.target);
         candidates[mode] = result;
         outcomes.push({ mode, status: "executed", candidate_count: uniqueCandidateCount(result) });
         await this.record(this.event(input, modeStartedAt, "mode.succeeded", {
@@ -555,9 +569,14 @@ function searchError(cause: unknown, code: ConstructorParameters<typeof SearchEr
   return new SearchError(cause instanceof Error ? cause.message : "Search failed", code, stage, false, { cause });
 }
 
-function assertLatestRefPage(page: z.infer<typeof LatestRefsPageSchema>, previous: string | undefined): void {
+function assertLatestRefPage(
+  page: z.infer<typeof LatestRefsPageSchema>,
+  previous: string | undefined,
+  requestedLimit: number,
+): void {
   const ids = page.refs.map(ref => ref.view_id);
-  if (new Set(ids).size !== ids.length
+  if (page.refs.length > requestedLimit
+    || new Set(ids).size !== ids.length
     || ids.some((id, index) => index > 0 && id <= ids[index - 1]!)
     || (previous !== undefined && ids.some(id => id <= previous))
     || (page.next_after_view_id !== undefined && page.next_after_view_id !== ids.at(-1))) {
@@ -573,8 +592,10 @@ function validateModeCandidates(
   candidates: RankedSearchCandidate[],
   scope: FrozenSearchScope,
   descriptors: Map<string, SearchViewDescriptor>,
+  target: SearchRequestV1["target"],
 ): void {
   const authorized = new Set(scope.nodes.map(node => refKey(node.ref)));
+  const frozenNodeByRef = new Map(scope.nodes.map(node => [refKey(node.ref), node]));
   for (const candidate of candidates) {
     if (!authorized.has(refKey(candidate.ref)) || !authorized.has(refKey(candidate.owner_ref))) {
       throw new SearchError(`${mode} retriever returned a View outside the frozen authorized scope`, "retrieval_failed", "retrieval");
@@ -592,8 +613,55 @@ function validateModeCandidates(
     if (candidate.matches.some(match => match.modes.length !== 1 || match.modes[0] !== mode)) {
       throw new SearchError(`${mode} retriever claimed evidence from another mode`, "retrieval_failed", "retrieval");
     }
-    if (candidate.path?.some(step => !authorized.has(refKey(step.from)) || !authorized.has(refKey(step.to)))) {
-      throw new SearchError(`${mode} retriever returned a path through an unauthorized View`, "retrieval_failed", "retrieval");
+    const frozenNode = frozenNodeByRef.get(refKey(candidate.ref));
+    if (!frozenNode) {
+      throw new SearchError(`${mode} retriever returned an unknown frozen node`, "retrieval_failed", "retrieval");
     }
+    if (candidate.path !== undefined && canonicalJson(candidate.path) !== canonicalJson(frozenNode.path)) {
+      throw new SearchError(`${mode} retriever returned a non-canonical relation path`, "retrieval_failed", "retrieval");
+    }
+    if (mode === "relation" && candidate.path === undefined) {
+      throw new SearchError("Relation retriever omitted the frozen canonical path", "retrieval_failed", "retrieval");
+    }
+    for (const match of candidate.matches) {
+      const locationAllowed = match.location.kind === "envelope"
+        ? target.envelope
+        : match.location.kind === "representation"
+          ? target.internal
+          : target.related_views;
+      if (!locationAllowed) {
+        throw new SearchError(`${mode} retriever returned evidence outside the frozen target`, "retrieval_failed", "retrieval");
+      }
+      if (match.location.kind === "related_view" && !authorized.has(refKey(match.location.ref))) {
+        throw new SearchError(`${mode} retriever returned unauthorized related View evidence`, "retrieval_failed", "retrieval");
+      }
+      if (match.semantic_evidence_ref && (mode !== "semantic" || !authorized.has(refKey(match.semantic_evidence_ref)))) {
+        throw new SearchError(`${mode} retriever returned invalid semantic evidence`, "retrieval_failed", "retrieval");
+      }
+    }
+  }
+}
+
+function validateScopeEdges(
+  edges: SearchRelationEdge[],
+  frontier: ExactViewRef[],
+  direction: "incoming" | "outgoing" | "both",
+  relationTypes: string[],
+): void {
+  const frontierKeys = new Set(frontier.map(refKey));
+  const allowedTypes = new Set(relationTypes);
+  const relationIds = new Set<string>();
+  for (const edge of edges) {
+    const fromFrontier = frontierKeys.has(refKey(edge.from));
+    const toFrontier = frontierKeys.has(refKey(edge.to));
+    const directionMatches = direction === "outgoing"
+      ? fromFrontier
+      : direction === "incoming"
+        ? toFrontier
+        : fromFrontier || toFrontier;
+    if (!allowedTypes.has(edge.type) || !directionMatches || relationIds.has(edge.relation_id)) {
+      throw new SearchError("Relation scope source returned an edge outside the frozen request", "scope_resolution_failed", "scope");
+    }
+    relationIds.add(edge.relation_id);
   }
 }

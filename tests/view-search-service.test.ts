@@ -19,6 +19,7 @@ import {
   SearchService,
   fuseSearchCandidates,
   type SearchRequestV1,
+  type SearchRelationEdge,
   type SearchServiceDependencies,
   type SearchTraceEvent,
   type ViewReadAuthorizationPort,
@@ -27,7 +28,7 @@ import {
 const createdAt = "2026-07-27T01:00:00.000Z";
 
 test("Search request contract rejects ambiguity, duplicate modes, semantic mismatch, and unbounded all-visible scope", () => {
-  const valid = request({ scope: { kind: "all_visible", max_nodes: 10 }, modes: ["keyword"] });
+  const valid = request({ scope: { kind: "all_visible", max_nodes: 10, max_scan: 10 }, modes: ["keyword"] });
   assert.equal(SearchRequestV1Schema.parse(valid).failure_mode, "require_all");
   assert.throws(() => SearchRequestV1Schema.parse({ ...valid, unknown: true }));
   assert.throws(() => SearchRequestV1Schema.parse({ ...valid, modes: ["keyword", "keyword"] }));
@@ -161,7 +162,7 @@ test("all-visible bounds count only authorized Views and exact denied scope fail
     const visible = await service.search({
       request_id: "search:visible",
       principal: { id: "user:reader" },
-      request: request({ scope: { kind: "all_visible", max_nodes: 1 }, modes: ["keyword"] }),
+      request: request({ scope: { kind: "all_visible", max_nodes: 1, max_scan: 10 }, modes: ["keyword"] }),
     });
     assert.deepEqual(visible.hits.map(hit => hit.ref), [exactViewRef(allowed)]);
     await assert.rejects(
@@ -222,10 +223,155 @@ test("all-visible paging authorizes every batch so denied refs cannot exhaust ma
   const result = await service.search({
     request_id: "search:visible:paged",
     principal: { id: "user:reader" },
-    request: request({ scope: { kind: "all_visible", max_nodes: 1 }, modes: ["keyword"] }),
+    request: request({ scope: { kind: "all_visible", max_nodes: 1, max_scan: 300 }, modes: ["keyword"] }),
   });
   assert.deepEqual(result.hits.map(hit => hit.ref), [allowed]);
   assert.equal(events.find(event => event.type === "scope.resolved")?.count, 1);
+});
+
+test("all-visible max_scan counts denied refs and rejects an oversized final page", async () => {
+  const denied = Array.from({ length: 4 }, (_, index) => ({
+    view_id: `view:private-scan:${index}`,
+    revision: 1,
+  }));
+  const events: SearchTraceEvent[] = [];
+  const pageLimits: number[] = [];
+  let retrievalCalled = false;
+  const service = new SearchService({
+    authorization: {
+      authorize: async input => input.refs.map(ref => ({ ref, status: "denied" as const })),
+    },
+    scope_source: {
+      listLatestExactRefs: async input => {
+        pageLimits.push(input.limit);
+        return input.after_view_id
+          ? { refs: [denied[2]!], next_after_view_id: denied[2]!.view_id }
+          : { refs: denied.slice(0, 2), next_after_view_id: denied[1]!.view_id };
+      },
+      readRelations: async () => [],
+    },
+    descriptors: { describe: async () => [] },
+    keyword: { retrieve: async () => { retrievalCalled = true; return []; } },
+    observer: { record: async event => { events.push(event); } },
+    now: () => "2026-07-27T04:00:00.000Z",
+  });
+  await assert.rejects(
+    service.search({
+      request_id: "search:visible:scan-limit",
+      principal: { id: "user:reader" },
+      request: request({ scope: { kind: "all_visible", max_nodes: 1, max_scan: 3 }, modes: ["keyword"] }),
+    }),
+    (error: unknown) => error instanceof SearchError && error.code === "scope_scan_limit_exceeded",
+  );
+  assert.deepEqual(pageLimits, [3, 1]);
+  assert.equal(retrievalCalled, false);
+  assertTraceExcludes(events, denied.map(ref => ref.view_id));
+
+  let authorizationCalled = false;
+  const oversizedEvents: SearchTraceEvent[] = [];
+  const oversized = new SearchService({
+    authorization: {
+      authorize: async input => {
+        authorizationCalled = true;
+        return input.refs.map(ref => ({ ref, status: "denied" as const }));
+      },
+    },
+    scope_source: {
+      listLatestExactRefs: async () => ({ refs: denied.slice(0, 2) }),
+      readRelations: async () => [],
+    },
+    descriptors: { describe: async () => [] },
+    keyword: { retrieve: async () => [] },
+    observer: { record: async event => { oversizedEvents.push(event); } },
+    now: () => "2026-07-27T04:00:00.000Z",
+  });
+  await assert.rejects(
+    oversized.search({
+      request_id: "search:visible:oversized-page",
+      principal: { id: "user:reader" },
+      request: request({ scope: { kind: "all_visible", max_nodes: 1, max_scan: 1 }, modes: ["keyword"] }),
+    }),
+    (error: unknown) => error instanceof SearchError && error.code === "scope_resolution_failed",
+  );
+  assert.equal(authorizationCalled, false);
+  assertTraceExcludes(oversizedEvents, denied.map(ref => ref.view_id));
+});
+
+test("subgraph scope rejects malicious relation source edges before discovery", async () => {
+  const root = { view_id: "view:scope-root", revision: 1 };
+  const privateRef = { view_id: "view:private-edge", revision: 1 };
+  const validEdge: SearchRelationEdge = {
+    relation_id: "relation:private-edge",
+    type: "contains",
+    from: root,
+    to: privateRef,
+  };
+  const cases: Array<{ name: string; edges: SearchRelationEdge[]; secrets: string[] }> = [
+    {
+      name: "wrong direction",
+      edges: [{ ...validEdge, from: privateRef, to: root }],
+      secrets: [privateRef.view_id, validEdge.relation_id],
+    },
+    {
+      name: "wrong relation type",
+      edges: [{ ...validEdge, type: "private_relation" }],
+      secrets: [privateRef.view_id, "private_relation"],
+    },
+    {
+      name: "duplicate relation id",
+      edges: [validEdge, validEdge],
+      secrets: [privateRef.view_id, validEdge.relation_id],
+    },
+    {
+      name: "malformed relation id",
+      edges: [{ ...validEdge, relation_id: "" }],
+      secrets: [privateRef.view_id],
+    },
+  ];
+
+  for (const item of cases) {
+    const events: SearchTraceEvent[] = [];
+    let authorizationCalls = 0;
+    let retrievalCalled = false;
+    const service = new SearchService({
+      authorization: {
+        authorize: async input => {
+          authorizationCalls += 1;
+          return input.refs.map(ref => ({ ref, status: "allowed" as const }));
+        },
+      },
+      scope_source: {
+        listLatestExactRefs: async () => ({ refs: [] }),
+        readRelations: async () => item.edges,
+      },
+      descriptors: { describe: async () => [] },
+      keyword: { retrieve: async () => { retrievalCalled = true; return []; } },
+      observer: { record: async event => { events.push(event); } },
+      now: () => "2026-07-27T04:00:00.000Z",
+    });
+    await assert.rejects(
+      service.search({
+        request_id: `search:scope-source:${item.name.replaceAll(" ", "-")}`,
+        principal: { id: "user:reader" },
+        request: request({
+          scope: {
+            kind: "subgraph",
+            roots: [root],
+            direction: "outgoing",
+            relation_types: ["contains"],
+            max_depth: 1,
+            max_nodes: 2,
+          },
+          modes: ["keyword"],
+        }),
+      }),
+      (error: unknown) => error instanceof SearchError && error.code === "scope_resolution_failed",
+      item.name,
+    );
+    assert.equal(authorizationCalls, 1, item.name);
+    assert.equal(retrievalCalled, false, item.name);
+    assertTraceExcludes(events, item.secrets);
+  }
 });
 
 test("semantic unavailability is explicit only when partial mode is requested", async () => {
@@ -302,6 +448,140 @@ test("a retriever cannot return refs or paths outside the frozen authorized scop
       }),
       (error: unknown) => error instanceof SearchError && error.code === "retrieval_failed",
     );
+  });
+});
+
+test("retrievers cannot invent a path among authorized refs", async () => {
+  await withRepository(async repository => {
+    const root = await commit(repository, draft({ id: "view:path-root", name: "English root", owner: "user:reader" }));
+    const child = await commit(repository, draft({
+      id: "view:path-child",
+      name: "English child",
+      owner: "user:reader",
+      relation: { type: "contains", target: exactViewRef(root) },
+    }));
+    const events: SearchTraceEvent[] = [];
+    const inventedRelationId = "relation:invented-private-path";
+    const service = searchService(repository, events, {
+      keyword: {
+        retrieve: async () => [candidate(child, "keyword", {
+          path: [{
+            relation_id: inventedRelationId,
+            type: "contains",
+            from: exactViewRef(root),
+            to: exactViewRef(child),
+          }],
+        })],
+      },
+    });
+    await assert.rejects(
+      service.search({
+        request_id: "search:retriever:invented-path",
+        principal: { id: "user:reader" },
+        request: subgraphRequest(root),
+      }),
+      (error: unknown) => error instanceof SearchError && error.code === "retrieval_failed",
+    );
+    assertTraceExcludes(events, [inventedRelationId]);
+  });
+});
+
+test("retrievers cannot return unauthorized related or semantic evidence refs", async () => {
+  await withRepository(async repository => {
+    const allowed = await commit(repository, draft({ id: "view:evidence-allowed", name: "English allowed", owner: "user:reader" }));
+    const privateView = await commit(repository, draft({ id: "view:evidence-private", name: "English private", owner: "user:other" }));
+    const cases = [
+      {
+        name: "related",
+        modes: ["keyword"] as SearchRequestV1["modes"],
+        overrides: {
+          keyword: {
+            retrieve: async () => [candidate(allowed, "keyword", {
+              location: { kind: "related_view", ref: exactViewRef(privateView) },
+            })],
+          },
+        } satisfies Partial<SearchServiceDependencies>,
+      },
+      {
+        name: "semantic",
+        modes: ["semantic"] as SearchRequestV1["modes"],
+        overrides: {
+          query_embedding: {
+            embed: async () => ({ values: [0], dimension: 1, distance_metric: "cosine" as const }),
+          },
+          semantic: {
+            retrieve: async () => [candidate(allowed, "semantic", {
+              semanticEvidenceRef: exactViewRef(privateView),
+            })],
+          },
+        } satisfies Partial<SearchServiceDependencies>,
+      },
+    ];
+
+    for (const item of cases) {
+      const events: SearchTraceEvent[] = [];
+      const service = searchService(repository, events, item.overrides);
+      await assert.rejects(
+        service.search({
+          request_id: `search:retriever:${item.name}-evidence`,
+          principal: { id: "user:reader" },
+          request: request({ scope: { kind: "exact_views", refs: [exactViewRef(allowed)] }, modes: item.modes }),
+        }),
+        (error: unknown) => error instanceof SearchError && error.code === "retrieval_failed",
+        item.name,
+      );
+      assertTraceExcludes(events, [privateView.id]);
+    }
+  });
+});
+
+test("retrievers cannot return locations outside the frozen target or cross-mode semantic evidence", async () => {
+  await withRepository(async repository => {
+    const allowed = await commit(repository, draft({ id: "view:target-allowed", name: "English allowed", owner: "user:reader" }));
+    const cases: Array<{
+      name: string;
+      target: SearchRequestV1["target"];
+      candidateInput: Parameters<typeof candidate>[2];
+    }> = [
+      {
+        name: "envelope",
+        target: { envelope: false, internal: true, related_views: false },
+        candidateInput: { location: { kind: "envelope", path: "/name" } },
+      },
+      {
+        name: "representation",
+        target: { envelope: true, internal: false, related_views: false },
+        candidateInput: { location: { kind: "representation", path: "/representation/value/text" } },
+      },
+      {
+        name: "related",
+        target: { envelope: true, internal: true, related_views: false },
+        candidateInput: { location: { kind: "related_view", ref: exactViewRef(allowed) } },
+      },
+      {
+        name: "keyword-semantic-evidence",
+        target: { envelope: true, internal: true, related_views: false },
+        candidateInput: { semanticEvidenceRef: exactViewRef(allowed) },
+      },
+    ];
+
+    for (const item of cases) {
+      const events: SearchTraceEvent[] = [];
+      const service = searchService(repository, events, {
+        keyword: { retrieve: async () => [candidate(allowed, "keyword", item.candidateInput)] },
+      });
+      const base = request({ scope: { kind: "exact_views", refs: [exactViewRef(allowed)] }, modes: ["keyword"] });
+      await assert.rejects(
+        service.search({
+          request_id: `search:retriever:target-${item.name}`,
+          principal: { id: "user:reader" },
+          request: { ...base, target: item.target },
+        }),
+        (error: unknown) => error instanceof SearchError && error.code === "retrieval_failed",
+        item.name,
+      );
+      assert.equal(events.at(-1)?.type, "search.failed", item.name);
+    }
   });
 });
 
@@ -438,6 +718,39 @@ function subgraphRequest(root: View): SearchRequestV1 {
     },
     modes: ["keyword", "relation"],
   });
+}
+
+function candidate(
+  view: View,
+  mode: "keyword" | "semantic",
+  input: {
+    location?:
+      | { kind: "envelope"; path: string }
+      | { kind: "representation"; path: string }
+      | { kind: "related_view"; ref: ExactViewRef };
+    path?: SearchRelationEdge[];
+    semanticEvidenceRef?: ExactViewRef;
+  } = {},
+) {
+  return {
+    ref: exactViewRef(view),
+    owner_ref: exactViewRef(view),
+    matched_schema: { name: view.schema.name, version: view.schema.version },
+    representation_kind: view.representation.kind,
+    matches: [{
+      location: input.location ?? { kind: "envelope" as const, path: "/name" },
+      snippet: "English",
+      value_digest: "0".repeat(64),
+      modes: [mode],
+      ...(input.semanticEvidenceRef ? { semantic_evidence_ref: input.semanticEvidenceRef } : {}),
+    }],
+    ...(input.path ? { path: input.path } : {}),
+  };
+}
+
+function assertTraceExcludes(events: SearchTraceEvent[], secrets: string[]): void {
+  const trace = JSON.stringify(events);
+  for (const secret of secrets) assert.ok(!trace.includes(secret), `trace leaked ${secret}`);
 }
 
 async function commit(repository: SqliteViewRepository, input: ViewDraft): Promise<View> {

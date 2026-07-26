@@ -3,6 +3,7 @@ import { ExactViewRefSchema, IdentifierSchema, TimestampSchema, compileViewSearc
 
 export const SEARCH_CONTRACT_VERSION = 1 as const;
 export const SEARCH_MAX_SCOPE_NODES = 1_000;
+export const SEARCH_MAX_SCAN_REFS = 10_000;
 export const SEARCH_MAX_DEPTH = 16;
 export const SEARCH_MAX_PAGE_SIZE = 100;
 export const SEARCH_MAX_CANDIDATES = 1_000;
@@ -37,8 +38,17 @@ export const ExactSearchScopeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("all_visible"),
     max_nodes: z.number().int().positive().max(SEARCH_MAX_SCOPE_NODES),
+    max_scan: z.number().int().positive().max(SEARCH_MAX_SCAN_REFS),
   }).strict(),
-]);
+]).superRefine((scope, context) => {
+  if (scope.kind === "all_visible" && scope.max_scan < scope.max_nodes) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "all-visible max_scan must be at least max_nodes",
+      path: ["max_scan"],
+    });
+  }
+});
 
 export const SearchTargetSchema = z.object({
   envelope: z.boolean(),

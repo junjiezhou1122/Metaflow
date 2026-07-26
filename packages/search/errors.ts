@@ -9,6 +9,7 @@ export const SearchErrorCodeSchema = z.enum([
   "view_not_found",
   "view_read_forbidden",
   "scope_limit_exceeded",
+  "scope_scan_limit_exceeded",
   "scope_resolution_failed",
   "scope_stale",
   "mode_unavailable",

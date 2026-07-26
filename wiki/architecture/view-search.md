@@ -53,6 +53,16 @@ scope, executes requested modes without substitution, fuses one-based ranks
 with weighted `rrf@1`, and validates opaque cursor fingerprints against both
 the frozen scope and strategy.
 
+Every scope-source and retriever response is validated as untrusted data before
+it can influence a result. Relation edges must match the requested frontier,
+direction, and relation-type allowlist. Retriever paths must equal the
+canonical path frozen during scope resolution; match locations must honor the
+frozen target flags. Related-View evidence and semantic evidence must reference
+an exact View already in the frozen authorized scope, and only semantic mode
+may provide semantic evidence. A future semantic materialization preflight may
+expand that scope only by explicitly authorizing and freezing its evidence
+before retrieval.
+
 `packages/adapters/storage-sqlite` remains the only index and relation owner.
 Its aggregate FTS row preserves cross-field AND matching and category-weighted
 BM25 candidate order. A private per-scalar FTS unit table retains declaration
@@ -80,6 +90,13 @@ The caller may scope a query to:
 - an Application Space;
 - a relation-derived subgraph rooted at one or more exact Views;
 - all Views visible to the authorized principal.
+
+`all_visible` is finite by contract. `max_nodes` bounds authorized exact Views
+that may enter the frozen scope, while the separate `max_scan` bounds every
+exact ref enumerated from storage, including denied refs. Each ordered page is
+also checked against the exact limit requested from the port. Reaching the scan
+cap while another page exists, or returning an oversized page, fails the scope;
+the service never keeps scanning denied pages indefinitely.
 
 `latest` is resolved explicitly before the query is frozen. Historical exact
 references never drift during retrieval.
@@ -204,8 +221,12 @@ At minimum:
 - `allow_local_search=false` excludes the exact revision from local indexes;
 - `allow_embedding=false` forbids embedding generation and vector indexing;
 - a relation traversal cannot cross into an unauthorized View;
+- scope-source relation edges cannot change the requested frontier direction or
+  relation-type allowlist;
 - mixed authorized and denied content must not leak through snippets, scores,
   paths, or aggregate counts;
+- retriever locations, paths, related refs, and semantic evidence must match
+  the frozen target and authorized scope before fusion;
 - forgotten or tombstoned content is removed according to the canonical View
   Store transaction rules.
 
