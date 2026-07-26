@@ -78,11 +78,24 @@ failures on each run). The previously reported concurrent-worker
 `search-adapter.js` resolution error did not reproduce in either clean run, so
 no serialization or module-resolution fallback was added.
 
+The final fail-fast regression deletes one committed embedding mapping and
+adds an unrelated physical-only vec row before reopen. Startup exposes exact
+orphan/missing counts as `reindex_required`; target-scoped Search returns a
+typed retrieval failure rather than an empty hit set, and semantic insert and
+delete are blocked. A new durable reindex repairs both rows and clears
+maintenance only after commit, after which exact retrieval succeeds.
+After rebasing onto integration commit `170ae655`, the final 49-file concurrent
+suite passed with 403 tests, one intentional live Screenpipe skip, and zero
+failures alongside the focused semantic, View Store, Forget, vertical,
+typecheck, boundary, frozen-install, and production-deploy gates.
+
 ## Failure behavior
 
 A database with stored vector profiles refuses to reopen without the same
 semantic configuration. Extension/profile/version/dimension/metric/table
 incompatibility or cross-profile physical metadata fails initialization.
+Missing mappings and physical orphans instead open in an explicit
+`reindex_required` maintenance state so only a new durable reindex can proceed.
 Invalid embedding provenance, policy,
 target location, digest, or vector fails the whole View transaction. An
 unconfigured `SearchService` still returns the existing explicit

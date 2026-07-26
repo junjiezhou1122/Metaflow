@@ -160,9 +160,14 @@ export type SqliteVecReindexCounts = {
   missing_rows_repaired: number;
 };
 
+export type SqliteVecMaintenanceState =
+  | { status: "ready" }
+  | { status: "reindex_required"; orphan_rows: number; missing_rows: number };
+
 export class SqliteVecSemanticSearch implements SemanticRetriever {
   readonly compatibility: SqliteVecCompatibilityEvidence;
   private readonly profiles = new Map<string, ProfileRow>();
+  private reindexRequired?: { orphan_rows: number; missing_rows: number };
 
   private constructor(
     private readonly db: DatabaseSync,
@@ -205,8 +210,14 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     }
     const stored = readProfileRows(db);
     const semanticSearch = new SqliteVecSemanticSearch(db, stored, compatibility);
-    semanticSearch.assertIntegrity("startup");
+    semanticSearch.initializeMaintenanceState();
     return semanticSearch;
+  }
+
+  get maintenance(): SqliteVecMaintenanceState {
+    return this.reindexRequired
+      ? { status: "reindex_required", ...this.reindexRequired }
+      : { status: "ready" };
   }
 
   static assertUnconfiguredDatabase(db: DatabaseSync): void {
@@ -225,6 +236,15 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
   insert(view: View, plannedViews?: ReadonlyMap<string, View>): "indexed" | "excluded" | "not_embedding" {
     const value = embeddingValue(view);
     if (!value) return "not_embedding";
+    this.assertReady("insert");
+    return this.insertEmbedding(view, value, plannedViews);
+  }
+
+  private insertEmbedding(
+    view: View,
+    value: EmbeddingValue,
+    plannedViews?: ReadonlyMap<string, View>,
+  ): "indexed" | "excluded" {
     const profile = this.requireProfile(value.profile);
     const target = plannedViews?.get(refKey(value.target.ref)) ?? this.readTarget(value.target.ref);
     assertEmbeddingEvidence(view, value, target, profile);
@@ -273,6 +293,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
   }
 
   delete(ref: ExactViewRef): number {
+    this.assertReady("delete");
     const rows = this.db.prepare(`
       select vector_rowid, profile_id, profile_revision, target_key, target_kind
       from view_search_vectors_v1
@@ -328,7 +349,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     return rows.length;
   }
 
-  rebuild(views: View[]): SqliteVecReindexCounts {
+  rebuild(views: View[]): { counts: SqliteVecReindexCounts; mark_committed: () => void } {
     const prior = this.inspectIntegrity();
     for (const profile of this.profiles.values()) {
       this.db.exec(`delete from ${quoteIdentifier(profile.table_name)}`);
@@ -340,7 +361,9 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     for (const view of views) {
       if (!isReservedEmbeddingView(view)) continue;
       scanned += 1;
-      const outcome = this.insert(view);
+      const value = embeddingValue(view);
+      if (!value) continue;
+      const outcome = this.insertEmbedding(view, value);
       if (outcome === "indexed") indexed += 1;
       else excluded += 1;
     }
@@ -349,12 +372,17 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
       throw new SqliteVecSemanticSearchError("Semantic reindex left inconsistent vector state", "vector_mapping_corrupt");
     }
     return {
-      scanned,
-      indexed,
-      excluded,
-      removed: Math.max(0, prior.vector_rows - indexed),
-      orphans_repaired: prior.orphans,
-      missing_rows_repaired: prior.missing + prior.mismatched,
+      counts: {
+        scanned,
+        indexed,
+        excluded,
+        removed: Math.max(0, prior.vector_rows - indexed),
+        orphans_repaired: prior.orphans,
+        missing_rows_repaired: prior.missing + prior.mismatched,
+      },
+      mark_committed: () => {
+        this.reindexRequired = undefined;
+      },
     };
   }
 
@@ -365,6 +393,7 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     target: SearchTarget;
     candidate_limit: number;
   }): Promise<RankedSearchCandidate[]> {
+    this.assertReady("retrieve");
     if (input.refs.length === 0) return [];
     const vector = QueryVectorSchema.parse(input.vector);
     const profile = this.requireProfile(input.profile);
@@ -542,15 +571,27 @@ export class SqliteVecSemanticSearch implements SemanticRetriever {
     return { vector_rows: vectorRows, orphans, missing, mismatched };
   }
 
-  private assertIntegrity(phase: string): void {
+  private initializeMaintenanceState(): void {
     const integrity = this.inspectIntegrity();
-    // Missing and orphaned rows are non-resolving and remain repairable by the
-    // explicit durable reindex path. Metadata mismatches can resolve to the
-    // wrong evidence, so startup must fail before Search becomes available.
-    if (integrity.mismatched === 0) return;
+    if (integrity.mismatched !== 0) {
+      throw new SqliteVecSemanticSearchError(
+        `Semantic vector startup integrity failed: ${integrity.mismatched} profile or target metadata mismatches`,
+        "vector_mapping_corrupt",
+      );
+    }
+    if (integrity.orphans !== 0 || integrity.missing !== 0) {
+      this.reindexRequired = {
+        orphan_rows: integrity.orphans,
+        missing_rows: integrity.missing,
+      };
+    }
+  }
+
+  private assertReady(operation: "retrieve" | "insert" | "delete"): void {
+    if (!this.reindexRequired) return;
     throw new SqliteVecSemanticSearchError(
-      `Semantic vector ${phase} integrity failed: ${integrity.mismatched} profile or target metadata mismatches`,
-      "vector_mapping_corrupt",
+      `Semantic ${operation} requires explicit durable reindex: ${this.reindexRequired.orphan_rows} orphan, ${this.reindexRequired.missing_rows} missing rows`,
+      "reindex_required",
     );
   }
 }
@@ -570,6 +611,7 @@ export class SqliteVecSemanticSearchError extends Error {
       | "target_missing"
       | "query_vector_mismatch"
       | "semantic_scope_too_large"
+      | "reindex_required"
       | "vector_mapping_corrupt",
     options?: ErrorOptions,
   ) {

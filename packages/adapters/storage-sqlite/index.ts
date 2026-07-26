@@ -125,6 +125,7 @@ export {
   SqliteVecSemanticSearchError,
   sqliteVecSourceDigest,
   type SqliteVecCompatibilityEvidence,
+  type SqliteVecMaintenanceState,
   type SqliteVecProfile,
   type SqliteVecReindexCounts,
 } from "./semantic-search.js";
@@ -1131,16 +1132,28 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       `).run(input.run_id, fingerprint, input.requested_at);
       return undefined;
     });
-    if (existingReport) return existingReport;
+    if (existingReport) {
+      if (this.semantic_search?.maintenance.status === "reindex_required") {
+        throw new ViewRepositoryError(
+          `Search reindex run ${input.run_id} predates current semantic corruption; retry with a new run id`,
+          "conflict",
+          { operation: "search_reindex", phase: "replay_requires_new_run" },
+        );
+      }
+      return existingReport;
+    }
 
     const transaction = this.transactionContext("search_reindex", []);
+    let markSemanticCommitted: (() => void) | undefined;
     try {
-      return this.withTransaction(transaction, () => {
+      const report = this.withTransaction(transaction, () => {
         transaction.phase = "rebuild_projection";
         const counts = this.rebuildSearchProjection(input.requested_at);
-        const semantic = this.semantic_search
+        const semanticRebuild = this.semantic_search
           ? this.semantic_search.rebuild(this.readAllStoredViews())
           : undefined;
+        markSemanticCommitted = semanticRebuild?.mark_committed;
+        const semantic = semanticRebuild?.counts;
         const report = ReindexViewSearchReportSchema.parse({
           run_id: input.run_id,
           status: "succeeded",
@@ -1168,6 +1181,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         }
         return report;
       });
+      markSemanticCommitted?.();
+      return report;
     } catch (error) {
       const failedAt = new Date().toISOString();
       const failure = this.transactionContext("search_reindex_fail", []);
