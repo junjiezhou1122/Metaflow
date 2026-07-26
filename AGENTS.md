@@ -37,6 +37,11 @@ but there is no separate canonical Worker domain layer.
   depend only on `view`, `transformation`, and `view-package`; concrete hosts
   resolve its Renderer descriptors and existing Operation/Transformation
   references.
+- `view-packages/application-space`: the strict ordinary View definition for an
+  immutable Application Space graph root. It freezes exact entry refs and
+  explicit membership/composition semantics; attach and detach create ordinary
+  root revisions and exact relations rather than mutating members or creating a
+  second application database.
 - `packages/transformation`: reusable Transformation and Operator contracts,
   immutable revision rules, and the durable Transformation Repository port.
 - `packages/execution`: input resolution, authorization, Transformation Run,
@@ -57,8 +62,10 @@ but there is no separate canonical Worker domain layer.
   call-level authorization, active Run cancellation, shared structured error
   envelopes, and operation observer events. Exact View reads use the same
   deterministic read-authorizer port as Search; an operation grant never grants
-  content access. It coordinates public domain ports and never imports SQLite
-  or transport code.
+  content access. Its bounded `view.graph.project` coordinator authorizes every
+  discovered exact revision before it can affect returned nodes, edges, paths,
+  summaries, bounds, or frontier. It coordinates public domain ports and never
+  imports SQLite or transport code.
 - `packages/search`: strict transport-neutral View Search request, evidence,
   cursor, error, and observer contracts; deterministic batch read
   authorization; exact, bounded subgraph, and bounded all-visible scope
@@ -75,7 +82,9 @@ but there is no separate canonical Worker domain layer.
   transaction as newly created View revisions, retains bounded expanded JSON
   Pointer evidence in per-scalar FTS units, resolves exact relation layers, and
   publishes events only after commit; it never invokes Automation or III
-  directly.
+  directly. The existing Search read adapter also implements the View-owned
+  deterministic paged graph relation and authorized-summary port on the same
+  SQLite connection; it does not own authorization or projection semantics.
 - `packages/adapters/automation-execution`: maps resolved Automation roles into
   exact Execution invocation bindings and projects Execution Agent events back
   into the Automation trace. It also implements the canonical reactive-cascade
@@ -246,6 +255,13 @@ Operations.
   reads are deterministic; shared non-owner reads fail closed until an explicit
   sharing ACL exists. Compatibility HTTP reads must delegate to Operations and
   cannot access the View Repository directly.
+- `view.graph.project` accepts only exact roots, an explicit direction and edge
+  allowlist, and bounded depth/node/edge limits. Traversal order is
+  deterministic. Denied or missing discovered revisions contribute only the
+  coarse `redacted_boundary` signal and can never affect returned identifiers,
+  counts, edges, labels, paths, summaries, truncation, or frontier. Selecting a
+  projected node remains `view.get`; a projection response is not a durable
+  View.
 - `run.execute` resolves one exact committed Transformation revision before
   Execution. `run.cancel` aborts only an active invocation owned by the same
   operation service; Execution still persists the terminal cancelled Run,

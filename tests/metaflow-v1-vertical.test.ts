@@ -175,6 +175,7 @@ test("Browser and Screenpipe evidence evolves through Function, Agent, feedback,
   });
   const operations = new OperationService({
     views,
+    graph: views.search,
     search,
     view_reads: viewReads,
     transformations,

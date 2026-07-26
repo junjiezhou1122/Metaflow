@@ -1,17 +1,37 @@
 ---
 name: architecture/application-view-spaces
 title: Application View Spaces
-desc: A design draft for Personal Applications as composable, reusable ViewGraph subgraphs.
-category: design-draft
+desc: The accepted v1 boundary for Personal Applications as composable, reusable ViewGraph subgraphs.
+category: accepted-design
 tags: [application, viewgraph, subview, composition, feedback]
 sources: [vision/dream-log, current-v0-inspection]
 created: 2026-07-24T17:01:16Z
-updated: 2026-07-24T17:01:16Z
+updated: 2026-07-27T08:00:00Z
 ---
 
 # Application View Spaces
 
-> Status: design draft for discussion, not a committed implementation.
+> Status: v1 Application Space View and graph projection boundary accepted by
+> issue 71. Explorer UI remains future work.
+
+## v1 contract
+
+An Application Space is one ordinary immutable Derived View using the strict
+`application.space@1` Schema. Its inline JSON Representation freezes exact
+entry refs and declares `membership` or `composition` for each entry. The root
+stores matching outgoing `application_member` or `application_composition`
+relations; these explicit inverse-style names avoid overloading the earlier
+provisional child-to-parent vocabulary.
+
+Attach and detach create a new revision of the root with an exact `supersedes`
+edge. Historical roots and members are never mutated or deleted. A member may
+remain the target of any number of exact Application Space revisions.
+
+`view.graph.project` is the only bounded graph projection Operation. It accepts
+exact roots, direction, an edge allowlist, and depth/node/edge limits. Every
+discovered revision is authorized before it can affect returned nodes, edges,
+paths, summaries, truncation, or frontier. Denied boundaries expose only the
+coarse `redacted_boundary` boolean. Full content remains an exact `view.get`.
 
 ## A space is a subgraph
 
@@ -50,22 +70,19 @@ version history.
 
 ## Every View remains reusable
 
-One View may have several parents:
+One View may have several parents without carrying mutable parent state:
 
 ```text
-learning.material:youtube-123
-├── part_of → learning.materials
-├── referenced_by → learning.plan:today
-├── used_by → learning.session:2026-07-25
-├── member_of → application:english-learning
-└── member_of → application:research-library
+application:english-learning ──application_member──────┐
+application:research-library ─application_member──────┼─→ learning.material:youtube-123
+learning.plan:today ───────────application_composition─┘
 ```
 
 Removing it from today's plan only removes that relationship. It does not
 delete the material or remove it from another Application. Retiring one View
 does not implicitly retire Views that it selected or referenced.
 
-## Provisional edge vocabulary
+## Broader edge vocabulary
 
 Different relationships need different invariants:
 
@@ -75,9 +92,10 @@ Different relationships need different invariants:
 | `part_of` | structural composition | attach/detach, no node deletion, acyclic |
 | `references` | semantic dependency or citation | mutable with provenance; cycles allowed |
 | `supersedes` | lifecycle and version succession | append-only and acyclic |
-| `member_of` | Application View Space membership | attach or detach by policy |
+| `application_member` | root-to-entry Application membership | attach/detach by root revision |
+| `application_composition` | root-to-entry structural composition | attach/detach by root revision |
 
-These names remain provisional. The important decision is that provenance,
+The non-Application names remain provisional. The important decision is that provenance,
 composition, reference, lifecycle, and membership are not one generic
 `related_to` edge.
 
@@ -122,12 +140,9 @@ Privacy and provenance follow the View and its source lineage, not the parent
 that happens to display it. Adding a private View to a public Application Space
 does not weaken its policy.
 
-## Open questions
+## Remaining questions
 
-- Does every Application View Space need one explicit root, or can it expose
-  several entry Views?
 - Which edge types are user-editable, Agent-editable, or append-only?
-- Should `member_of` be stored explicitly or computed from reachable roots?
 - How should a UI project a multiply-connected graph into understandable navigation?
 - When should feedback update another View immediately, remain pending, or
   require explicit promotion?

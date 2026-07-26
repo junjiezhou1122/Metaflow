@@ -63,9 +63,43 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
     assert.equal(captured.ok, true);
     const ref = captureRef(captured);
     const surfaces = await createSurfaces(harness, () => context("request:equivalent"));
+    const forbiddenGraphSurfaces = await createSurfaces(
+      harness,
+      () => context("request:graph-forbidden", ["view.get"]),
+    );
     try {
       const successes = await Promise.all(surfaces.map(surface => surface.call("view.get", { ref })));
       for (const success of successes.slice(1)) assert.deepEqual(success, successes[0]);
+
+      const projections = await Promise.all(surfaces.map(surface => surface.call("view.graph.project", {
+        request: graphRequest(ref),
+      })));
+      for (const projection of projections.slice(1)) assert.deepEqual(projection, projections[0]);
+      assert.deepEqual((projections[0] as Extract<OperationEnvelope, { ok: true }>).data, {
+        projection_version: 1,
+        roots: [ref],
+        nodes: [{
+          ref,
+          name: "Captured operation page",
+          purpose: "Exercise the shared v1 operation surfaces",
+          schema: { name: "capture.operation.page", version: 1 },
+          role: "raw",
+          time: { observed_at: "2026-07-26T14:00:00.000Z", created_at: "2026-07-26T14:00:01.000Z" },
+          representation: { kind: "browser_page", media_type: "application/json" },
+          depth: 0,
+          path: [],
+        }],
+        edges: [],
+        frontier: [{ ref, reason: "depth_limit" }],
+        truncation: { truncated: true, reasons: ["depth_limit"] },
+        redacted_boundary: false,
+      });
+      const forbiddenProjections = await Promise.all(forbiddenGraphSurfaces.map(surface => surface.call("view.graph.project", {
+        request: graphRequest(ref),
+      })));
+      for (const failure of forbiddenProjections.slice(1)) assert.deepEqual(failure, forbiddenProjections[0]);
+      assert.equal(forbiddenProjections[0]?.ok, false);
+      if (!forbiddenProjections[0]?.ok) assert.equal(forbiddenProjections[0]?.error.code, "operation_forbidden");
 
       const missing = { view_id: "view:missing:equivalent", revision: 1 };
       const failures = await Promise.all(surfaces.map(surface => surface.call("view.get", { ref: missing })));
@@ -86,7 +120,7 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
       assert.equal(mcp.toolNames?.length, OPERATION_NAMES.length);
       assert.deepEqual(new Set(mcp.toolNames), new Set(OPERATION_NAMES.map(operationMcpToolName)));
     } finally {
-      await Promise.all(surfaces.map(surface => surface.close()));
+      await Promise.all([...surfaces, ...forbiddenGraphSurfaces].map(surface => surface.close()));
     }
   });
 });
@@ -136,6 +170,15 @@ test("operation grants cannot bypass exact private View read authorization", asy
         assert.equal(result.error.category, "forbidden", operation);
       }
     }
+    const projection = await harness.service.execute({
+      operation: "view.graph.project",
+      input: { request: graphRequest(ref) },
+    }, context("request:private:view.graph.project"));
+    assert.equal(projection.ok, true);
+    if (projection.ok) {
+      assert.deepEqual((projection.data as any).nodes, []);
+      assert.equal((projection.data as any).redacted_boundary, true);
+    }
   });
 });
 
@@ -153,6 +196,8 @@ for (const surfaceName of ["in-process", "cli", "http", "mcp"] as const) {
 
         const exact = await ok(surface.call("view.get", { ref: source }));
         assert.equal((exact.data as any).schema.name, "capture.operation.page");
+        const projected = await ok(surface.call("view.graph.project", { request: graphRequest(source) }));
+        assert.deepEqual((projected.data as any).nodes.map((node: any) => node.ref), [source]);
         const searched = await ok(surface.call("view.search", {
           request: searchRequest(source, "Operation"),
         }));
@@ -357,6 +402,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
   });
   const service = new OperationService({
     views,
+    graph: views.search,
     search,
     view_reads: viewReads,
     transformations,
@@ -391,6 +437,17 @@ function searchRequest(ref: { view_id: string; revision: number }, text: string)
     fusion: { strategy: "rrf@1" as const, k: 60 as const, weights: { keyword: 1 } },
     failure_mode: "require_all" as const,
     page: { limit: 10 },
+  };
+}
+
+function graphRequest(ref: { view_id: string; revision: number }) {
+  return {
+    roots: [ref],
+    direction: "both" as const,
+    edge_types: ["derived_from"],
+    max_depth: 0,
+    max_nodes: 10,
+    max_edges: 10,
   };
 }
 

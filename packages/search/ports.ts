@@ -26,7 +26,7 @@ export interface ViewReadAuthorizationPort {
   authorize(input: {
     principal: SearchPrincipal;
     refs: ExactViewRef[];
-    purpose: "read" | "search" | "traverse";
+    purpose: "read" | "search" | "traverse" | "graph_project";
   }): Promise<ViewReadAuthorizationDecision[]>;
 }
 
