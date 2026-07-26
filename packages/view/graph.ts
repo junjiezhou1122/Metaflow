@@ -141,7 +141,7 @@ export type ViewGraphProjectionEdge = z.infer<typeof ViewGraphProjectionEdgeSche
 export type ViewGraphFrontierReason = z.infer<typeof ViewGraphFrontierReasonSchema>;
 export type ViewGraphProjectionResult = z.infer<typeof ViewGraphProjectionResultSchema>;
 
-export interface ViewGraphProjectionSource {
+export interface ViewGraphSnapshotReader {
   readGraphRelationPage(input: {
     frontier: ExactViewRef[];
     direction: ViewGraphProjectionRequest["direction"];
@@ -150,6 +150,10 @@ export interface ViewGraphProjectionSource {
     limit: number;
   }): Promise<ViewGraphRelationPage>;
   readGraphNodeSummaries(refs: ExactViewRef[]): Promise<ViewGraphNodeSummary[]>;
+}
+
+export interface ViewGraphProjectionSource {
+  withGraphReadSnapshot<T>(read: (snapshot: ViewGraphSnapshotReader) => Promise<T>): Promise<T>;
 }
 
 function refIdentity(ref: ExactViewRef): string {

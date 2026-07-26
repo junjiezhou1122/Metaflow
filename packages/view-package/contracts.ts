@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   IdentifierSchema,
+  ViewRelationTargetSchema,
   ViewRepresentationSchema,
   ViewSchemaRefSchema,
   type ViewRepresentation,
@@ -115,6 +116,7 @@ export const ViewPackageFixtureSchema = z.object({
   id: IdentifierSchema,
   schema: ViewPackageSchemaKeySchema,
   representation: ViewRepresentationSchema,
+  relations: z.array(ViewRelationTargetSchema).default([]),
 }).strict();
 
 export type ViewPackageSchemaKey = z.infer<typeof ViewPackageSchemaKeySchema>;

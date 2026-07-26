@@ -39,7 +39,7 @@ export const applicationSpaceSchema = {
               additionalProperties: false,
               required: ["view_id", "revision"],
               properties: {
-                view_id: { type: "string", minLength: 1, maxLength: 240 },
+                view_id: { type: "string", minLength: 1, maxLength: 240, pattern: "\\S" },
                 revision: { type: "integer", minimum: 1 },
               },
             },
@@ -48,6 +48,24 @@ export const applicationSpaceSchema = {
         },
       },
     },
+  },
+  relation_projection: {
+    version: 1,
+    entries_path: "/entries",
+    ref_path: "/ref",
+    discriminator_path: "/semantics",
+    mappings: [
+      {
+        discriminator: "membership",
+        relation_type: APPLICATION_SPACE_MEMBERSHIP_RELATION,
+        metadata: { application_semantics: "membership" },
+      },
+      {
+        discriminator: "composition",
+        relation_type: APPLICATION_SPACE_COMPOSITION_RELATION,
+        metadata: { application_semantics: "composition" },
+      },
+    ],
   },
   search_projection: {
     version: 1,
@@ -140,6 +158,11 @@ export function applicationSpaceRelations(entries: readonly ApplicationSpaceEntr
   }));
 }
 
+const englishLearningEntries = normalizeApplicationSpaceEntries([
+  { ref: { view_id: "view:learning:material", revision: 2 }, semantics: "membership" },
+  { ref: { view_id: "view:learning:plan", revision: 1 }, semantics: "composition" },
+]);
+
 export const applicationSpaceFixtures = [{
   id: "fixture.application-space.english-learning",
   schema: applicationSpaceSchemaKey,
@@ -149,13 +172,11 @@ export const applicationSpaceFixtures = [{
     media_type: "application/json",
     value: {
       version: 1,
-      entries: normalizeApplicationSpaceEntries([
-        { ref: { view_id: "view:learning:material", revision: 2 }, semantics: "membership" },
-        { ref: { view_id: "view:learning:plan", revision: 1 }, semantics: "composition" },
-      ]),
+      entries: englishLearningEntries,
     },
     metadata: {},
   },
+  relations: applicationSpaceRelations(englishLearningEntries),
 }] as const;
 
 function entryIdentity(entry: ApplicationSpaceEntry): string {

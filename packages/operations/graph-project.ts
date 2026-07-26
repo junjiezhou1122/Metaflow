@@ -14,6 +14,7 @@ import {
   type ViewGraphProjectionRequest,
   type ViewGraphProjectionResult,
   type ViewGraphProjectionSource,
+  type ViewGraphSnapshotReader,
   type ViewGraphRelationCursor,
   type ViewGraphRelationEdge,
 } from "@info/view";
@@ -55,11 +56,19 @@ type ProjectInput = {
   source: ViewGraphProjectionSource;
 };
 
+type SnapshotProjectInput = Omit<ProjectInput, "source"> & {
+  source: ViewGraphSnapshotReader;
+};
+
 const AUTHORIZATION_BATCH_SIZE = 256;
 const truncationOrder: ViewGraphFrontierReason[] = ["depth_limit", "node_limit", "edge_limit"];
 const utf8Encoder = new TextEncoder();
 
 export async function projectAuthorizedViewGraph(input: ProjectInput): Promise<ViewGraphProjectionResult> {
+  return input.source.withGraphReadSnapshot(snapshot => projectSnapshot({ ...input, source: snapshot }));
+}
+
+async function projectSnapshot(input: SnapshotProjectInput): Promise<ViewGraphProjectionResult> {
   const request = input.request;
   const roots = request.roots.slice().sort(compareRefs);
   const decisions = new Map<string, ViewReadAuthorizationDecision>();
@@ -85,11 +94,9 @@ export async function projectAuthorizedViewGraph(input: ProjectInput): Promise<V
   let current = [...nodes.values()].map(node => node.ref).sort(compareRefs);
 
   for (let depth = 0; depth < request.max_depth && current.length > 0; depth += 1) {
-    const layerEdges = await readRelationLayer(input.source, request, current);
-    const unknown = uniqueRefs(layerEdges.flatMap(edge => discoveryRefs(edge, current)))
-      .filter(ref => !decisions.has(refKey(ref)));
-    await authorizeRefs(input, unknown, decisions);
-    if (unknown.some(ref => decisions.get(refKey(ref))?.status !== "allowed")) redactedBoundary = true;
+    const layer = await readRelationLayer(input, request, current, decisions);
+    const layerEdges = layer.edges;
+    if (layer.redacted) redactedBoundary = true;
 
     const next = new Map<string, ExactViewRef>();
     let edgeCapacityExhausted = edges.size >= request.max_edges;
@@ -168,7 +175,7 @@ export async function projectAuthorizedViewGraph(input: ProjectInput): Promise<V
 }
 
 async function authorizeRefs(
-  input: ProjectInput,
+  input: Pick<ProjectInput, "principal" | "authorization">,
   refs: ExactViewRef[],
   decisions: Map<string, ViewReadAuthorizationDecision>,
 ): Promise<void> {
@@ -202,17 +209,19 @@ async function authorizeRefs(
 }
 
 async function readRelationLayer(
-  source: ViewGraphProjectionSource,
+  input: SnapshotProjectInput,
   request: ViewGraphProjectionRequest,
   frontier: ExactViewRef[],
-): Promise<ViewGraphRelationEdge[]> {
+  decisions: Map<string, ViewReadAuthorizationDecision>,
+): Promise<{ edges: ViewGraphRelationEdge[]; redacted: boolean }> {
   const edges: ViewGraphRelationEdge[] = [];
   const relationIds = new Set<string>();
+  let redacted = false;
   let after: ViewGraphRelationCursor | undefined;
   do {
     let page;
     try {
-      page = ViewGraphRelationPageSchema.parse(await source.readGraphRelationPage({
+      page = ViewGraphRelationPageSchema.parse(await input.source.readGraphRelationPage({
         frontier,
         direction: request.direction,
         edge_types: request.edge_types,
@@ -225,7 +234,17 @@ async function readRelationLayer(
       throw sourceInvalid("Graph relation source returned an invalid page", cause);
     }
     validateRelationPage(page.edges, frontier, request, relationIds, after);
-    edges.push(...page.edges);
+    const unknown = uniqueRefs(page.edges.flatMap(edge => discoveryRefs(edge, frontier)))
+      .filter(ref => !decisions.has(refKey(ref)));
+    await authorizeRefs(input, unknown, decisions);
+    for (const edge of page.edges) {
+      const discovered = discoveryRefs(edge, frontier);
+      if (discovered.some(ref => decisions.get(refKey(ref))?.status !== "allowed")) {
+        redacted = true;
+        continue;
+      }
+      edges.push(edge);
+    }
     if (edges.length > VIEW_GRAPH_MAX_SCANNED_EDGES) {
       throw new ViewGraphProjectionOperationError(
         "View graph relation scan exceeded the fixed server limit",
@@ -240,7 +259,7 @@ async function readRelationLayer(
     }
     after = page.next;
   } while (after !== undefined);
-  return edges;
+  return { edges, redacted };
 }
 
 function validateRelationPage(
@@ -274,7 +293,7 @@ function validateRelationPage(
 }
 
 async function readAuthorizedSummaries(
-  source: ViewGraphProjectionSource,
+  source: ViewGraphSnapshotReader,
   refs: ExactViewRef[],
 ) {
   let summaries;

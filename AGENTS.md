@@ -39,9 +39,10 @@ but there is no separate canonical Worker domain layer.
   references.
 - `view-packages/application-space`: the strict ordinary View definition for an
   immutable Application Space graph root. It freezes exact entry refs and
-  explicit membership/composition semantics; attach and detach create ordinary
-  root revisions and exact relations rather than mutating members or creating a
-  second application database.
+  explicit membership/composition semantics. Its Schema relation projection
+  makes the Representation entries and managed envelope relations one admission
+  invariant; attach and detach create ordinary root revisions rather than
+  mutating members or creating a second application database.
 - `packages/transformation`: reusable Transformation and Operator contracts,
   immutable revision rules, and the durable Transformation Repository port.
 - `packages/execution`: input resolution, authorization, Transformation Run,
@@ -64,8 +65,9 @@ but there is no separate canonical Worker domain layer.
   deterministic read-authorizer port as Search; an operation grant never grants
   content access. Its bounded `view.graph.project` coordinator authorizes every
   discovered exact revision before it can affect returned nodes, edges, paths,
-  summaries, bounds, or frontier. It coordinates public domain ports and never
-  imports SQLite or transport code.
+  summaries, bounds, scan limits, or frontier, and consumes every relation page
+  and summary through one source read snapshot. It coordinates public domain
+  ports and never imports SQLite or transport code.
 - `packages/search`: strict transport-neutral View Search request, evidence,
   cursor, error, and observer contracts; deterministic batch read
   authorization; exact, bounded subgraph, and bounded all-visible scope
@@ -257,11 +259,13 @@ Operations.
   cannot access the View Repository directly.
 - `view.graph.project` accepts only exact roots, an explicit direction and edge
   allowlist, and bounded depth/node/edge limits. Traversal order is
-  deterministic. Denied or missing discovered revisions contribute only the
-  coarse `redacted_boundary` signal and can never affect returned identifiers,
-  counts, edges, labels, paths, summaries, truncation, or frontier. Selecting a
-  projected node remains `view.get`; a projection response is not a durable
-  View.
+  deterministic and all pages plus node summaries come from one read snapshot.
+  A relation is validated and its discovered exact refs are authorized before
+  it consumes the fixed server scan budget. Denied or missing discovered
+  revisions contribute only the coarse `redacted_boundary` signal and can never
+  affect returned identifiers, counts, edges, labels, paths, summaries,
+  truncation, frontier, or scan-limit errors. Selecting a projected node remains
+  `view.get`; a projection response is not a durable View.
 - `run.execute` resolves one exact committed Transformation revision before
   Execution. `run.cancel` aborts only an active invocation owned by the same
   operation service; Execution still persists the terminal cancelled Run,
@@ -271,6 +275,10 @@ Operations.
 - Every committed View revision has Schema, Representation, Materialization,
   policy, and provenance. Strict Representations validate; freeform
   Representations are explicitly declared.
+- A strict Schema relation projection is a cross-envelope admission contract:
+  every projected Representation entry must have exactly one matching managed
+  relation with its exact target, relation type, and metadata. Missing, extra,
+  or mismatched managed relations reject the complete View commit.
 - A View identity keeps one Schema family. Within its revision chain, a Schema
   `name@version` is immutable. Changing interpretation rules requires a higher
   version; changing the family requires a fork.

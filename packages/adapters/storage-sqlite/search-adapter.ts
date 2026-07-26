@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import {
   ExactViewRefSchema,
   ViewGraphRelationCursorSchema,
@@ -10,6 +10,7 @@ import {
   type View,
   type ViewGraphNodeSummary,
   type ViewGraphProjectionSource,
+  type ViewGraphSnapshotReader,
   type ViewGraphRelationCursor,
   type ViewGraphRelationEdge,
 } from "@info/view";
@@ -41,8 +42,79 @@ type RelationRow = {
   target_revision: number;
 };
 
-export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDescriptorReader, KeywordRetriever, ViewGraphProjectionSource {
+export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDescriptorReader, KeywordRetriever, ViewGraphProjectionSource, ViewGraphSnapshotReader {
   constructor(private readonly db: DatabaseSync) {}
+
+  async withGraphReadSnapshot<T>(read: (snapshot: ViewGraphSnapshotReader) => Promise<T>): Promise<T> {
+    const location = this.db.location();
+    if (!location) {
+      throw new ViewRepositoryError(
+        "View graph projection requires a file-backed SQLite read snapshot",
+        "storage_failure",
+        { operation: "view_graph_project", phase: "open_snapshot" },
+      );
+    }
+    let snapshotDb: DatabaseSync | undefined;
+    try {
+      snapshotDb = new DatabaseSync(location, {
+        readOnly: true,
+        enableForeignKeyConstraints: true,
+        timeout: 5_000,
+      });
+      snapshotDb.exec("BEGIN");
+      snapshotDb.prepare("select rowid from view_relations_v1 limit 1").get();
+    } catch (cause) {
+      const cleanupErrors: unknown[] = [];
+      if (snapshotDb?.isTransaction) {
+        try {
+          snapshotDb.exec("ROLLBACK");
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      if (snapshotDb) {
+        try {
+          snapshotDb.close();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      throw graphSnapshotFailure(
+        "failed to open the View graph read snapshot",
+        "open_snapshot",
+        cleanupErrors.length > 0 ? new AggregateError([cause, ...cleanupErrors]) : cause,
+      );
+    }
+
+    try {
+      const result = await read(new SqliteViewSearchAdapter(snapshotDb));
+      snapshotDb.exec("COMMIT");
+      snapshotDb.close();
+      return result;
+    } catch (cause) {
+      const cleanupErrors: unknown[] = [];
+      if (snapshotDb.isTransaction) {
+        try {
+          snapshotDb.exec("ROLLBACK");
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      try {
+        snapshotDb.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (cleanupErrors.length > 0) {
+        throw graphSnapshotFailure(
+          "View graph read snapshot failed and could not be closed cleanly",
+          "close_snapshot",
+          new AggregateError([cause, ...cleanupErrors]),
+        );
+      }
+      throw cause;
+    }
+  }
 
   async listLatestExactRefs(input: {
     after_view_id?: string;
@@ -437,4 +509,13 @@ function compareViewJsonIdentity(leftJson: string, rightJson: string): number {
 function sqliteErrorCode(cause: unknown): string | undefined {
   if (typeof cause !== "object" || cause === null || !("code" in cause)) return "unknown";
   return typeof cause.code === "string" ? cause.code : "unknown";
+}
+
+function graphSnapshotFailure(message: string, phase: string, cause: unknown): ViewRepositoryError {
+  return new ViewRepositoryError(
+    message,
+    "storage_failure",
+    { operation: "view_graph_project", phase, sqlite_code: sqliteErrorCode(cause) },
+    { cause },
+  );
 }
