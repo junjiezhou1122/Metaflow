@@ -333,6 +333,28 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
     audit.close();
 
     repository = semanticRepository(database);
+    assert.deepEqual(repository.semantic_search!.maintenance, {
+      status: "reindex_required",
+      orphan_rows: 2,
+      missing_rows: 0,
+    });
+    await assert.rejects(
+      semanticSearch(repository, [retainedTarget], [0, 1, 0]),
+      (error: unknown) => error instanceof Error
+        && "code" in error && error.code === "retrieval_failed"
+        && error.cause instanceof Error
+        && "code" in error.cause && error.cause.code === "reindex_required",
+    );
+    const blockedEmbedding = embeddingDraft("view:embedding:blocked-until-reindex", retainedTarget, [0, 1, 0]);
+    await assert.rejects(
+      repository.commit({ draft: blockedEmbedding, expected_revision: 0 }),
+      (error: unknown) => semanticErrorCode(error) === "reindex_required",
+    );
+    assert.equal(await repository.get({ view_id: blockedEmbedding.id, revision: 1 }), undefined);
+    assert.throws(
+      () => repository!.semantic_search!.delete(exactViewRef(retainedTarget)),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "reindex_required",
+    );
     const report = await repository.reindexSearch({
       run_id: "semantic:reindex:repair",
       requested_at: "2026-07-27T08:10:00.000Z",
@@ -348,6 +370,7 @@ test("Privacy Forget and durable reindex remove vector evidence and repair mappi
       orphans_repaired: 2,
       missing_rows_repaired: 0,
     });
+    assert.deepEqual(repository.semantic_search!.maintenance, { status: "ready" });
     assert.deepEqual(
       await repository.reindexSearch({ run_id: "semantic:reindex:repair", requested_at: "2026-07-27T08:10:00.000Z" }),
       report,

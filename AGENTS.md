@@ -90,12 +90,14 @@ but there is no separate canonical Worker domain layer.
   commit, rollback, Privacy Forget, reopen, and durable reindex/orphan-repair
   transactions with View and FTS state. Physical vector identity includes the
   exact profile revision; profile/target metadata mismatch fails before Search
-  can return evidence. Missing/incompatible extension,
-  profile, ABI, or persisted vector state fails without a cosine or remote
-  fallback. It publishes events only after commit and never invokes Automation
-  or III directly. The existing Search read adapter also implements the
-  View-owned deterministic paged graph relation and authorized-summary port on
-  the same SQLite connection; it does not own authorization or projection
+  can return evidence. Missing or orphaned rows open an observable
+  `reindex_required` maintenance state that blocks semantic retrieval and
+  mutation until a new durable reindex commits. Missing/incompatible extension,
+  profile, ABI, or unsafe persisted vector state fails without a cosine or
+  remote fallback. It publishes events only after commit and never invokes
+  Automation or III directly. The existing Search read adapter also implements
+  the View-owned deterministic paged graph relation and authorized-summary port
+  on the same SQLite connection; it does not own authorization or projection
   semantics.
 - `packages/adapters/automation-execution`: maps resolved Automation roles into
   exact Execution invocation bindings and projects Execution Agent events back
