@@ -6,11 +6,12 @@ import {
   type ReactiveCascadeLedger,
   type ReactiveCascadeTerminalizer,
 } from "@info/automation";
-import { exactViewRef, type ViewRepository } from "@info/view";
+import { canonicalJson, exactViewRef, type ViewRepository } from "@info/view";
 import {
   III_AUTOMATION_CONTRACT,
   III_AUTOMATION_FUNCTION_ID,
   III_ENGINE_VERSION,
+  III_FUNCTION_ABI_VERSION,
   III_SDK_VERSION,
   IiiAutomationHandlerResponseSchema,
   IiiAutomationInvocationEnvelopeSchema,
@@ -21,6 +22,8 @@ import {
   IiiRuntimeError,
   METAFLOW_AUTOMATION_QUEUE,
   assertCompatibleQueueConfiguration,
+  contractDigest,
+  extractIiiInvocationInput,
   type IiiDeadLetterMessage,
   type IiiQueueConfiguration,
   type IiiRuntimeEventSink,
@@ -73,6 +76,7 @@ export class IiiRuntimeWorker {
   private dlqMonitor?: ReturnType<typeof setInterval>;
   private dlqMonitorFailure?: Error;
   private readonly observedDeadLetters = new Set<string>();
+  private readonly expectedFunctions = new Map<string, RegisterFunctionOptions>();
 
   private constructor(
     private readonly options: Required<Pick<IiiRuntimeWorkerOptions, "worker_name" | "sdk_version" | "expected_engine_version">>
@@ -117,7 +121,10 @@ export class IiiRuntimeWorker {
       worker: options.worker_name,
       now: options.now ?? (() => new Date().toISOString()),
     });
-    const operatorHost = new IiiOperatorFunctionHost(client, events);
+    const operatorHost = new IiiOperatorFunctionHost(client, events, {
+      name: queue.name,
+      config_version: queue.version,
+    });
     const worker = new IiiRuntimeWorker({ ...options, queue }, client, events, operatorHost, []);
 
     try {
@@ -130,25 +137,25 @@ export class IiiRuntimeWorker {
           queue_config_version: queue.version,
         },
       });
-      await worker.verifyEngineCompatibility();
-      await worker.verifyQueueCompatibility();
+      const automationOptions = automationRegistrationOptions(queue);
       worker.automationRef = client.registerFunction(
         III_AUTOMATION_FUNCTION_ID,
         raw => worker.handleAutomation(raw),
-        automationRegistrationOptions(queue),
+        automationOptions,
       );
+      worker.expectedFunctions.set(III_AUTOMATION_FUNCTION_ID, automationOptions);
       await events.emit({
         type: "iii.worker.function_registered",
         function_id: III_AUTOMATION_FUNCTION_ID,
         queue: queue.name,
         payload: { contract: III_AUTOMATION_CONTRACT },
       });
-      await worker.verifyFunctionContract(III_AUTOMATION_FUNCTION_ID, III_AUTOMATION_CONTRACT);
-
       const routes: IiiOperatorRoute[] = [];
       for (const registration of options.operators ?? []) {
         const route = operatorHost.register(registration);
         routes.push(route);
+        worker.expectedFunctions.set(route.function_id, route.registration_options);
+        worker.expectedFunctions.set(route.cancel_function_id, route.cancel_registration_options);
         await events.emit({
           type: "iii.worker.function_registered",
           function_id: route.function_id,
@@ -159,11 +166,10 @@ export class IiiRuntimeWorker {
             cancel_function_id: route.cancel_function_id,
           },
         });
-        await worker.verifyFunctionContract(route.function_id, "metaflow.operator.execute.v1");
-        await worker.verifyFunctionContract(route.cancel_function_id, "metaflow.operator.cancel.v1");
       }
       worker.operatorRoutes = routes;
       worker.operatorClient = new IiiOperatorExecutionClient(client, routes, events);
+      await worker.verifyReadiness("startup");
       await events.emit({
         type: "iii.worker.registered",
         queue: queue.name,
@@ -244,6 +250,24 @@ export class IiiRuntimeWorker {
   assertHealthy(): void {
     if (this.dlqMonitorFailure) throw this.dlqMonitorFailure;
     if (this.closed) throw new Error(`III Worker is closed: ${this.options.worker_name}`);
+  }
+
+  async verifyReadiness(reason: "startup" | "restart" | "probe" = "probe"): Promise<void> {
+    if (this.closed) throw new Error(`III Worker is closed: ${this.options.worker_name}`);
+    await this.verifyEngineCompatibility();
+    await this.verifyQueueCompatibility();
+    for (const [functionId, expected] of this.expectedFunctions) {
+      await this.verifyFunctionContract(functionId, expected);
+    }
+    await this.eventWriter.emit({
+      type: "iii.worker.readiness_verified",
+      queue: (this.options.queue ?? METAFLOW_AUTOMATION_QUEUE).name,
+      payload: {
+        reason,
+        function_count: this.expectedFunctions.size,
+        operator_count: this.operatorRoutes.length,
+      },
+    });
   }
 
   private startDlqMonitor(): void {
@@ -372,30 +396,39 @@ export class IiiRuntimeWorker {
     }
   }
 
-  private async verifyFunctionContract(functionId: string, contract: string): Promise<void> {
+  private async verifyFunctionContract(functionId: string, expected: RegisterFunctionOptions): Promise<void> {
     const raw = await this.client.trigger<unknown, unknown>({
       function_id: "engine::functions::info",
       payload: { function_id: functionId },
     });
     const detail = IiiFunctionDetailSchema.parse(raw);
-    const metadata = detail.metadata;
+    const expectedContract = {
+      description: expected.description ?? null,
+      request_schema: expected.request_format ?? null,
+      response_schema: expected.response_format ?? null,
+      metadata: expected.metadata ?? null,
+    };
+    const actualContract = {
+      description: detail.description ?? null,
+      request_schema: detail.request_schema ?? null,
+      response_schema: detail.response_schema ?? null,
+      metadata: detail.metadata ?? null,
+    };
     if (
       detail.function_id !== functionId
       || detail.worker_name !== this.options.worker_name
-      || typeof metadata !== "object"
-      || metadata === null
-      || Array.isArray(metadata)
-      || metadata.metaflow_contract !== contract
+      || canonicalJson(actualContract) !== canonicalJson(expectedContract)
     ) {
       throw new IiiRuntimeError(
-        `III Function registration is incompatible for ${functionId}`,
+        `III Function registration is incompatible for ${functionId}; expected ${contractDigest(expectedContract)}, observed ${contractDigest(actualContract)}`,
         "function_contract_incompatible",
       );
     }
   }
 
   private async handleAutomation(raw: unknown): Promise<unknown> {
-    const parsed = IiiAutomationInvocationEnvelopeSchema.safeParse(raw);
+    const input = extractIiiInvocationInput(raw);
+    const parsed = IiiAutomationInvocationEnvelopeSchema.safeParse(input.payload);
     if (!parsed.success) {
       await this.eventWriter.emit({
         type: "iii.queue.retryable_failure",
@@ -416,6 +449,7 @@ export class IiiRuntimeWorker {
       automation: envelope.automation,
       signal_id: envelope.signal.id,
       ...(envelope.signal.cascade ? { cascade_attempt_id: envelope.signal.cascade.attempt_id } : {}),
+      payload: input.caller_worker_id ? { caller_worker_id: input.caller_worker_id } : {},
     });
     try {
       const view = await this.options.views.get(envelope.automation);
@@ -516,35 +550,46 @@ function handlerResponse(result: AutomationInvocationAdmissionResult) {
 }
 
 function automationRegistrationOptions(queue: IiiQueueConfiguration): RegisterFunctionOptions {
+  const requestFormat = {
+    type: "object" as const,
+    required: ["schema_version", "contract", "message_id", "correlation_id", "queue", "automation", "signal"],
+    properties: {
+      schema_version: { const: 1 },
+      contract: { const: III_AUTOMATION_CONTRACT },
+      message_id: { type: "string" },
+      correlation_id: { type: "string" },
+      queue: { type: "object" },
+      automation: { type: "object" },
+      signal: { type: "object" },
+    },
+    additionalProperties: false,
+  };
+  const responseFormat = {
+    type: "object" as const,
+    required: ["accepted", "status"],
+    properties: {
+      accepted: { const: true },
+      status: { enum: ["ignored", "duplicate", "skipped", "succeeded", "failed"] },
+    },
+    additionalProperties: true,
+  };
   return {
     description: "Resolve an exact Automation View and invoke the canonical Metaflow Automation Runtime",
-    request_format: {
-      type: "object",
-      required: ["schema_version", "contract", "message_id", "correlation_id", "queue", "automation", "signal"],
-      properties: {
-        schema_version: { const: 1 },
-        contract: { const: III_AUTOMATION_CONTRACT },
-        message_id: { type: "string" },
-        correlation_id: { type: "string" },
-        queue: { type: "object" },
-        automation: { type: "object" },
-        signal: { type: "object" },
-      },
-      additionalProperties: false,
-    },
-    response_format: {
-      type: "object",
-      required: ["accepted", "status"],
-      properties: {
-        accepted: { const: true },
-        status: { enum: ["ignored", "duplicate", "skipped", "succeeded", "failed"] },
-      },
-      additionalProperties: true,
-    },
+    request_format: requestFormat,
+    response_format: responseFormat,
     metadata: {
       metaflow_contract: III_AUTOMATION_CONTRACT,
-      queue: queue.name,
-      queue_config_version: queue.version,
+      function_abi_version: III_FUNCTION_ABI_VERSION,
+      input_contract: {
+        id: III_AUTOMATION_CONTRACT,
+        schema_sha256: contractDigest(requestFormat),
+      },
+      output_contract: {
+        id: "metaflow.automation.invoke-result.v1",
+        schema_sha256: contractDigest(responseFormat),
+      },
+      queue: { name: queue.name, config_version: queue.version },
+      capabilities: ["descriptor_only", "durable_queue", "retry", "dlq"],
       canonical_owner: "metaflow-automation",
     },
   };

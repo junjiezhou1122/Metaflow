@@ -31,6 +31,7 @@
     "test:committed-view-trigger": "node --experimental-sqlite --import tsx --test tests/committed-view-trigger.test.ts",
     "test:reactive-cascade": "node --experimental-sqlite --import tsx --test tests/reactive-cascade.test.ts",
     "test:iii-runtime": "node --experimental-sqlite --import tsx --test tests/iii-runtime.test.ts",
+    "test:iii-runtime:live": "node --experimental-sqlite --import tsx scripts/v1/probe-iii-parser-runtime.ts",
     "test:transformation-contract": "node --import tsx --test tests/transformation-contract.test.ts",
     "test:view-access-policy": "node --import tsx --test tests/view-access-policy.test.ts",
     "test:execution-runtime": "node --experimental-sqlite --import tsx --test tests/execution-runtime.test.ts",

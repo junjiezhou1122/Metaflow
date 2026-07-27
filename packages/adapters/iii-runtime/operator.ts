@@ -4,15 +4,25 @@ import {
   type OperatorExecutionPort,
   type OperatorExecutionResult,
 } from "@info/execution";
-import type { OperatorSnapshot } from "@info/transformation";
+import {
+  exactTransformationRef,
+  type OperatorSnapshot,
+  type Transformation,
+} from "@info/transformation";
 import { canonicalJson, type JsonObject } from "@info/view";
 import type { IiiClientPort } from "./client.js";
 import {
+  III_FUNCTION_ABI_VERSION,
+  III_OPERATOR_CANCEL_CONTRACT,
+  III_OPERATOR_CONTRACT,
+  III_OPERATOR_RESULT_CONTRACT,
   IiiOperatorCancelRequestSchema,
   IiiOperatorCancelResponseSchema,
   IiiOperatorExecutionResultSchema,
   IiiOperatorInvocationEnvelopeSchema,
   IiiRuntimeError,
+  contractDigest,
+  extractIiiInvocationInput,
   iiiOperatorCancelFunctionId,
   iiiOperatorFunctionId,
   operatorInvocationEnvelope,
@@ -24,12 +34,28 @@ import { errorMessage, isInvocationStopped } from "./automation-queue.js";
 export type IiiOperatorRegistration = {
   operator: OperatorSnapshot;
   port: OperatorExecutionPort;
+  formations?: readonly IiiOperatorFormationContract[];
+};
+
+export type IiiOperatorFormationContract = {
+  kind: "parser" | "processor";
+  id: string;
+  version: number;
+  abi_version: 1;
+  transformation: Transformation;
 };
 
 export type IiiOperatorRoute = {
   operator: OperatorSnapshot;
   function_id: string;
   cancel_function_id: string;
+  registration_options: RegisterFunctionOptions;
+  cancel_registration_options: RegisterFunctionOptions;
+};
+
+export type IiiOperatorRuntimeQueueEvidence = {
+  name: string;
+  config_version: number;
 };
 
 type ActiveOperator = {
@@ -44,28 +70,33 @@ export class IiiOperatorFunctionHost {
   constructor(
     private readonly client: IiiClientPort,
     private readonly events: IiiEventWriter,
+    private readonly queue: IiiOperatorRuntimeQueueEvidence,
   ) {}
 
   register(registration: IiiOperatorRegistration): IiiOperatorRoute {
+    const formations = validateFormationContracts(registration);
     const functionId = iiiOperatorFunctionId(registration.operator);
     const cancelFunctionId = iiiOperatorCancelFunctionId(registration.operator);
-    const metadata = {
-      metaflow_contract: "metaflow.operator.execute.v1",
-      operator_id: registration.operator.id,
-      operator_revision: registration.operator.revision,
-      canonical_owner: "metaflow-execution",
-    };
+    const metadata = operatorRegistrationMetadata(registration.operator, formations, this.queue);
+    const registrationOptions = operatorRegistrationOptions(registration.operator, metadata);
+    const cancelRegistrationOptionsValue = cancelRegistrationOptions(registration.operator, metadata);
     this.refs.push(this.client.registerFunction(
       functionId,
       input => this.execute(registration, input),
-      operatorRegistrationOptions(registration.operator, metadata),
+      registrationOptions,
     ));
     this.refs.push(this.client.registerFunction(
       cancelFunctionId,
       input => this.cancel(registration, input),
-      cancelRegistrationOptions(registration.operator, metadata),
+      cancelRegistrationOptionsValue,
     ));
-    return { operator: registration.operator, function_id: functionId, cancel_function_id: cancelFunctionId };
+    return {
+      operator: registration.operator,
+      function_id: functionId,
+      cancel_function_id: cancelFunctionId,
+      registration_options: registrationOptions,
+      cancel_registration_options: cancelRegistrationOptionsValue,
+    };
   }
 
   unregister(): void {
@@ -73,7 +104,8 @@ export class IiiOperatorFunctionHost {
   }
 
   private async execute(registration: IiiOperatorRegistration, raw: unknown): Promise<OperatorExecutionResult> {
-    const envelope = IiiOperatorInvocationEnvelopeSchema.parse(raw);
+    const input = extractIiiInvocationInput(raw);
+    const envelope = IiiOperatorInvocationEnvelopeSchema.parse(input.payload);
     assertOperatorMatch(registration.operator, envelope.operator, envelope.invocation);
     const attemptId = envelope.invocation.attempt.id;
     if (this.active.has(attemptId)) {
@@ -90,7 +122,10 @@ export class IiiOperatorFunctionHost {
         run_id: envelope.invocation.run.id,
         attempt_id: attemptId,
         ...(envelope.invocation.run.frozen.cascade ? { cascade_attempt_id: envelope.invocation.run.frozen.cascade.attempt_id } : {}),
-        payload: { operator: operatorKey(registration.operator) },
+        payload: {
+          operator: operatorKey(registration.operator),
+          ...(input.caller_worker_id ? { caller_worker_id: input.caller_worker_id } : {}),
+        },
       });
       const result = await registration.port.execute(envelope.invocation, {
         signal: controller.signal,
@@ -140,7 +175,8 @@ export class IiiOperatorFunctionHost {
   }
 
   private async cancel(registration: IiiOperatorRegistration, raw: unknown): Promise<unknown> {
-    const request = IiiOperatorCancelRequestSchema.parse(raw);
+    const input = extractIiiInvocationInput(raw);
+    const request = IiiOperatorCancelRequestSchema.parse(input.payload);
     if (canonicalJson(request.operator) !== canonicalJson(registration.operator)) {
       throw new IiiRuntimeError("III Operator cancellation targets an incompatible Operator", "operator_mismatch");
     }
@@ -152,7 +188,10 @@ export class IiiOperatorFunctionHost {
       type: "iii.operator.cancelled",
       function_id: iiiOperatorCancelFunctionId(registration.operator),
       attempt_id: request.attempt_id,
-      payload: { operator: operatorKey(registration.operator) },
+      payload: {
+        operator: operatorKey(registration.operator),
+        ...(input.caller_worker_id ? { caller_worker_id: input.caller_worker_id } : {}),
+      },
     });
     return IiiOperatorCancelResponseSchema.parse({ accepted: true, attempt_id: request.attempt_id });
   }
@@ -230,7 +269,7 @@ export class IiiOperatorExecutionClient implements OperatorExecutionPort {
       function_id: route.cancel_function_id,
       payload: IiiOperatorCancelRequestSchema.parse({
         schema_version: 1,
-        contract: "metaflow.operator.cancel.v1",
+        contract: III_OPERATOR_CANCEL_CONTRACT,
         operator: route.operator,
         attempt_id: attemptId,
       }),
@@ -272,8 +311,93 @@ function cancelRegistrationOptions(operator: OperatorSnapshot, metadata: JsonObj
     description: `Cancel active Metaflow Operator ${operatorKey(operator)}`,
     request_format: OPERATOR_CANCEL_REQUEST_FORMAT,
     response_format: OPERATOR_CANCEL_RESPONSE_FORMAT,
-    metadata: { ...metadata, metaflow_contract: "metaflow.operator.cancel.v1" },
+    metadata: {
+      ...metadata,
+      metaflow_contract: III_OPERATOR_CANCEL_CONTRACT,
+      input_contract: {
+        id: III_OPERATOR_CANCEL_CONTRACT,
+        schema_sha256: contractDigest(OPERATOR_CANCEL_REQUEST_FORMAT),
+      },
+      output_contract: {
+        id: "metaflow.operator.cancel-result.v1",
+        schema_sha256: contractDigest(OPERATOR_CANCEL_RESPONSE_FORMAT),
+      },
+    },
   };
+}
+
+function operatorRegistrationMetadata(
+  operator: OperatorSnapshot,
+  formations: readonly IiiOperatorFormationContract[],
+  queue: IiiOperatorRuntimeQueueEvidence,
+): JsonObject {
+  return {
+    metaflow_contract: III_OPERATOR_CONTRACT,
+    function_abi_version: III_FUNCTION_ABI_VERSION,
+    operator: {
+      id: operator.id,
+      revision: operator.revision,
+      snapshot_sha256: contractDigest(operator),
+    },
+    input_contract: {
+      id: III_OPERATOR_CONTRACT,
+      schema_sha256: contractDigest(OPERATOR_REQUEST_FORMAT),
+    },
+    output_contract: {
+      id: III_OPERATOR_RESULT_CONTRACT,
+      schema_sha256: contractDigest(OPERATOR_RESPONSE_FORMAT),
+    },
+    invocation: {
+      direct: true,
+      automation_queue: {
+        name: queue.name,
+        config_version: queue.config_version,
+      },
+    },
+    capabilities: [...new Set([
+      ...operator.required_capabilities,
+      ...formations.map(formation => `metaflow.${formation.kind}`),
+    ])].sort(),
+    formation_contracts: formations.map(formation => ({
+      kind: formation.kind,
+      id: formation.id,
+      version: formation.version,
+      abi_version: formation.abi_version,
+      transformation: exactTransformationRef(formation.transformation),
+      input_contract_sha256: contractDigest(formation.transformation.inputs),
+      output_contract_sha256: contractDigest(formation.transformation.output),
+    })),
+    canonical_owner: "metaflow-execution",
+  };
+}
+
+function validateFormationContracts(registration: IiiOperatorRegistration): readonly IiiOperatorFormationContract[] {
+  const formations = [...(registration.formations ?? [])].sort((left, right) => (
+    left.kind.localeCompare(right.kind)
+    || left.id.localeCompare(right.id)
+    || left.version - right.version
+    || left.abi_version - right.abi_version
+    || left.transformation.id.localeCompare(right.transformation.id)
+    || left.transformation.revision - right.transformation.revision
+  ));
+  const identities = new Set<string>();
+  for (const formation of formations) {
+    if (!formation.id.trim() || !Number.isInteger(formation.version) || formation.version < 1 || formation.abi_version !== 1) {
+      throw new IiiRuntimeError("III Operator formation contract is invalid", "function_contract_incompatible");
+    }
+    if (canonicalJson(formation.transformation.operator) !== canonicalJson(registration.operator)) {
+      throw new IiiRuntimeError(
+        `III ${formation.kind} ${formation.id}@${formation.version} does not use ${operatorKey(registration.operator)}`,
+        "operator_mismatch",
+      );
+    }
+    const identity = `${formation.kind}:${formation.id}@${formation.version}@${formation.abi_version}:${formation.transformation.id}@${formation.transformation.revision}`;
+    if (identities.has(identity)) {
+      throw new IiiRuntimeError(`Duplicate III Operator formation contract: ${identity}`, "function_contract_incompatible");
+    }
+    identities.add(identity);
+  }
+  return formations;
 }
 
 const OPERATOR_REQUEST_FORMAT = {
@@ -281,7 +405,7 @@ const OPERATOR_REQUEST_FORMAT = {
   required: ["schema_version", "contract", "message_id", "operator", "invocation"],
   properties: {
     schema_version: { const: 1 },
-    contract: { const: "metaflow.operator.execute.v1" },
+    contract: { const: III_OPERATOR_CONTRACT },
     message_id: { type: "string" },
     operator: { type: "object" },
     invocation: { type: "object" },
@@ -301,7 +425,7 @@ const OPERATOR_CANCEL_REQUEST_FORMAT = {
   required: ["schema_version", "contract", "operator", "attempt_id"],
   properties: {
     schema_version: { const: 1 },
-    contract: { const: "metaflow.operator.cancel.v1" },
+    contract: { const: III_OPERATOR_CANCEL_CONTRACT },
     operator: { type: "object" },
     attempt_id: { type: "string" },
   },

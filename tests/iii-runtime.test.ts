@@ -38,6 +38,12 @@ import {
   AutomationCascadeTerminalizer,
   InMemoryTransformationCatalog,
 } from "../packages/adapters/automation-execution/index.ts";
+import { FunctionOperatorAdapter } from "../packages/adapters/function-operator/index.ts";
+import {
+  MARKDOWN_PARSER_FUNCTION,
+  executeMarkdownParser,
+} from "../packages/adapters/markdown-parser/index.ts";
+import { obsidianMarkdownParserTransformation } from "../apps/ambient-daemon/definitions.ts";
 import {
   III_AUTOMATION_FUNCTION_ID,
   III_ENGINE_VERSION,
@@ -61,7 +67,14 @@ test("III Worker registers strict versioned Functions and fails startup on incom
     const registration = engine.functions.get(III_AUTOMATION_FUNCTION_ID);
     assert.ok(registration);
     assert.equal(registration.options?.metadata?.metaflow_contract, "metaflow.automation.invoke.v1");
-    assert.equal(registration.options?.metadata?.queue, METAFLOW_AUTOMATION_QUEUE.name);
+    assert.deepEqual(registration.options?.metadata?.queue, {
+      name: METAFLOW_AUTOMATION_QUEUE.name,
+      config_version: METAFLOW_AUTOMATION_QUEUE.version,
+    });
+    assert.equal(registration.options?.metadata?.function_abi_version, 1);
+    assert.deepEqual(registration.options?.metadata?.capabilities, ["descriptor_only", "durable_queue", "retry", "dlq"]);
+    assert.match(String((registration.options?.metadata?.input_contract as { schema_sha256?: unknown })?.schema_sha256), /^[a-f0-9]{64}$/);
+    assert.match(String((registration.options?.metadata?.output_contract as { schema_sha256?: unknown })?.schema_sha256), /^[a-f0-9]{64}$/);
     assert.deepEqual(registration.options?.request_format?.required, [
       "schema_version",
       "contract",
@@ -84,8 +97,19 @@ test("III Worker registers strict versioned Functions and fails startup on incom
       (error: unknown) => error instanceof IiiRuntimeError && error.code === "signal_payload_not_descriptor_safe",
     );
     assert.equal(events.some(event => event.type === "iii.worker.compatibility_verified"), true);
+    assert.equal(events.some(event => event.type === "iii.worker.readiness_verified"), true);
     assert.equal(events.some(event => event.type === "iii.worker.registered"), true);
     assert.equal(process.env.III_DISABLE_TRACE_PAYLOADS, "true");
+
+    engine.functionInfoMutator = detail => ({
+      ...detail,
+      metadata: { ...(detail.metadata as Record<string, unknown>), function_abi_version: 99 },
+    });
+    await assert.rejects(
+      worker.verifyReadiness(),
+      (error: unknown) => error instanceof IiiRuntimeError && error.code === "function_contract_incompatible",
+    );
+    engine.functionInfoMutator = undefined;
   } finally {
     await worker.close();
   }
@@ -423,8 +447,28 @@ test("Function and Agent Workers execute through III while Execution Runtime val
     views: repository,
     automations: { invoke: async () => ignored() },
     operators: [
-      { operator: functionTransformation.operator, port: functionPort },
-      { operator: agentTransformation.operator, port: agentBridge },
+      {
+        operator: functionTransformation.operator,
+        port: functionPort,
+        formations: [{
+          kind: "processor",
+          id: "processor.test.function",
+          version: 1,
+          abi_version: 1,
+          transformation: functionTransformation,
+        }],
+      },
+      {
+        operator: agentTransformation.operator,
+        port: agentBridge,
+        formations: [{
+          kind: "processor",
+          id: "processor.test.agent",
+          version: 1,
+          abi_version: 1,
+          transformation: agentTransformation,
+        }],
+      },
     ],
     events: { emit: event => { events.push(event); } },
     client_factory: () => engine.client(),
@@ -442,6 +486,13 @@ test("Function and Agent Workers execute through III while Execution Runtime val
   try {
     assert.equal(engine.functions.has(iiiOperatorFunctionId(functionTransformation.operator)), true);
     assert.equal(engine.functions.has(iiiOperatorFunctionId(agentTransformation.operator)), true);
+    const functionMetadata = engine.functions.get(iiiOperatorFunctionId(functionTransformation.operator))?.options?.metadata;
+    assert.deepEqual(functionMetadata?.capabilities, ["metaflow.processor"]);
+    assert.deepEqual(
+      (functionMetadata?.formation_contracts as Array<Record<string, unknown>>)?.map(item => item.id),
+      ["processor.test.function"],
+    );
+    assert.match(String((functionMetadata?.operator as { snapshot_sha256?: unknown })?.snapshot_sha256), /^[a-f0-9]{64}$/);
 
     const functionResult = await runtime.execute(executionRequest(functionTransformation, "run:iii:function"));
     assert.equal(functionResult.run.status, "succeeded");
@@ -456,6 +507,137 @@ test("Function and Agent Workers execute through III while Execution Runtime val
     assert.deepEqual(agentResult.outputs[0]?.provenance.inputs, [exactViewRef(input)]);
     assert.equal(events.some(event => event.type === "iii.operator.received" && event.run_id === "run:iii:agent"), true);
     assert.equal(events.some(event => event.type === "iii.operator.completed" && event.run_id === "run:iii:function"), true);
+  } finally {
+    await worker.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Markdown Parser is an exact III formation, commits only through Execution, and survives Worker restart", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-iii-markdown-parser-"));
+  const repository = new SqliteViewRepository(join(directory, "views.sqlite"));
+  const engine = new FakeIiiEngine();
+  const source = (await repository.commit({ draft: obsidianMarkdownViewDraft(), expected_revision: 0 })).view;
+  const parserTransformation = parseTransformation({
+    ...obsidianMarkdownParserTransformation,
+    inputs: [{ role: "source", required: true, sources: [{ kind: "view", ref: exactViewRef(source) }] }],
+  });
+  const parserPort = new FunctionOperatorAdapter([{
+    reference: MARKDOWN_PARSER_FUNCTION,
+    execute: executeMarkdownParser,
+  }]);
+  const registration = {
+    operator: parserTransformation.operator,
+    port: parserPort,
+    formations: [{
+      kind: "parser" as const,
+      id: "parser.markdown",
+      version: 1,
+      abi_version: 1 as const,
+      transformation: parserTransformation,
+    }],
+  };
+  let first = await IiiRuntimeWorker.start({
+    engine_url: "ws://fake",
+    views: repository,
+    automations: { invoke: async () => ignored() },
+    operators: [registration],
+    events: { emit() {} },
+    client_factory: () => engine.client(),
+    now: () => NOW,
+  });
+  try {
+    const metadata = engine.functions.get(iiiOperatorFunctionId(parserTransformation.operator))?.options?.metadata;
+    assert.deepEqual(metadata?.capabilities, ["metaflow.parser"]);
+    assert.deepEqual((metadata?.formation_contracts as Array<Record<string, unknown>>)?.[0]?.transformation, {
+      transformation_id: parserTransformation.id,
+      revision: parserTransformation.revision,
+    });
+    const firstRuntime = executionRuntime(repository, first.operatorClient, "parser-first");
+    const firstResult = await firstRuntime.execute(executionRequest(parserTransformation, "run:iii:parser:first"));
+    assert.equal(firstResult.run.status, "succeeded");
+    assert.equal(firstResult.outputs[0]?.schema.name, "metaflow.view.fragment-set");
+    assert.equal(firstResult.outputs[0]?.provenance.operator_run_id, firstResult.run.id);
+    assert.equal((firstResult.outputs[0]?.representation.form === "inline"
+      ? (firstResult.outputs[0].representation.value as { fragments?: unknown[] }).fragments?.length
+      : 0), 4);
+
+    await first.close();
+    const second = await IiiRuntimeWorker.start({
+      engine_url: "ws://fake",
+      views: repository,
+      automations: { invoke: async () => ignored() },
+      operators: [registration],
+      events: { emit() {} },
+      client_factory: () => engine.client(),
+      now: () => NOW,
+    });
+    first = second;
+    await second.verifyReadiness("restart");
+    const secondRuntime = executionRuntime(repository, second.operatorClient, "parser-second");
+    const secondResult = await secondRuntime.execute(executionRequest(parserTransformation, "run:iii:parser:second"));
+    assert.equal(secondResult.run.status, "succeeded");
+    assert.notDeepEqual(secondResult.outputs[0] && exactViewRef(secondResult.outputs[0]), firstResult.outputs[0] && exactViewRef(firstResult.outputs[0]));
+  } finally {
+    await first.close().catch(() => undefined);
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("manual, committed-View, and scheduled entry points execute one exact III Operator Function", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-iii-entry-points-"));
+  const repository = new SqliteViewRepository(join(directory, "views.sqlite"));
+  const engine = new FakeIiiEngine();
+  const automation = automationView();
+  const input = (await repository.commit({ draft: rawViewDraft(), expected_revision: 0 })).view;
+  const transform = transformation(input, functionOperator("operator:test:entry-points"), "summary.entry-points");
+  const executed: string[] = [];
+  const port: OperatorExecutionPort = {
+    async execute(invocation) {
+      executed.push(`${invocation.run.frozen.transformation.operator.id}@${invocation.run.frozen.transformation.operator.revision}`);
+      return { status: "succeeded", candidate: outputCandidate(invocation, `view:${invocation.run.id}`, { ok: true }) };
+    },
+    async cancel() {},
+  };
+  let runtime: ExecutionRuntime;
+  const worker = await IiiRuntimeWorker.start({
+    engine_url: "ws://fake",
+    views: {
+      async get(ref) {
+        if (ref.view_id === automation.view.id && ref.revision === automation.view.revision) return automation.view;
+        return repository.get(ref);
+      },
+    },
+    automations: {
+      async invoke(invocation) {
+        const result = await runtime.execute(executionRequest(transform, `run:iii:${invocation.signal.kind}`));
+        return succeeded(invocation, result.run.id);
+      },
+    },
+    operators: [{
+      operator: transform.operator,
+      port,
+      formations: [{ kind: "processor", id: "processor.test.entry-points", version: 1, abi_version: 1, transformation: transform }],
+    }],
+    events: { emit() {} },
+    client_factory: () => engine.client(),
+    now: () => NOW,
+  });
+  runtime = executionRuntime(repository, worker.operatorClient, "entry-points");
+  try {
+    const manual = await runtime.execute(executionRequest(transform, "run:iii:manual"));
+    assert.equal(manual.run.status, "succeeded");
+    await worker.automationQueue.invoke(automationInvocation(automation, "signal:committed-view"));
+    await worker.automationQueue.invoke(scheduledAutomationInvocation(automation));
+    await engine.drainAll();
+    assert.deepEqual(executed, [
+      "operator:test:entry-points@1",
+      "operator:test:entry-points@1",
+      "operator:test:entry-points@1",
+    ]);
+    assert.equal(engine.functions.has(iiiOperatorFunctionId(transform.operator)), true);
   } finally {
     await worker.close();
     repository.close();
@@ -529,6 +711,7 @@ class FakeIiiEngine {
     size_bytes: number;
   }> = [];
   shutdowns = 0;
+  functionInfoMutator?: (detail: Record<string, unknown>) => Record<string, unknown>;
   private receipt = 0;
 
   constructor(readonly version = III_ENGINE_VERSION, readonly queueConcurrency = 4) {}
@@ -559,7 +742,7 @@ class FakeIiiEngine {
           const functionId = (request.payload as { function_id?: string }).function_id;
           const registration = functionId ? this.functions.get(functionId) : undefined;
           if (!functionId || !registration) throw new Error(`unknown function: ${String(functionId)}`);
-          return {
+          const detail = {
             function_id: functionId,
             worker_name: "metaflow-v1",
             description: registration.options?.description,
@@ -567,7 +750,8 @@ class FakeIiiEngine {
             response_schema: registration.options?.response_format,
             metadata: registration.options?.metadata,
             registered_triggers: [],
-          } as TOutput;
+          };
+          return (this.functionInfoMutator?.(detail) ?? detail) as TOutput;
         }
         if (request.function_id === "engine::queue::dlq_messages") {
           return this.dlq as TOutput;
@@ -790,7 +974,7 @@ function succeeded(input: AutomationInvocationInput, runId: string): AutomationI
       id: correlation(input),
       automation: exactViewRef(input.automation.view),
       trigger_id: input.automation.definition.trigger.id,
-      trigger_kind: "event",
+      trigger_kind: input.signal.kind,
       source: input.signal.source,
       occurred_at: input.signal.occurred_at,
       idempotency_key: input.signal.idempotency_key,
@@ -899,6 +1083,67 @@ function rawViewDraft(): ViewDraft {
     },
     metadata: {},
   };
+}
+
+function obsidianMarkdownViewDraft(): ViewDraft {
+  return {
+    ...rawViewDraft(),
+    id: "view:iii:obsidian-markdown",
+    name: "III Markdown input",
+    schema: { name: "capture.obsidian.document", version: 1, mode: "freeform" },
+    representation: {
+      form: "inline",
+      kind: "obsidian_markdown_document",
+      media_type: "text/markdown",
+      value: {
+        vault_id: "vault:test",
+        document_id: "document:test",
+        relative_path: "Learning/English.md",
+        revision: { sha256: "a".repeat(64), byte_length: 54, mtime_ms: 1_785_130_000_000 },
+        markdown: "# English learning\n\nReview exact phrases.\n\n- one\n- two",
+        frontmatter: null,
+        headings: [],
+        links: [],
+      },
+      metadata: {},
+    },
+  };
+}
+
+function scheduledAutomationInvocation(
+  automation: ReturnType<typeof automationView>,
+): AutomationInvocationInput {
+  const invocation = automationInvocation(automation, "signal:scheduled");
+  return {
+    ...invocation,
+    signal: {
+      ...invocation.signal,
+      kind: "schedule",
+      source: "scheduler",
+      event: "period",
+      payload: {
+        schedule: { expression: "0 0 * * *", timezone: "UTC" },
+        period: { start: "2026-07-25T00:00:00.000Z", end: "2026-07-26T00:00:00.000Z" },
+        dispatch: { mode: "scheduled", state: "on_time", detected_at: NOW },
+      },
+    },
+  };
+}
+
+function executionRuntime(
+  repository: SqliteViewRepository,
+  operator: OperatorExecutionPort,
+  idPrefix: string,
+): ExecutionRuntime {
+  let id = 0;
+  return new ExecutionRuntime(
+    repository,
+    repository,
+    new DeterministicViewAccessAuthorizer(),
+    operator,
+    undefined,
+    { now: () => NOW, id: kind => `${kind}:${idPrefix}:${++id}` },
+  );
 }
 
 function outputCandidate(invocation: OperatorExecutionInvocation, id: string, value: unknown) {
