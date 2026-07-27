@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import type {
   AgentRuntimeAdapter,
@@ -41,16 +42,11 @@ const POLICY = {
   labels: ["synthetic-agent-access"],
 };
 
-test("independent read-only Codex gate uses the staged skill and returns only content-free citation evidence", async () => {
+test("independent read-only Claude ACP gate uses the staged skill and returns only content-free citation evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "metaflow-personalized-agent-access-test-"));
   const dataDirectory = join(root, "data");
   await mkdir(dataDirectory);
-  const fakeCodex = join(root, "codex");
-  await copyFile(
-    new URL("./fixtures/personalized-agent-access-codex.mjs", import.meta.url),
-    fakeCodex,
-  );
-  await chmod(fakeCodex, 0o755);
+  const fakeClaudeAcp = fileURLToPath(new URL("./fixtures/personalized-agent-access-claude-acp.mjs", import.meta.url));
   const composition = await createAmbientDaemonComposition({
     data_directory: dataDirectory,
     operation_auth_token: OPERATION_TOKEN,
@@ -103,18 +99,19 @@ test("independent read-only Codex gate uses the staged skill and returns only co
         working_state: "Synthetic Personalized Evidence Working State",
         application_space: "Synthetic Agent Application Space",
       },
-      codex: {
-        executable: fakeCodex,
-        home: join(root, "unused-codex-home"),
+      claude: {
+        command: process.execPath,
+        args: [fakeClaudeAcp],
         timeout_ms: 30_000,
       },
       temporary_parent: root,
     });
 
     assert.deepEqual(PersonalizedAgentAccessEvidenceSchema.parse(evidence), evidence);
+    assert.equal(evidence.contract_version, 2);
     assert.equal(evidence.ok, true);
-    assert.equal(evidence.agent, "codex_exec");
-    assert.equal(evidence.transport, "http_cli");
+    assert.equal(evidence.agent, "claude_acp");
+    assert.equal(evidence.transport, "mcp");
     assert.equal(evidence.citation_count, 2);
     assert.equal(evidence.operation_counts.search, 2);
     assert.equal(evidence.operation_counts.exact_get, 2);
@@ -142,20 +139,16 @@ test("independent read-only Codex gate uses the staged skill and returns only co
           working_state: "Synthetic Personalized Evidence Working State",
           application_space: "Synthetic Agent Application Space",
         },
-        codex: {
-          executable: join(root, "missing-explicit-codex"),
-          home: join(root, "unused-codex-home"),
+        claude: {
+          args: [fakeClaudeAcp],
           timeout_ms: 30_000,
         },
         temporary_parent: root,
       }),
       (error: unknown) => error instanceof PersonalizedAgentAccessError
-        && error.code === "codex_executable_invalid",
+        && error.code === "claude_acp_configuration_invalid",
     );
 
-    const adversarialCodex = join(root, "codex-adversarial");
-    await copyFile(fakeCodex, adversarialCodex);
-    await chmod(adversarialCodex, 0o755);
     const executed: Array<{ operation: OperationName; input: unknown }> = [];
     await assert.rejects(
       runPersonalizedAgentAccessGate({
@@ -167,9 +160,9 @@ test("independent read-only Codex gate uses the staged skill and returns only co
           working_state: "Synthetic Personalized Evidence Working State",
           application_space: "Synthetic Agent Application Space",
         },
-        codex: {
-          executable: adversarialCodex,
-          home: join(root, "unused-codex-home"),
+        claude: {
+          command: process.execPath,
+          args: [fakeClaudeAcp, "adversarial"],
           timeout_ms: 30_000,
         },
         temporary_parent: root,
@@ -198,9 +191,6 @@ test("independent read-only Codex gate uses the staged skill and returns only co
       [exactViewRef(applicationSpace)],
     );
 
-    const signalIgnoringCodex = join(root, "codex-ignore-sigterm");
-    await copyFile(fakeCodex, signalIgnoringCodex);
-    await chmod(signalIgnoringCodex, 0o755);
     const timeoutStartedAt = Date.now();
     await assert.rejects(
       runPersonalizedAgentAccessGate({
@@ -212,21 +202,18 @@ test("independent read-only Codex gate uses the staged skill and returns only co
           working_state: "Synthetic Personalized Evidence Working State",
           application_space: "Synthetic Agent Application Space",
         },
-        codex: {
-          executable: signalIgnoringCodex,
-          home: join(root, "unused-codex-home"),
+        claude: {
+          command: process.execPath,
+          args: [fakeClaudeAcp, "ignore-sigterm"],
           timeout_ms: 10_000,
         },
         temporary_parent: root,
       }),
       (error: unknown) => error instanceof PersonalizedAgentAccessError
-        && error.code === "codex_timeout",
+        && error.code === "claude_acp_timeout",
     );
-    assert.ok(Date.now() - timeoutStartedAt < 15_000, "signal-ignoring Codex must be hard-killed within the bounded grace period");
+    assert.ok(Date.now() - timeoutStartedAt < 15_000, "signal-ignoring Claude ACP must be hard-killed within the bounded grace period");
 
-    const outputOverflowCodex = join(root, "codex-output-overflow");
-    await copyFile(fakeCodex, outputOverflowCodex);
-    await chmod(outputOverflowCodex, 0o755);
     const overflowStartedAt = Date.now();
     await assert.rejects(
       runPersonalizedAgentAccessGate({
@@ -238,17 +225,17 @@ test("independent read-only Codex gate uses the staged skill and returns only co
           working_state: "Synthetic Personalized Evidence Working State",
           application_space: "Synthetic Agent Application Space",
         },
-        codex: {
-          executable: outputOverflowCodex,
-          home: join(root, "unused-codex-home"),
+        claude: {
+          command: process.execPath,
+          args: [fakeClaudeAcp, "output-overflow"],
           timeout_ms: 30_000,
         },
         temporary_parent: root,
       }),
       (error: unknown) => error instanceof PersonalizedAgentAccessError
-        && error.code === "codex_output_limit",
+        && error.code === "claude_acp_output_limit",
     );
-    assert.ok(Date.now() - overflowStartedAt < 5_000, "output-overflow Codex must be hard-killed within the bounded grace period");
+    assert.ok(Date.now() - overflowStartedAt < 5_000, "output-overflow Claude ACP must be terminated within the bounded grace period");
     assert.deepEqual(
       (await readdir(root)).filter(name => name.startsWith("metaflow-personalized-agent-access-")),
       [],
@@ -333,6 +320,6 @@ class UnusedAgentRuntime implements AgentRuntimeAdapter {
   }
 
   async submit(_task: AgentTaskRequest, _context: AgentRuntimeContext): Promise<AgentTaskResult> {
-    throw new Error("Personalized Agent access must use an independent Codex process");
+    throw new Error("Personalized Agent access must use an independent Claude ACP process");
   }
 }

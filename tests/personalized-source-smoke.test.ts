@@ -99,9 +99,9 @@ test("the same captured exact Views traverse the full workflow, durable replay, 
         await assertGateCanReadExactViews(input.operations, input.principal, input.working_state, input.application_space);
         acceptanceSequence.push("agent-access");
         return {
-          contract_version: 1,
+          contract_version: 2,
           ok: true,
-          agent: "codex_exec",
+          agent: "claude_acp",
           transport: "mcp",
           skill_sha256: "1".repeat(64),
           citation_sha256: "2".repeat(64),

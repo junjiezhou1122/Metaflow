@@ -21,6 +21,12 @@ human, or service. A Worker is a runtime implementation or host of that
 Operator contract. Its definition and configuration may be stored as Views,
 but there is no separate canonical Worker domain layer.
 
+Current product scope keeps Connector Marketplace/onboarding UX and a
+natural-language authoring UI deferred. New sources use the code-first
+Connector Kit, and users or Agents may edit View Package, Transformation,
+Operator, and Automation definitions directly. Existing authoring contracts
+remain backend capability; neither product surface is a release blocker.
+
 ## v1 package boundaries
 
 - `packages/view`: View, Schema, Representation, Materialization, policy,
@@ -768,17 +774,25 @@ and Privacy Forget.
 
 `pnpm smoke:personalized-sources --config <absolute-path>` is the opt-in real
 personal-source acceptance boundary. With `workflow.enabled`, the same exact
-pre-Forget Views must pass both an independent `codex exec` plus installed
-Metaflow skill gate and the real Vite/React/Graphology/Sigma View Explorer gate.
+pre-Forget Views must pass both an independent Claude Code ACP process plus a
+staged project-level Metaflow skill gate and the real
+Vite/React/Graphology/Sigma View Explorer gate.
 The temporary Agent host rejects every undeclared Search request, exact View
-read, or graph root/bound before `OperationService.execute`, and hard-kills a
-non-cooperative Codex process within a bounded termination window. The browser
+read, or graph root/bound before `OperationService.execute`; the shared ACP
+runtime closes and, when necessary, hard-kills a non-cooperative independent
+Claude process within a bounded termination window. The browser
 gate validates the exact Application Space root and working-state `view.get`
 response before mounting and disposing the trusted Web Renderer Registry for
 that same authorized View revision.
 Neither gate may be replaced by synthetic evidence in the CLI smoke. A missing
-or invalid Codex credential is an external failed gate, not permission to skip
-Agent access or close its acceptance issue.
+or invalid Claude credential is an external failed gate, not permission to skip
+Agent access or close its acceptance issue. Connector Marketplace/onboarding
+UX and a natural-language authoring UI are explicitly deferred and are not
+acceptance blockers; the code-first extension contracts remain canonical.
+The Claude gate receives exact Search input templates but never the expected
+View refs; those remain host-side validation evidence so the Agent must prove
+discovery before exact reads. It must emit no assistant prose before its one
+strict final JSON value; mixed prose/JSON remains an explicit failure.
 
 ACP structured output is reconstructed by complete agent message identity:
 chunks with the same `messageId` append across interleaved tool, plan, thought,
