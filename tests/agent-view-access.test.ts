@@ -157,6 +157,7 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
     assert.equal(agentProcess.stdout.includes(denied.name), false);
     assert.deepEqual(requests.slice(agentRequestStart).map(request => [request.method, request.path]), [
       ["GET", "/metaflow/v1/doctor"],
+      ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/catalog.list"],
       ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/view.search"],
@@ -362,7 +363,7 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
     fetch: async (input, init) => {
       request += 1;
       authorizations.push(new Headers(init?.headers).get("authorization"));
-      if (request === 1) return new Response(JSON.stringify({
+      if (request <= 2) return new Response(JSON.stringify({
         ...doctorForInput(input, authToken),
       }), { status: 200, headers: doctorHeaders });
       return new Response(JSON.stringify({
@@ -375,9 +376,32 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   });
   assert.equal(auth.exit_code, 3);
   assert.equal(auth.envelope.error?.code, "operation_forbidden");
-  assert.deepEqual(authorizations, [null, `Bearer ${authToken}`]);
+  assert.deepEqual(authorizations, [null, null, `Bearer ${authToken}`]);
   assert.equal(auth.stdout.includes(authToken), false);
   assert.equal(auth.stderr.includes(authToken), false);
+
+  const replacedListenerAuthorizations: Array<string | null> = [];
+  let replacedListenerRequests = 0;
+  const replacedListener = await runMfCli(["--json", "doctor"], {
+    env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111", METAFLOW_AUTH_TOKEN: authToken },
+    fetch: async (input, init) => {
+      replacedListenerRequests += 1;
+      replacedListenerAuthorizations.push(new Headers(init?.headers).get("authorization"));
+      if (replacedListenerRequests === 1) {
+        return new Response(JSON.stringify(doctorForInput(input, authToken)), { status: 200, headers: doctorHeaders });
+      }
+      return new Response(JSON.stringify(doctorForInput(input, "listener-replaced-with-an-exact-mimic")), {
+        status: 200,
+        headers: doctorHeaders,
+      });
+    },
+  });
+  assert.equal(replacedListener.exit_code, 3);
+  assert.equal(replacedListener.envelope.error?.code, "daemon_credential_mismatch");
+  assert.equal(replacedListenerRequests, 2);
+  assert.deepEqual(replacedListenerAuthorizations, [null, null]);
+  assert.equal(replacedListener.stdout.includes(authToken), false);
+  assert.equal(replacedListener.stderr.includes(authToken), false);
 
   const configuredSecret = await runMfCli(["--json", "doctor"], {
     env: { METAFLOW_DAEMON_URL: "http://user:password@127.0.0.1:3111" },

@@ -21,11 +21,109 @@ import {
   MF_WIRE_CONTRACT,
   doctorAuthenticationProof,
 } from "@info/operation-surfaces";
+import {
+  OperationAuthStorageIsolationError,
+  ensureTrustedOperationStorageAccess,
+  readOperationAuthToken,
+  writeOperationAuthToken,
+  type OperationAuthStorageArea,
+} from "../apps/chrome-acp/packages/chrome-extension/src/lib/operation-auth-storage.ts";
+import { publicInfoSettings } from "../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture.ts";
+
+class FakeLocalStorage implements OperationAuthStorageArea {
+  readonly values: Record<string, unknown>;
+  accessLevel = "TRUSTED_AND_UNTRUSTED_CONTEXTS";
+  accessCalls = 0;
+  setCalls = 0;
+  removeCalls = 0;
+  rejectIsolation = false;
+
+  constructor(values: Record<string, unknown> = {}) {
+    this.values = { ...values };
+  }
+
+  async get(keys: string | string[]): Promise<Record<string, unknown>> {
+    const requested = Array.isArray(keys) ? keys : [keys];
+    return Object.fromEntries(requested.filter(key => key in this.values).map(key => [key, this.values[key]]));
+  }
+
+  async set(items: Record<string, unknown>): Promise<void> {
+    this.setCalls += 1;
+    Object.assign(this.values, items);
+  }
+
+  async remove(keys: string | string[]): Promise<void> {
+    this.removeCalls += 1;
+    for (const key of Array.isArray(keys) ? keys : [keys]) delete this.values[key];
+  }
+
+  async setAccessLevel(options: { accessLevel: "TRUSTED_CONTEXTS" }): Promise<void> {
+    this.accessCalls += 1;
+    if (this.rejectIsolation) throw new Error("isolation unavailable");
+    this.accessLevel = options.accessLevel;
+  }
+
+  async untrustedGet(key: string): Promise<unknown> {
+    return this.accessLevel === "TRUSTED_CONTEXTS" ? undefined : this.values[key];
+  }
+}
 
 test("Chrome extension accepts only the canonical resident daemon bearer token grammar", () => {
   assert.equal(isValidOperationAuthToken("test-operation-auth-token-32-bytes"), true);
   assert.equal(isValidOperationAuthToken(`${"a".repeat(32)} `), false);
   assert.equal(isValidOperationAuthToken("short-token"), false);
+});
+
+test("Chrome extension isolates existing and new Operation tokens from untrusted contexts", async () => {
+  const existingToken = "existing-operation-auth-token-32-bytes";
+  const replacementToken = "replacement-operation-auth-token-32-bytes";
+  const storage = new FakeLocalStorage({ operationAuthToken: existingToken });
+  assert.equal(await storage.untrustedGet("operationAuthToken"), existingToken);
+
+  assert.equal(await readOperationAuthToken(storage), existingToken);
+  assert.equal(storage.accessLevel, "TRUSTED_CONTEXTS");
+  assert.equal(await storage.untrustedGet("operationAuthToken"), undefined);
+  await writeOperationAuthToken(replacementToken, storage);
+  assert.equal(await readOperationAuthToken(storage), replacementToken);
+  assert.equal(await storage.untrustedGet("operationAuthToken"), undefined);
+  assert.equal(storage.accessCalls, 1);
+
+  const publicSettings = publicInfoSettings({
+    endpoint: "http://localhost:3111",
+    operationAuthToken: replacementToken,
+    captureStream: true,
+    heartbeatSeconds: 15,
+    snapshotOnVisit: true,
+    allowExternalLlm: true,
+    snapshotTextLimit: 120000,
+    excludedDomains: [],
+  });
+  assert.equal("operationAuthToken" in publicSettings, false);
+  assert.equal(publicSettings.operationAuthConfigured, true);
+});
+
+test("Chrome extension clears legacy Operation tokens and fails closed when isolation is unavailable", async () => {
+  const storage = new FakeLocalStorage({ operationAuthToken: "legacy-operation-auth-token-32-bytes" });
+  storage.rejectIsolation = true;
+  await assert.rejects(
+    ensureTrustedOperationStorageAccess(storage),
+    (error: unknown) => error instanceof OperationAuthStorageIsolationError,
+  );
+  assert.equal(storage.values.operationAuthToken, undefined);
+  assert.equal(storage.removeCalls, 1);
+  await assert.rejects(writeOperationAuthToken("replacement-operation-auth-token-32-bytes", storage));
+  assert.equal(storage.setCalls, 0);
+  assert.equal(storage.accessCalls, 1);
+
+  const unsupported: OperationAuthStorageArea = {
+    async get() { throw new Error("token must not be read"); },
+    async set() { throw new Error("token must not be written"); },
+    async remove() {},
+  };
+  await assert.rejects(
+    readOperationAuthToken(unsupported),
+    (error: unknown) => error instanceof OperationAuthStorageIsolationError,
+  );
 });
 
 test("Chrome extension wire constants conform exactly to the canonical resident daemon contract", () => {
@@ -154,6 +252,21 @@ test("Chrome extension CSP permits the canonicalized IPv4 loopback daemon origin
     "utf8",
   )) as { content_security_policy?: { extension_pages?: string } };
   assert.match(manifest.content_security_policy?.extension_pages ?? "", /connect-src[^;]*http:\/\/127\.0\.0\.1:\*/u);
+});
+
+test("Chrome content scripts obtain non-secret local settings through the trusted background", () => {
+  const content = readFileSync(
+    new URL("../apps/chrome-acp/packages/chrome-extension/src/content.ts", import.meta.url),
+    "utf8",
+  );
+  const background = readFileSync(
+    new URL("../apps/chrome-acp/packages/chrome-extension/src/background.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(content, /chrome\.storage\??\.local/u);
+  assert.match(content, /type: "selection-actions\.get"/u);
+  assert.match(background, /message\?\.type === "selection-actions\.get"/u);
+  assert.match(background, /ensureTrustedOperationStorageAccess\(\)/u);
 });
 
 test("Chrome extension emits a Browser Automation event accepted by the backend contract", () => {

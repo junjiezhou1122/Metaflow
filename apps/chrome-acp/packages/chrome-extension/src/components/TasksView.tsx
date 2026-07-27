@@ -32,6 +32,7 @@ import {
 } from "@chrome-acp/shared/components";
 import "@chrome-acp/shared/components";
 import { isValidOperationAuthToken } from "@/lib/operation-auth";
+import { readOperationAuthToken } from "@/lib/operation-auth-storage";
 
 type AmbientView = {
   id: string;
@@ -466,9 +467,13 @@ export function TasksView() {
   }, [load]);
 
   const openOperationAuth = useCallback(async () => {
-    const stored = await chrome.storage.local.get("operationAuthToken");
-    setOperationAuthToken(typeof stored.operationAuthToken === "string" ? stored.operationAuthToken : "");
-    setOperationAuthError(null);
+    try {
+      setOperationAuthToken(await readOperationAuthToken());
+      setOperationAuthError(null);
+    } catch (error) {
+      setOperationAuthToken("");
+      setOperationAuthError(error instanceof Error ? error.message : String(error));
+    }
     setOperationAuthOpen(true);
   }, []);
 

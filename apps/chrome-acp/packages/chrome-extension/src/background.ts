@@ -1,4 +1,5 @@
 import { handleInfoCaptureMessage, installInfoCaptureDefaults, startInfoCapture } from "./lib/info-capture";
+import { ensureTrustedOperationStorageAccess } from "./lib/operation-auth-storage";
 
 let pendingSidepanelPrompt: any = null;
 const RECENT_CAPTION_GAPS_KEY = "language.recent_caption_gaps";
@@ -267,6 +268,15 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message?.type === "selection-actions.get") {
+      await ensureTrustedOperationStorageAccess();
+      const stored = await chrome.storage.local.get("selectionActions");
+      sendResponse({
+        ok: true,
+        selectionActions: Array.isArray(stored.selectionActions) ? stored.selectionActions : [],
+      });
+      return;
+    }
     if (message?.type === "language.caption_gap.recent") {
       const gap = message.gap ?? {};
       const status = message.status === "sent" ? "sent" : "active";

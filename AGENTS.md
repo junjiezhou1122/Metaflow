@@ -297,7 +297,12 @@ Operations.
   previously negotiated token path. The Chrome extension and macOS exact-result readers
   enforce the same credential-free loopback endpoint, nonce proof, server,
   protocol, authentication, and exact catalog contract before sending Bearer
-  credentials; their browser-safe and native constant copies have executable
+  credentials. Before the Chrome extension migrates, reads, or writes its
+  Operation token, it restricts `chrome.storage.local` to trusted extension
+  contexts; inability to establish that access level clears any legacy token
+  and fails closed. Content scripts obtain explicitly projected non-secret
+  settings through the trusted background and public settings responses remain
+  token-free. Browser-safe and native constant copies have executable
   conformance gates against the canonical wire contract. `mf` validates strict
   JSON or `@file` input, returns one stdout envelope, keeps diagnostics on
   stderr, and uses stable typed exit categories. MCP structured content is the

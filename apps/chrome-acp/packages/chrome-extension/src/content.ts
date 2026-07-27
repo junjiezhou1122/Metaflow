@@ -673,8 +673,8 @@ function editablePositionRect(element: Element) {
 
 async function selectionActions() {
   try {
-    const stored = await chrome.storage?.local?.get?.("selectionActions");
-    const custom = Array.isArray(stored?.selectionActions) ? stored.selectionActions : [];
+    const stored = await chrome.runtime.sendMessage({ type: "selection-actions.get" });
+    const custom = stored?.ok && Array.isArray(stored.selectionActions) ? stored.selectionActions : [];
     const normalized = custom
       .map(selectionActionFromConfig)
       .filter((action): action is { id: string; label: string; prompt: string } => action !== null)

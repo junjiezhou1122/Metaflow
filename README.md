@@ -99,8 +99,12 @@ same token as the Chrome extension's `operationAuthToken` setting and in the
 macOS app environment. Both UI clients first verify the credential-free,
 nonce-bound doctor response at the configured loopback origin and send the
 Bearer token only after the exact server and Operation catalog contract passes;
-remote or credential-bearing endpoint configuration fails closed. Never place
-the token in Agent prompts or skills. Set
+remote or credential-bearing endpoint configuration fails closed. The Chrome
+extension restricts local storage to trusted extension contexts before it
+migrates, reads, or writes the token; unsupported isolation clears the legacy
+token and refuses credential use, while content scripts receive only projected
+non-secret settings from the background. Never place the token in Agent prompts
+or skills. Set
 `METAFLOW_DATA_DIR` to change the SQLite data directory.
 
 Health and exact View reads:

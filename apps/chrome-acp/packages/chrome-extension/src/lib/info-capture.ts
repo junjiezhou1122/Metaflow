@@ -29,6 +29,7 @@ import {
   isValidOperationAuthToken,
   negotiateBrowserOperationAccess,
 } from "./operation-auth";
+import { ensureTrustedOperationStorageAccess } from "./operation-auth-storage";
 
 const LEGACY_DEFAULT_ENDPOINTS = new Set([
   "http://localhost:3111/context/ingest",
@@ -90,6 +91,7 @@ let tabStateReady: Promise<void> | undefined;
 let macBrowserContextPollRunning = false;
 
 export async function installInfoCaptureDefaults() {
+  await ensureTrustedOperationStorageAccess();
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   const existing = await chrome.storage.local.get(keys);
   const migrated = typeof existing.endpoint === "string" && LEGACY_DEFAULT_ENDPOINTS.has(existing.endpoint)
@@ -356,6 +358,13 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
     };
   }
   if (message?.type === "update-info-capture-settings") {
+    if (!isTrustedExtensionPage(sender)) {
+      return {
+        ok: false,
+        code: "operation_auth_settings_forbidden",
+        error: "Operation authentication settings may be changed only by a trusted extension page",
+      };
+    }
     if (message.settings?.operationAuthToken !== undefined
       && !isValidOperationAuthToken(message.settings.operationAuthToken)) {
       return {
@@ -363,6 +372,9 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
         code: "operation_auth_token_invalid",
         error: "The resident daemon Operation token is invalid",
       };
+    }
+    if (message.settings?.operationAuthToken !== undefined) {
+      await ensureTrustedOperationStorageAccess();
     }
     await chrome.storage.local.set(message.settings ?? {});
     await configureInfoCaptureAlarms();
@@ -1482,16 +1494,22 @@ function tabCaptureScore(tab: chrome.tabs.Tab): number {
 }
 
 async function getSettings(): Promise<InfoSettings> {
+  await ensureTrustedOperationStorageAccess();
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   return { ...DEFAULT_SETTINGS, ...(await chrome.storage.local.get(keys)) };
 }
 
-function publicInfoSettings(settings: InfoSettings) {
+export function publicInfoSettings(settings: InfoSettings) {
   const { operationAuthToken, ...publicSettings } = settings;
   return {
     ...publicSettings,
     operationAuthConfigured: isValidOperationAuthToken(operationAuthToken),
   };
+}
+
+function isTrustedExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  const extensionRoot = chrome.runtime.getURL("");
+  return typeof sender.url === "string" && sender.url.startsWith(extensionRoot);
 }
 
 function getTabState(

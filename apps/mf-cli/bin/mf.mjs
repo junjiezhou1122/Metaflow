@@ -57,12 +57,10 @@ class MfDaemonClient {
       : validateDaemonToken(environment.METAFLOW_AUTH_TOKEN);
     this.authorization = token ? `Bearer ${token}` : undefined;
     this.token = token;
-    this.negotiated = undefined;
   }
 
   async doctor() {
-    this.negotiated ??= this.fetchDoctor();
-    return this.negotiated;
+    return this.fetchDoctor();
   }
 
   async fetchDoctor() {
