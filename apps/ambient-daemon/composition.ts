@@ -71,7 +71,7 @@ import {
   MacDeliveryMailbox,
   ViewMacAutomationCatalog,
 } from "@info/macos-automation-adapter";
-import { SqliteViewRepository } from "@info/storage-sqlite";
+import { SqliteViewRepository, type SqliteViewRepositoryOptions } from "@info/storage-sqlite";
 import {
   SchedulerAutomationController,
   SqliteScheduleCursorRepository,
@@ -115,6 +115,7 @@ import { AmbientOperationAccess } from "./operation-access.js";
 export type AmbientDaemonCompositionOptions = {
   data_directory: string;
   operation_auth_token: string;
+  view_store?: SqliteViewRepositoryOptions;
   trusted_operation_origins?: readonly string[];
   agent_runtime: AgentRuntimeAdapter;
   agent_aliases?: Record<string, string>;
@@ -163,7 +164,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
   );
   const databasePath = join(options.data_directory, "metaflow.sqlite");
   const automationPath = join(options.data_directory, "automation.sqlite");
-  const views = new SqliteViewRepository(databasePath);
+  const views = new SqliteViewRepository(databasePath, options.view_store);
   const transformations = new SqliteTransformationRepository(databasePath);
   const occurrences = new SqliteAutomationOccurrenceRepository(automationPath);
   const cascades = new SqliteReactiveCascadeLedger(automationPath);

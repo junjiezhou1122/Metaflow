@@ -55,6 +55,7 @@ import {
   sqliteVecSourceDigest,
 } from "@info/storage-sqlite";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
+import { exactTransformationRef } from "@info/transformation";
 import { ViewPackageCatalog } from "@info/view-package";
 
 type Surface = {
@@ -212,6 +213,83 @@ test("natural-language View authoring has one exact lifecycle across in-process,
       assert.deepEqual((inspected.data as any).view, receipt.data);
       const mcp = surfaces.find(surface => surface.name === "mcp") as Surface & { toolNames?: string[] };
       assert.equal(mcp.toolNames?.includes(operationMcpToolName("view.authoring.apply")), true);
+    } finally {
+      await Promise.all(surfaces.map(surface => surface.close()));
+    }
+  });
+});
+
+test("Feedback evolution has one exact lifecycle across in-process, CLI, HTTP, and official MCP", async () => {
+  await withHarness(async harness => {
+    const captured = await harness.service.execute(captureRequest("feedback-parity"), context("request:feedback-seed"));
+    const source = captureRef(captured);
+    const transformation = transformationFor(source);
+    const committed = await harness.transformations.commit({
+      transformation,
+      expected_revision: 0,
+      idempotency_key: "transformation:feedback-parity",
+    });
+    const execution = await harness.service.execute({
+      operation: "run.execute",
+      input: runRequest(transformation.id, source, "run:feedback-parity"),
+    }, context("request:feedback-run"));
+    assert.equal(execution.ok, true);
+    const output = (execution as Extract<OperationEnvelope, { ok: true }>).data as any;
+    const recorded = await harness.service.execute({
+      operation: "feedback.submit",
+      input: {
+        feedback: {
+          feedback_id: "feedback:operation-parity",
+          sentiment: "correction",
+          message: "Focus the summary on decisions and contradictions.",
+          actor: "user:local",
+          occurred_at: "2026-07-26T14:10:00.000Z",
+          target_view: exactViewRef(output.outputs[0]),
+          target_run_id: "run:feedback-parity",
+          requested_changes: ["instruction"],
+          metadata: {},
+        },
+      },
+    }, context("request:feedback-record"));
+    assert.equal(recorded.ok, true);
+    const feedbackRef = exactViewRef(((recorded as Extract<OperationEnvelope, { ok: true }>).data as any).view);
+    const surfaces = await createSurfaces(harness, () => context("request:feedback-apply-equivalent"));
+    try {
+      const evolved = await callEquivalent(surfaces, "feedback.apply", {
+        feedback: feedbackRef,
+        base_transformation: exactTransformationRef(committed.transformation),
+        change: {
+          instruction: {
+            ...transformation.instruction,
+            text: "Summarize the exact captured page, emphasizing decisions and contradictions.",
+          },
+        },
+        actor: "user:local",
+        resolution: "Applied the requested focus explicitly.",
+        created_at: "2026-07-26T14:11:00.000Z",
+      });
+      assert.equal((evolved.data as any).revision, 2);
+      assert.deepEqual((evolved.data as any).supersedes, exactTransformationRef(committed.transformation));
+      assert.equal(
+        (surfaces.find(surface => surface.name === "mcp") as Surface & { toolNames?: string[] }).toolNames
+          ?.includes(operationMcpToolName("feedback.apply")),
+        true,
+      );
+      const missing = await surfaces[0]!.call("feedback.apply", {
+        feedback: { view_id: "view:feedback:missing", revision: 1 },
+        base_transformation: exactTransformationRef(committed.transformation),
+        change: {
+          instruction: {
+            ...transformation.instruction,
+            text: "This request must fail before Transformation evolution.",
+          },
+        },
+        actor: "user:local",
+        resolution: "Missing evidence cannot be applied.",
+        created_at: "2026-07-26T14:12:00.000Z",
+      });
+      assert.equal(missing.ok, false);
+      if (!missing.ok) assert.equal(missing.error.code, "feedback_view_invalid");
     } finally {
       await Promise.all(surfaces.map(surface => surface.close()));
     }

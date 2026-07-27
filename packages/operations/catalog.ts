@@ -51,6 +51,7 @@ export const OPERATION_EFFECTS: Record<OperationName, OperationEffect> = {
   "run.inspect": "read",
   "run.cancel": "destructive",
   "feedback.submit": "write",
+  "feedback.apply": "write",
   "failure.inspect": "read",
   "policy.decision.get": "read",
   "privacy.forget.request": "destructive",

@@ -35,6 +35,7 @@ var OPERATION_NAMES = [
   "run.inspect",
   "run.cancel",
   "feedback.submit",
+  "feedback.apply",
   "failure.inspect",
   "policy.decision.get",
   "privacy.forget.request",
@@ -49,7 +50,7 @@ var METAFLOW_HTTP_PROTOCOL_VERSION = 1;
 var METAFLOW_AMBIENT_SERVER_NAME = "ambient-daemon";
 var METAFLOW_AMBIENT_SERVER_VERSION = "0.1.0";
 var METAFLOW_OPERATION_CATALOG_VERSION = 1;
-var METAFLOW_OPERATION_CATALOG_FINGERPRINT = "sha256:74dd838169c46409b3790e61e7237f0e0718bea04e996725aad5bb67ca1535c9";
+var METAFLOW_OPERATION_CATALOG_FINGERPRINT = "sha256:848d837bc51def904f31e2c546ecce93d286b8140f70ead30d863f37d276d51a";
 var DEFAULT_DAEMON_TIMEOUT_MS = 1e4;
 var OPERATION_HTTP_STATUS_BY_CATEGORY = {
   invalid_request: 400,

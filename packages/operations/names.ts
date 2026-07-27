@@ -31,6 +31,7 @@ export const OPERATION_NAMES = [
   "run.inspect",
   "run.cancel",
   "feedback.submit",
+  "feedback.apply",
   "failure.inspect",
   "policy.decision.get",
   "privacy.forget.request",

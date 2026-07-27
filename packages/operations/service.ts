@@ -80,7 +80,7 @@ export type OperationServiceDependencies = {
   transformations: TransformationRepository;
   execution: ExecutionRuntime;
   runs: Pick<ExecutionRepository, "getRun" | "getTrace">;
-  feedback: Pick<FeedbackEvolutionService, "record">;
+  feedback: Pick<FeedbackEvolutionService, "record" | "apply">;
   privacy: Pick<PrivacyForgetService, "request" | "execute" | "inspect">;
   capture: Pick<ConnectorRuntime, "submitBatch" | "replayDeadLetter">;
   connector_onboarding: SourceConnectionOnboardingService;
@@ -384,6 +384,8 @@ export class OperationService {
       }
       case "feedback.submit":
         return this.dependencies.feedback.record(input.feedback);
+      case "feedback.apply":
+        return this.dependencies.feedback.apply(input);
       case "failure.inspect": {
         await this.requireViewRead(context, [input.ref], "read");
         const view = await this.dependencies.views.get(input.ref);

@@ -20,6 +20,7 @@ import {
   TransformationSchema,
 } from "@info/transformation";
 import {
+  ApplyFeedbackInputSchema,
   RecordFeedbackInputSchema,
   StartExecutionParametersSchema,
 } from "@info/execution";
@@ -109,6 +110,7 @@ export const OperationInputSchemas = {
   "run.inspect": z.object({ run_id: IdentifierSchema }).strict(),
   "run.cancel": z.object({ run_id: IdentifierSchema }).strict(),
   "feedback.submit": z.object({ feedback: RecordFeedbackInputSchema }).strict(),
+  "feedback.apply": ApplyFeedbackInputSchema,
   "failure.inspect": z.object({ ref: ExactViewRefSchema }).strict(),
   "policy.decision.get": z.object({ run_id: IdentifierSchema }).strict(),
   "privacy.forget.request": ForgetRequestParametersSchema,
@@ -153,6 +155,7 @@ export const OPERATION_DESCRIPTIONS: Record<OperationName, string> = {
   "run.inspect": "Inspect a Run, attempts, trace, committed outputs, and Failure evidence.",
   "run.cancel": "Request cancellation of an active Run in this operation service.",
   "feedback.submit": "Record feedback about one exact View revision.",
+  "feedback.apply": "Apply one exact Feedback View by creating a new immutable Transformation revision.",
   "failure.inspect": "Inspect one exact Failure View and its parsed evidence.",
   "policy.decision.get": "Read the frozen View access decision for one Run.",
   "privacy.forget.request": "Freeze a provenance impact plan or immediately execute a preauthorized sensitive cascade.",
