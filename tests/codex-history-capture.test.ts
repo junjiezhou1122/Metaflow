@@ -29,6 +29,7 @@ import {
   SecretlintRecommendedContentGate,
   codexHistorySourceConnection,
   configureCodexHistoryCapture,
+  parseCodexRolloutLine,
   type CodexContentGate,
   type CodexHistorySourcePayload,
 } from "../packages/adapters/codex-history-capture/index.ts";
@@ -259,7 +260,7 @@ test("current official SessionMeta context is validated and structurally exclude
     assert.equal(batches.length, 1);
     assert.equal(
       (batches[0]?.metadata.excluded_record_counts as Record<string, number>).instruction_or_context,
-      4,
+      5,
     );
     const committed = await harness.runtime.submitBatch(batches[0]!);
     assert.equal(committed.receipts.length, 2);
@@ -269,12 +270,83 @@ test("current official SessionMeta context is validated and structurally exclude
     const serialized = JSON.stringify(session);
     assert.doesNotMatch(serialized, /context_window|window_id|history_mode|repository_url|commit_hash/);
     assert.doesNotMatch(serialized, /SYNTHETIC_REVIEW_(?:INSTRUCTION|HINT|OUTPUT)_MUST_NOT_SURVIVE/);
+    assert.doesNotMatch(serialized, /SYNTHETIC_GOAL_MUST_NOT_SURVIVE/);
     assert.equal(session.metadata.parser_contract, CODEX_ROLLOUT_PARSER_CONTRACT);
     assert.deepEqual(await harness.runtime.run(harness.connection.id, "pull", {}), []);
   } finally {
     harness.repository.close();
     await home.cleanup();
   }
+});
+
+test("official session identity defaults and structured sources normalize without Agent metadata", () => {
+  const distinct = parseSessionMetadata({
+    session_id: "synthetic-session-distinct",
+    id: "synthetic-thread-distinct",
+    source: {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: "synthetic-parent-thread",
+          depth: 2,
+          agent_path: "/root/reviewer",
+          agent_nickname: "synthetic-reviewer",
+          agent_role: "reviewer",
+        },
+      },
+    },
+  });
+  assert.equal(distinct.record?.kind, "session_meta");
+  if (distinct.record?.kind !== "session_meta") assert.fail("Expected safe session metadata");
+  assert.equal(distinct.session_id, "synthetic-thread-distinct");
+  assert.equal(distinct.record.session_id, "synthetic-thread-distinct");
+  assert.equal(distinct.record.source, "subagent_thread_spawn");
+  assert.doesNotMatch(
+    JSON.stringify(distinct.record),
+    /synthetic-session-distinct|synthetic-parent-thread|synthetic-reviewer|reviewer/,
+  );
+
+  const legacy = parseSessionMetadata({ id: "synthetic-legacy-thread" });
+  assert.equal(legacy.session_id, "synthetic-legacy-thread");
+  assert.equal(legacy.record?.kind, "session_meta");
+  if (legacy.record?.kind !== "session_meta") assert.fail("Expected legacy safe session metadata");
+  assert.equal(legacy.record.source, "vscode");
+
+  assert.throws(
+    () => parseSessionMetadata({
+      id: "synthetic-invalid-thread",
+      source: { subagent: { thread_spawn: { parent_thread_id: "parent", depth: 1, undeclared: true } } },
+    }),
+    (error: unknown) => error instanceof CaptureRuntimeError && error.code === "codex_source_contract_incompatible",
+  );
+
+  const historyThreads = new Set<string>();
+  const current = parseSessionMetadata({
+    session_id: "synthetic-root-session",
+    id: "synthetic-child-thread",
+    forked_from_id: "synthetic-parent-thread",
+  }, { expected_session_id: "synthetic-child-thread", allowed_history_thread_ids: historyThreads });
+  assert.equal(current.record?.kind, "session_meta");
+  assert.equal(current.history_parent_id, "synthetic-parent-thread");
+  historyThreads.add(current.history_parent_id!);
+  const parent = parseSessionMetadata({
+    id: "synthetic-parent-thread",
+    forked_from_id: "synthetic-grandparent-thread",
+  }, { expected_session_id: "synthetic-child-thread", allowed_history_thread_ids: historyThreads, byte_offset: 100 });
+  assert.equal(parent.record, undefined);
+  assert.equal(parent.history_parent_id, "synthetic-grandparent-thread");
+  historyThreads.add(parent.history_parent_id!);
+  const repeatedCurrent = parseSessionMetadata({
+    id: "synthetic-child-thread",
+    forked_from_id: "synthetic-parent-thread",
+  }, { expected_session_id: "synthetic-child-thread", allowed_history_thread_ids: historyThreads, byte_offset: 200 });
+  assert.equal(repeatedCurrent.record, undefined);
+  assert.throws(
+    () => parseSessionMetadata(
+      { id: "synthetic-unrelated-thread" },
+      { expected_session_id: "synthetic-child-thread", allowed_history_thread_ids: historyThreads, byte_offset: 300 },
+    ),
+    (error: unknown) => error instanceof CaptureRuntimeError && error.code === "codex_source_contract_incompatible",
+  );
 });
 
 test("structural exclusions never enter candidates while text parts retain offset evidence", async () => {
@@ -666,6 +738,42 @@ test("terminal Runtime failure dead-letters only the privacy-gated batch", async
     await home.cleanup();
   }
 });
+
+function parseSessionMetadata(
+  payload: Record<string, unknown>,
+  options: {
+    expected_session_id?: string;
+    allowed_history_thread_ids?: ReadonlySet<string>;
+    byte_offset?: number;
+  } = {},
+) {
+  const bytes = Buffer.from(JSON.stringify({
+    timestamp: fixedTimestamp,
+    type: "session_meta",
+    payload: {
+      timestamp: fixedTimestamp,
+      cwd: "/workspace/official-session-source",
+      originator: "Synthetic Test Harness",
+      cli_version: "0.145.0",
+      model_provider: null,
+      base_instructions: null,
+      ...payload,
+    },
+  }));
+  const byteOffset = options.byte_offset ?? 0;
+  return parseCodexRolloutLine({
+    line: {
+      byte_offset: byteOffset,
+      byte_length: bytes.length,
+      bytes,
+      through_offset: byteOffset + bytes.length + 1,
+    },
+    ...(options.expected_session_id ? { expected_session_id: options.expected_session_id } : {}),
+    ...(options.allowed_history_thread_ids
+      ? { allowed_history_thread_ids: options.allowed_history_thread_ids }
+      : {}),
+  });
+}
 
 function messageEnvelope(timestamp: string, role: "user" | "assistant", text: string): string {
   const contentType = role === "assistant" ? "output_text" : "input_text";

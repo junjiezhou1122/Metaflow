@@ -30,11 +30,14 @@ test("selected synthetic Codex and Obsidian sources produce content-free replay 
     }, { now: () => NOW, temporary_parent: root });
 
     PersonalizedSourceSmokeEvidenceSchema.parse(evidence);
+    assert.equal(evidence.version, 2);
     assert.equal(evidence.ok, true);
     assert.deepEqual(evidence.sources.codex_rollouts, 1);
     assert.deepEqual(evidence.sources.obsidian_notes, 1);
     assert.equal(evidence.capture.committed_batches, 2);
     assert.equal(evidence.capture.stored_views, 4);
+    assert.match(evidence.capture.view_manifest_sha256, /^[a-f0-9]{64}$/);
+    assert.equal(evidence.capture.views_truncated, false);
     assert.deepEqual(
       evidence.capture.views.map(view => view.schema.name).sort(),
       ["capture.codex.message", "capture.codex.message", "capture.codex.session", "capture.obsidian.document"],

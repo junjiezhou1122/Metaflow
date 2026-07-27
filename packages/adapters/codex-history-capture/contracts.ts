@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const CODEX_ROLLOUT_PARSER_CONTRACT = "codex-rollout-jsonl@0.145-safe-v3" as const;
+export const CODEX_ROLLOUT_PARSER_CONTRACT = "codex-rollout-jsonl@0.145-safe-v4" as const;
 export const CODEX_SECRET_POLICY = "secretlint-recommend@13+codex-structural-v1" as const;
 export const CODEX_CURSOR_VERSION = 1 as const;
 export const CODEX_MAX_BATCH_RECORDS = 256;

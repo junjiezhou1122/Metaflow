@@ -28,7 +28,8 @@ pnpm smoke:personalized-sources --config /absolute/path/to/smoke.json
 Codex rollout paths and the Obsidian vault root are absolute; Obsidian note
 selections are normalized paths relative to that root so their real vault-path
 semantics survive Capture. Source paths are inputs only. Successful stdout is one strict, content-free
-JSON object containing source counts, aggregate digests, exact Raw View refs,
+JSON object containing source counts, aggregate digests, at most 20 sampled
+exact Raw View refs, an all-View manifest digest and truncation flag,
 Schema summaries, checkpoint digests, exact batch replay proof, idle post-checkpoint
 pull counts, trace counts, and cleanup
 proof. It never contains note/message text, source paths or roots, credentials,

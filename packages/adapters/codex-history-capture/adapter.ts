@@ -281,7 +281,7 @@ export class CodexHistoryCaptureConnector implements ConnectorPort {
         });
         const prefixHash = verified.hash;
         let turnId = verified.turn_id;
-        let forkedFromId = verified.forked_from_id;
+        const historyThreadIds = new Set(verified.history_thread_ids);
         let batchFromOffset = committedOffset;
         let batchHash = createHash("sha256");
         let batchBytes = 0;
@@ -306,11 +306,11 @@ export class CodexHistoryCaptureConnector implements ConnectorPort {
             line,
             expected_session_id: file.session_id,
             ...(turnId ? { current_turn_id: turnId } : {}),
-            ...(forkedFromId ? { forked_from_id: forkedFromId } : {}),
+            allowed_history_thread_ids: historyThreadIds,
             gate: this.contentGate,
           });
           if (outcome.turn_id !== undefined) turnId = outcome.turn_id;
-          if (outcome.forked_from_id !== undefined) forkedFromId = outcome.forked_from_id;
+          if (outcome.history_parent_id !== undefined) historyThreadIds.add(outcome.history_parent_id);
           if (outcome.record) records.push(outcome.record);
           applyExclusions(exclusions, outcome.exclusions);
           if (records.length > 0) {

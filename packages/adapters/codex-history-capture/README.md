@@ -7,7 +7,7 @@ Codex SQLite previews, `history.jsonl`, or `session_index.jsonl`.
 
 ## Safety boundary
 
-The parser contract is exactly `codex-rollout-jsonl@0.145-safe-v3`. It follows
+The parser contract is exactly `codex-rollout-jsonl@0.145-safe-v4`. It follows
 the official `SessionMeta` and `SessionMetaLine` source shape at
 `openai/codex@95637f7056835fea66bdd0044414af480fc0fd74` while retaining explicit
 compatibility with older 0.145 records. It admits
@@ -19,6 +19,13 @@ reasoning, tool calls and results, world state, instructions, duplicate event
 projections, compaction data, images, and token/rate data are structurally
 excluded. Optional Git, context-window, history, Agent, capability, dynamic-tool,
 and base-instruction metadata is validated but never copied into candidates.
+Distinct thread and root-session ids, legacy metadata without `session_id`, and the
+official structured `SessionSource` variants are accepted. Nested Agent source
+details are structurally excluded; only a bounded source classification enters
+the safe session record. The rollout ThreadId (`id`) is the stable Connector
+identity because multiple sub-agents may share one root `session_id`. Copied
+history metadata is admitted only along the explicitly declared
+`forked_from_id` ancestor closure and never creates duplicate session Views.
 The outer RolloutLine timestamp and the nested SessionMeta timestamp are
 independently validated because the official format does not require equality;
 an optional outer ordinal is validated and excluded.

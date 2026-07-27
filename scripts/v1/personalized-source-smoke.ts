@@ -35,6 +35,7 @@ import { SqliteViewRepository } from "@info/storage-sqlite";
 import { ExactViewRefSchema, type ExactViewRef, type View } from "@info/view";
 
 const SHA256 = z.string().regex(/^[a-f0-9]{64}$/);
+const MAX_VIEW_EVIDENCE_SAMPLES = 20;
 const CONNECTIONS = {
   codex: "codex-history:personalized-source-smoke",
   obsidian: "obsidian:personalized-source-smoke",
@@ -87,7 +88,7 @@ const ViewEvidenceSchema = z.object({
 }).strict();
 
 const SmokeEvidencePayloadSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   ok: z.literal(true),
   sources: z.object({
     codex_rollouts: z.number().int().positive(),
@@ -97,8 +98,10 @@ const SmokeEvidencePayloadSchema = z.object({
   capture: z.object({
     committed_batches: z.number().int().nonnegative(),
     stored_views: z.number().int().positive(),
+    view_manifest_sha256: SHA256,
+    views_truncated: z.boolean(),
     connectors: z.array(ConnectorEvidenceSchema).length(2),
-    views: z.array(ViewEvidenceSchema).min(1),
+    views: z.array(ViewEvidenceSchema).min(1).max(MAX_VIEW_EVIDENCE_SAMPLES),
   }).strict(),
   cleanup: z.object({
     workspace_removed: z.literal(true),
@@ -159,18 +162,18 @@ export async function runPersonalizedSourceSmoke(
     };
     const postCheckpoint = await runBoth(runtime);
     const replayCheckpoints = await readCheckpoints(repository);
-    const views = await readViewEvidence(repository, first);
+    const allViews = await readViewEvidence(repository, first);
     const connectorEvidence = await Promise.all([
       connectorEvidenceFor(repository, "codex-history", CONNECTIONS.codex, first.codex, exactReplay.codex, postCheckpoint.codex, firstCheckpoints.codex, replayCheckpoints.codex),
       connectorEvidenceFor(repository, "obsidian-capture", CONNECTIONS.obsidian, first.obsidian, exactReplay.obsidian, postCheckpoint.obsidian, firstCheckpoints.obsidian, replayCheckpoints.obsidian),
     ]);
     const committedBatches = first.codex.length + first.obsidian.length;
-    const storedViews = views.length;
+    const storedViews = allViews.length;
     if (committedBatches < 1 || storedViews < 1) {
       throw new PersonalizedSourceSmokeError("capture_empty", "Selected sources did not produce any committed Raw Views");
     }
     payload = {
-      version: 1,
+      version: 2,
       ok: true,
       sources: {
         codex_rollouts: config.codex_rollouts.length,
@@ -180,8 +183,10 @@ export async function runPersonalizedSourceSmoke(
       capture: {
         committed_batches: committedBatches,
         stored_views: storedViews,
+        view_manifest_sha256: digestJson(allViews),
+        views_truncated: allViews.length > MAX_VIEW_EVIDENCE_SAMPLES,
         connectors: connectorEvidence,
-        views,
+        views: allViews.slice(0, MAX_VIEW_EVIDENCE_SAMPLES),
       },
       cleanup: { workspace_removed: true, database_removed: true },
     };
