@@ -1,0 +1,12 @@
+{
+  "name": "@info/view-package-structured-content",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/view-package": "workspace:*"
+  }
+}

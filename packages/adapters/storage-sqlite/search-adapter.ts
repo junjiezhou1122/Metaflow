@@ -16,6 +16,8 @@ import {
   type ViewGraphRelationEdge,
 } from "@info/view";
 import {
+  SearchModeUnavailableError,
+  SearchRepresentationCoordinatesSchema,
   type KeywordRetriever,
   type RankedSearchCandidate,
   type SearchMatchV1,
@@ -280,6 +282,7 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
   }): Promise<RankedSearchCandidate[]> {
     if (input.refs.length === 0) return [];
     const refs = uniqueRefs(input.refs);
+    if (input.target.internal && !input.target.envelope) this.assertInternalProjectionAvailable(refs);
     const candidateLimit = boundedInteger(input.candidate_limit, 1, 1_000, "candidate_limit");
     const expression = compileSearchExpression(input.text);
     const candidates = input.target.envelope && input.target.internal
@@ -287,12 +290,19 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
       : this.targetedCandidates(refs, input.text, input.target, candidateLimit);
     if (candidates.length === 0) return [];
     const candidateViews = candidates.map(row => parseStoredView(row.view_json));
+    const candidateViewsByRef = new Map(candidateViews.map(view => [`${view.id}@${view.revision}`, view]));
     const evidence = this.unitEvidence(candidateViews.map(exactViewRef), expression.replaceAll(" AND ", " OR "), input.target);
     const evidenceByRef = new Map<string, SearchMatchV1[]>();
     for (const row of evidence) {
       const key = `${row.view_id}@${row.revision}`;
+      const view = candidateViewsByRef.get(key);
+      const coordinates = view ? structuredFragmentCoordinates(view, row.expanded_path) : undefined;
       const location = row.expanded_path === "/representation" || row.expanded_path.startsWith("/representation/")
-        ? { kind: "representation" as const, path: row.expanded_path }
+        ? {
+            kind: "representation" as const,
+            path: row.expanded_path,
+            ...(coordinates ? { coordinates } : {}),
+          }
         : { kind: "envelope" as const, path: row.expanded_path };
       const matches = evidenceByRef.get(key) ?? [];
       matches.push({
@@ -313,6 +323,22 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
         matches: matches.sort((left, right) => locationKey(left).localeCompare(locationKey(right)) || left.value_digest.localeCompare(right.value_digest)),
       }] : [];
     });
+  }
+
+  private assertInternalProjectionAvailable(refs: ExactViewRef[]): void {
+    const row = this.db.prepare(`
+      with authorized(view_id, revision) as (${valuesCte(refs.length)})
+      select 1 as available
+      from authorized a
+      join view_search_units_v2 u on u.view_id = a.view_id and u.revision = a.revision
+      where u.expanded_path = '/representation' or u.expanded_path like '/representation/%'
+      limit 1
+    `).get(...flattenRefs(refs));
+    if (row) return;
+    throw new SearchModeUnavailableError(
+      "parser_capability_missing",
+      "Internal Search requires at least one committed searchable View projection in the frozen scope",
+    );
   }
 
   private aggregateCandidates(refs: ExactViewRef[], expression: string, limit: number): RankedViewRow[] {
@@ -340,18 +366,21 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
       const rows = this.db.prepare(`
         with authorized(view_id, revision) as (${valuesCte(refs.length)})
         select r.view_json, r.id, r.revision,
-               min(bm25(view_search_unit_fts_v2, 12.0, 6.0, 4.0, 3.0, 2.0, 1.0)) as search_score
+               bm25(view_search_unit_fts_v2, 12.0, 6.0, 4.0, 3.0, 2.0, 1.0) as search_score
         from authorized a
         join view_search_units_v2 u on u.view_id = a.view_id and u.revision = a.revision
         join view_search_unit_fts_v2 on view_search_unit_fts_v2.rowid = u.search_unit_id
         join view_revisions_v1 r on r.id = a.view_id and r.revision = a.revision
         where view_search_unit_fts_v2 match ? and ${pathClause}
-        group by r.id, r.revision, r.view_json
         order by search_score asc, r.id asc, r.revision desc
       `).all(...flattenRefs(refs), quoteFtsToken(token)) as Array<RankedViewRow & { id: string; revision: number }>;
+      const bestForToken = new Map<string, RankedViewRow>();
       for (const row of rows) {
-        const view = parseStoredView(row.view_json);
-        const key = `${view.id}@${view.revision}`;
+        const key = `${row.id}@${row.revision}`;
+        const best = bestForToken.get(key);
+        if (!best || Number(row.search_score) < Number(best.search_score)) bestForToken.set(key, row);
+      }
+      for (const [key, row] of bestForToken) {
         const current = scores.get(key) ?? { view_json: row.view_json, score: 0, matched: 0 };
         current.score += Number(row.search_score);
         current.matched += 1;
@@ -383,6 +412,26 @@ export class SqliteViewSearchAdapter implements SearchScopeSource, SearchViewDes
     `);
     return refs.flatMap(ref => statement.all(ref.view_id, ref.revision, expression) as UnitEvidenceRow[]);
   }
+}
+
+function structuredFragmentCoordinates(view: View, expandedPath: string) {
+  if (
+    view.schema.name !== "metaflow.view.fragment-set"
+    || view.schema.version !== 2
+    || view.schema.mode !== "strict"
+    || view.representation.form !== "inline"
+    || view.representation.kind !== "metaflow.view.fragment-set"
+  ) return undefined;
+  const match = /^\/representation\/value\/fragments\/(\d+)\/content\/text$/u.exec(expandedPath);
+  if (!match) return undefined;
+  const value = view.representation.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const fragments = value.fragments;
+  if (!Array.isArray(fragments)) return undefined;
+  const fragment = fragments[Number(match[1])];
+  if (typeof fragment !== "object" || fragment === null || Array.isArray(fragment)) return undefined;
+  const parsed = SearchRepresentationCoordinatesSchema.safeParse(fragment.location);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function locationKey(match: SearchMatchV1): string {

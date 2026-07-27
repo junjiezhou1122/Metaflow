@@ -22,6 +22,13 @@ equal the frozen canonical path, locations must honor the frozen target flags,
 and related or semantic evidence refs must already belong to the authorized
 scope. Semantic evidence from any non-semantic mode fails closed.
 
+Internal-only keyword retrieval requires at least one committed searchable
+Representation projection in the frozen scope. Otherwise the adapter reports
+`parser_capability_missing`; Search never invokes a Parser to fill the gap.
+Committed `metaflow.view.fragment-set@2` evidence retains its FTS unit path and
+adds the source JSON Pointer, table cell, graph element, or external-reference
+coordinates when available.
+
 ## Runtime integration
 
 `OperationService` exposes `view.search` with the complete `SearchRequestV1`

@@ -74,6 +74,9 @@ importers:
       '@info/storage-sqlite':
         specifier: workspace:*
         version: link:packages/adapters/storage-sqlite
+      '@info/structured-parser-adapter':
+        specifier: workspace:*
+        version: link:packages/adapters/structured-parser
       '@info/transformation':
         specifier: workspace:*
         version: link:packages/transformation
@@ -570,6 +573,21 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
+  packages/adapters/structured-parser:
+    dependencies:
+      '@info/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@info/transformation':
+        specifier: workspace:*
+        version: link:../../transformation
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../view
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
   packages/adapters/transformation-sqlite:
     dependencies:
       '@info/transformation':
@@ -725,6 +743,12 @@ importers:
         version: link:../../packages/view-package
 
   view-packages/obsidian-document:
+    dependencies:
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../../packages/view-package
+
+  view-packages/structured-content:
     dependencies:
       '@info/view-package':
         specifier: workspace:*
