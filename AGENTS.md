@@ -765,3 +765,17 @@ Obsidian Markdown acceptance boundary for Parser formation, natural-language
 Transformation authoring, strict Agent output, Application Space composition,
 keyword/internal/relation/semantic Search, Feedback evolution, restart/replay,
 and Privacy Forget.
+
+`pnpm smoke:personalized-sources --config <absolute-path>` is the opt-in real
+personal-source acceptance boundary. With `workflow.enabled`, the same exact
+pre-Forget Views must pass both an independent `codex exec` plus installed
+Metaflow skill gate and the real Vite/React/Graphology/Sigma View Explorer gate.
+Neither gate may be replaced by synthetic evidence in the CLI smoke. A missing
+or invalid Codex credential is an external failed gate, not permission to skip
+Agent access or close its acceptance issue.
+
+ACP structured output is reconstructed by complete agent message identity:
+chunks with the same `messageId` append across interleaved tool, plan, thought,
+and usage updates; a fully unidentified v1 stream is one legacy message. Mixed
+identified/unidentified chunks, non-text structured output, an invalid final
+message, or any attempt to accept one parseable fragment fails explicitly.

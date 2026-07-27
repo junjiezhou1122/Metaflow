@@ -56,6 +56,16 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
       invocation.run.frozen.output_policy ?? invocation.run.frozen.failure_policy,
     );
     const configuration = transformation.operator.configuration;
+    const outputMode = agentOutputMode(configuration.output_mode);
+    if (outputMode === "schema_value" && transformation.output.schema.mode !== "strict") {
+      return {
+        status: "failed",
+        error: {
+          code: "agent_schema_value_requires_strict_schema",
+          message: "schema_value Agent output requires a strict View output Schema",
+        },
+      };
+    }
     let currentContext: JsonObject;
     try {
       currentContext = deriveCurrentContext(
@@ -97,11 +107,13 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
       })),
       view_tools: viewTools(configuration.view_tools),
       output_contract: {
-        mode: agentOutputMode(configuration.output_mode),
+        mode: outputMode,
         view_type: transformation.output.schema.name,
         title: transformation.name,
         purpose: transformation.instruction.text,
-        schema: transformation.output.schema as JsonValue,
+        ...(outputMode === "schema_value" && transformation.output.schema.mode === "strict"
+          ? { schema: transformation.output.schema.json_schema }
+          : {}),
       },
       policy_snapshot: {
         autonomy: autonomy(configuration.autonomy),

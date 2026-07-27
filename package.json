@@ -50,6 +50,7 @@
     "test:connector-onboarding": "node --experimental-sqlite --import tsx --test tests/connector-onboarding.test.ts tests/operation-surfaces.test.ts",
     "test:operation-surfaces": "node --experimental-sqlite --import tsx --test tests/operation-surfaces.test.ts",
     "test:agent-view-access": "node --experimental-sqlite --import tsx --test tests/agent-view-access.test.ts tests/ambient-mcp-http.test.ts tests/operation-surfaces.test.ts",
+    "test:personalized-acceptance": "node --experimental-sqlite --import tsx --test tests/personalized-agent-access.test.ts tests/personalized-view-explorer-acceptance.test.ts",
     "test:personalized-view-workflow": "node --experimental-sqlite --import tsx --test tests/personalized-view-workflow.test.ts",
     "test:personalized-source-smoke": "node --experimental-sqlite --import tsx --test tests/personalized-source-smoke.test.ts",
     "smoke:personalized-sources": "node --experimental-sqlite --import tsx scripts/v1/personalized-source-smoke.ts",

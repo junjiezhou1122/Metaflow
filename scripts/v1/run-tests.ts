@@ -34,6 +34,8 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/metaflow-v1-vertical.test.ts",
   "tests/operation-surfaces.test.ts",
   "tests/obsidian-capture.test.ts",
+  "tests/personalized-agent-access.test.ts",
+  "tests/personalized-view-explorer-acceptance.test.ts",
   "tests/personalized-view-workflow.test.ts",
   "tests/personalized-source-smoke.test.ts",
   "tests/package-boundaries.test.ts",

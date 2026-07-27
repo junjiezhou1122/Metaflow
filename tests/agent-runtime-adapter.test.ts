@@ -299,6 +299,49 @@ test("ACP schema_value mode returns arbitrary JSON without requiring summary", a
   }
 });
 
+test("ACP schema_value mode never accepts one valid fragment as the complete message", async () => {
+  const dir = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-schema-fragment-test-"));
+  const script = join(dir, "fake-acp-agent.mjs");
+  writeFileSync(script, fakeAcpAgentSource());
+  chmodSync(script, 0o755);
+  const adapter = new AcpStdioAgentRuntimeAdapter({
+    id: "acp_schema_fragment_test",
+    command: process.execPath,
+    args: [script],
+    cwd: dir,
+  });
+
+  try {
+    const result = await adapter.submit({
+      id: "task:acp-schema-fragment",
+      goal: "INVALID_FRAGMENTED_SCHEMA_VALUE",
+      outputContract: {
+        mode: "schema_value",
+        viewType: "learning.daily_plan",
+        schema: { name: "learning.daily_plan", version: 1, mode: "freeform" },
+      },
+    }, { signal: {} });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /no valid schema_value/);
+    assert.equal(result.schemaValue, undefined);
+
+    const stale = await adapter.submit({
+      id: "task:acp-schema-stale-message",
+      goal: "FINAL_SCHEMA_MESSAGE_INVALID",
+      outputContract: {
+        mode: "schema_value",
+        viewType: "learning.daily_plan",
+        schema: { name: "learning.daily_plan", version: 1, mode: "freeform" },
+      },
+    }, { signal: {} });
+    assert.equal(stale.ok, false);
+    assert.match(stale.reason, /no valid schema_value/);
+    assert.equal(stale.schemaValue, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("persistent ACP reuses one process, closes every session, and survives invalid Agent output", async () => {
   const dir = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-persistent-test-"));
   const script = join(dir, "fake-persistent-acp-agent.mjs");
@@ -396,6 +439,34 @@ const agent = {
   },
   async prompt(params) {
     const prompt = JSON.stringify(params.prompt);
+    if (prompt.includes("INVALID_FRAGMENTED_SCHEMA_VALUE")) {
+      for (const text of ['{"headline":', '1']) {
+        await connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text }
+          }
+        });
+      }
+      return { stopReason: "end_turn" };
+    }
+    if (prompt.includes("FINAL_SCHEMA_MESSAGE_INVALID")) {
+      for (const [messageId, text] of [
+        ["07bb2e35-7d88-4753-b11d-35497fd54dd7", '{"stale":true}'],
+        ["38137f00-6871-44c4-84cd-336af66982ce", '{"final":'],
+      ]) {
+        await connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId,
+            content: { type: "text", text }
+          }
+        });
+      }
+      return { stopReason: "end_turn" };
+    }
     const value = prompt.includes("SCHEMA_VALUE_OUTPUT")
       ? { headline: "Daily English plan", tags: ["reading", "listening"] }
       : {
@@ -405,14 +476,22 @@ const agent = {
           confidence: 0.82
         };
     const output = "\`\`\`json\\n" + JSON.stringify(value) + "\\n\`\`\`";
-    for (const text of [output.slice(0, 17), output.slice(17, 61), output.slice(61)]) {
+    const messageId = "5df32762-6f85-4ec5-8f4f-fcad7842b734";
+    for (const [index, text] of [output.slice(0, 17), output.slice(17, 61), output.slice(61)].entries()) {
       await connection.sessionUpdate({
         sessionId: params.sessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
+          messageId,
           content: { type: "text", text }
         }
       });
+      if (index < 2) {
+        await connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update: { sessionUpdate: "usage_update", used: index + 1, size: 100 }
+        });
+      }
     }
     return { stopReason: "end_turn" };
   },

@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
+  ViewValidationError,
   ViewRepositoryError,
   canonicalJson,
   exactViewRef,
   parseViewDraft,
+  projectViewForSearch,
   viewRevisionKey,
   type ExactViewRef,
   type JsonObject,
@@ -650,7 +653,13 @@ export class ExecutionRuntime {
     try {
       envelope = parseOperatorCandidateEnvelope(candidate);
     } catch (error) {
-      throw new ExecutionRuntimeError("Operator candidate envelope is invalid", "candidate_invalid", "validation", {}, { cause: error });
+      throw new ExecutionRuntimeError(
+        "Operator candidate envelope is invalid",
+        "candidate_invalid",
+        "validation",
+        validationIssueDetails(error),
+        { cause: error },
+      );
     }
     const cardinality = run.frozen.transformation.output.cardinality;
     if (envelope.outputs.length < cardinality.min || (cardinality.max !== undefined && envelope.outputs.length > cardinality.max)) {
@@ -670,7 +679,24 @@ export class ExecutionRuntime {
       try {
         draft = parseViewDraft(output.draft);
       } catch (error) {
-        throw new ExecutionRuntimeError("Candidate View fails envelope or strict Schema validation", "candidate_invalid", "validation", {}, { cause: error });
+        throw new ExecutionRuntimeError(
+          "Candidate View fails envelope or strict Schema validation",
+          "candidate_invalid",
+          "validation",
+          validationIssueDetails(error),
+          { cause: error },
+        );
+      }
+      try {
+        projectViewForSearch({ ...draft, revision: output.expected_revision + 1 });
+      } catch (error) {
+        throw new ExecutionRuntimeError(
+          "Candidate View has an invalid deterministic search projection",
+          "candidate_invalid",
+          "validation",
+          { projection_error: error instanceof Error ? error.message : "unknown" },
+          { cause: error },
+        );
       }
       if (seen.has(draft.id)) {
         throw new ExecutionRuntimeError(`Candidate repeats View identity ${draft.id}`, "candidate_invalid", "validation");
@@ -960,6 +986,22 @@ function asRunError(error: ExecutionRuntimeError): ExecutionRunError {
     message: error.message,
     stage: error.stage,
     details: error.details,
+  };
+}
+
+function validationIssueDetails(error: unknown): JsonObject {
+  const issues = error instanceof ViewValidationError
+    ? error.issues
+    : error instanceof z.ZodError ? error.issues : [];
+  return {
+    validation_error: error instanceof ViewValidationError ? error.code : error instanceof z.ZodError ? "zod" : "unknown",
+    issue_count: issues.length,
+    issues: issues.slice(0, 20).map(issue => ({
+      code: issue.code,
+      path: issue.path.map(String).join("/"),
+      message: issue.message,
+    })),
+    issues_truncated: issues.length > 20,
   };
 }
 

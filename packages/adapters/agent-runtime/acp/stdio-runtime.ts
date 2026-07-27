@@ -606,25 +606,41 @@ function outputFromUpdates(
   stopReason: string,
   mode: AgentTaskOutputMode,
 ): AgentSchemaValue | AgentTaskOutput {
-  const runs: string[] = [];
   const chunks: string[] = [];
-  let current = "";
+  const messages = new Map<string, string>();
+  const messageOrder: string[] = [];
+  const legacyMessageKey = "__acp_message_without_id__";
+  let identifiedStream: boolean | undefined;
+  let currentMessageKey: string | undefined;
+  const completedMessageKeys = new Set<string>();
   for (const notification of updates) {
     const item = notification.update;
-    if (item.sessionUpdate === "agent_message_chunk" && item.content.type === "text") {
-      current += item.content.text;
-      chunks.push(item.content.text);
-      continue;
+    if (item.sessionUpdate !== "agent_message_chunk") continue;
+    if (item.content.type !== "text") {
+      throw new Error(`ACP structured output contains unsupported ${item.content.type} agent message content`);
     }
-    if (current) runs.push(current);
-    current = "";
+    const identified = item.messageId !== undefined && item.messageId !== null;
+    identifiedStream ??= identified;
+    if (identifiedStream !== identified) {
+      throw new Error("ACP structured output mixes identified and unidentified message chunks");
+    }
+    chunks.push(item.content.text);
+    const key = item.messageId ?? legacyMessageKey;
+    if (currentMessageKey !== undefined && currentMessageKey !== key) {
+      completedMessageKeys.add(currentMessageKey);
+      if (completedMessageKeys.has(key)) {
+        throw new Error("ACP structured output resumed a completed agent message identity");
+      }
+    }
+    currentMessageKey = key;
+    if (!messages.has(key)) messageOrder.push(key);
+    messages.set(key, `${messages.get(key) ?? ""}${item.content.text}`);
   }
-  if (current) runs.push(current);
 
-  const candidates = [...runs].reverse().concat([...chunks].reverse());
   let lastError: unknown;
-  for (const text of candidates) {
-    if (!text.trim()) continue;
+  const finalMessage = messageOrder.at(-1);
+  if (finalMessage) {
+    const text = messages.get(finalMessage)!;
     try {
       const parsed = JSON.parse(stripJsonCodeFence(text)) as unknown;
       return mode === "schema_value"
@@ -640,7 +656,7 @@ function outputFromUpdates(
   const characters = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const expected = mode === "schema_value" ? "schema_value" : "AgentTaskOutput";
   throw new Error(
-    `ACP prompt completed with ${stopReason} and emitted ${chunks.length} text chunks (${characters} characters), but no valid ${expected} was found: ${errorMessage(lastError)}`,
+    `ACP prompt completed with ${stopReason} and emitted ${chunks.length} text chunks across ${messageOrder.length} messages (${characters} characters), but no valid ${expected} was found: ${errorMessage(lastError)}`,
   );
 }
 
