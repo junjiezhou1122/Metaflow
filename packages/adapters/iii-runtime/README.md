@@ -26,6 +26,10 @@ ViewCommitted event -> Automation match -> III named queue
   cross the queue as exact refs.
 - Startup verifies the live engine version, named-queue concurrency, and every
   registered Function contract through engine introspection.
+- Parser and Processor registrations freeze their exact Transformation ref,
+  input/output contract digests, Operator snapshot digest, ABI, capabilities,
+  and queue evidence in Function metadata. III remains only the runtime host;
+  Execution still validates and commits every candidate.
 - The adapter forces `III_DISABLE_TRACE_PAYLOADS=true` before connecting so
   full authorized Operator inputs are not copied into OpenTelemetry spans.
 
@@ -42,3 +46,8 @@ The SDK also exposes no public idle connection-state callback. The adapter
 therefore records a correlated `iii.worker.disconnected` event when an active
 Automation or Operator invocation is stopped by disconnect; it does not claim
 to observe internal idle reconnect attempts that the SDK does not publish.
+
+Run `pnpm test:iii-runtime:live` to start the installed III engine, execute the
+exact Markdown Parser through Execution, restart the engine, verify SDK
+re-registration through engine introspection, and execute a second Run. The
+probe fails if port `49134` is already occupied and leaves no listener behind.

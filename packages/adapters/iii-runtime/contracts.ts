@@ -25,10 +25,12 @@ import {
 
 export const III_SDK_VERSION = "0.19.2";
 export const III_ENGINE_VERSION = "0.19.2";
+export const III_FUNCTION_ABI_VERSION = 1;
 export const III_AUTOMATION_FUNCTION_ID = "metaflow::automation::invoke::v1";
 export const III_AUTOMATION_CONTRACT = "metaflow.automation.invoke.v1";
 export const III_OPERATOR_CONTRACT = "metaflow.operator.execute.v1";
 export const III_OPERATOR_CANCEL_CONTRACT = "metaflow.operator.cancel.v1";
+export const III_OPERATOR_RESULT_CONTRACT = "metaflow.operator.result.v1";
 
 export const IiiQueueConfigurationSchema = z.object({
   version: z.literal(1),
@@ -196,6 +198,7 @@ export const IiiRuntimeEventTypeSchema = z.enum([
   "iii.worker.registration_started",
   "iii.worker.compatibility_verified",
   "iii.worker.function_registered",
+  "iii.worker.readiness_verified",
   "iii.worker.registered",
   "iii.worker.disconnected",
   "iii.worker.shutdown_started",
@@ -242,6 +245,11 @@ export type IiiOperatorInvocationEnvelope = z.infer<typeof IiiOperatorInvocation
 export type IiiDeadLetterMessage = z.infer<typeof IiiDeadLetterMessageSchema>;
 export type IiiRuntimeEvent = z.infer<typeof IiiRuntimeEventSchema>;
 
+export type IiiInvocationInput = {
+  payload: unknown;
+  caller_worker_id?: string;
+};
+
 export interface IiiRuntimeEventSink {
   emit(event: IiiRuntimeEvent): void | Promise<void>;
 }
@@ -268,6 +276,26 @@ export function automationCorrelationId(automation: ExactViewRef, triggerId: str
 
 export function operatorKey(operator: OperatorSnapshot): string {
   return `${operator.id}@${operator.revision}`;
+}
+
+export function contractDigest(value: unknown): string {
+  return digest(value);
+}
+
+export function extractIiiInvocationInput(input: unknown): IiiInvocationInput {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || !("_caller_worker_id" in input)) {
+    return { payload: input };
+  }
+  const { _caller_worker_id: callerWorkerId, ...payload } = input as Record<string, unknown>;
+  const parsed = z.string().uuid().safeParse(callerWorkerId);
+  if (!parsed.success) {
+    throw new IiiRuntimeError(
+      "III engine injected an invalid caller Worker id",
+      "invocation_metadata_invalid",
+      { cause: parsed.error },
+    );
+  }
+  return { payload, caller_worker_id: parsed.data };
 }
 
 export function iiiOperatorFunctionId(operator: OperatorSnapshot): string {
@@ -311,6 +339,7 @@ export type IiiRuntimeErrorCode =
   | "registration_failed"
   | "enqueue_failed"
   | "invocation_cancelled"
+  | "invocation_metadata_invalid"
   | "automation_resolution_failed"
   | "automation_occurrence_incomplete"
   | "operator_mismatch"
