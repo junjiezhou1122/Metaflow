@@ -385,6 +385,7 @@ export class OperationService {
       case "feedback.submit":
         return this.dependencies.feedback.record(input.feedback);
       case "feedback.apply":
+        await this.requireViewRead(context, [input.feedback], "read");
         return this.dependencies.feedback.apply(input);
       case "failure.inspect": {
         await this.requireViewRead(context, [input.ref], "read");

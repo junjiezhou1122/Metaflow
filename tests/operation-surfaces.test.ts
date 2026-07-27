@@ -289,7 +289,29 @@ test("Feedback evolution has one exact lifecycle across in-process, CLI, HTTP, a
         created_at: "2026-07-26T14:12:00.000Z",
       });
       assert.equal(missing.ok, false);
-      if (!missing.ok) assert.equal(missing.error.code, "feedback_view_invalid");
+      if (!missing.ok) assert.equal(missing.error.code, "view_not_found");
+
+      const denied = await harness.service.execute({
+        operation: "feedback.apply",
+        input: {
+          feedback: feedbackRef,
+          base_transformation: { transformation_id: transformation.id, revision: 2 },
+          change: {
+            instruction: {
+              ...transformation.instruction,
+              text: "A different principal must not inspect or apply this feedback.",
+            },
+          },
+          actor: "user:other",
+          resolution: "This request must be denied before reading Feedback evidence.",
+          created_at: "2026-07-26T14:13:00.000Z",
+        },
+      }, {
+        request_id: "request:feedback-apply-denied",
+        principal: { id: "user:other", grants: ["feedback.apply"] },
+      });
+      assert.equal(denied.ok, false);
+      if (!denied.ok) assert.equal(denied.error.code, "view_read_forbidden");
     } finally {
       await Promise.all(surfaces.map(surface => surface.close()));
     }
