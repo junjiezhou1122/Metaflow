@@ -33,7 +33,7 @@ struct ResidentOperationWireContract {
     static let serverName = "ambient-daemon"
     static let serverVersion = "0.1.0"
     static let catalogVersion = 1
-    static let catalogFingerprint = "sha256:1c363c4ecb05e39def4e8aa7ae27957b0298d6c4405a1cc048de7bbdc767bcfc"
+    static let catalogFingerprint = "sha256:848d837bc51def904f31e2c546ecce93d286b8140f70ead30d863f37d276d51a"
     static let authenticationSource = "METAFLOW_AUTH_TOKEN"
     static let authenticationRequired = true
     static let authenticationScheme = "Bearer"
@@ -42,19 +42,38 @@ struct ResidentOperationWireContract {
     static let mcpEndpoint = "/mcp"
     static let operations = [
         "catalog.list",
+        "connector.list",
+        "connector.inspect",
         "capture.ingest",
+        "capture.connection.list",
+        "capture.connection.create",
+        "capture.connection.check",
+        "capture.connection.discover",
+        "capture.connection.activate",
+        "capture.connection.update",
+        "capture.connection.pause",
+        "capture.connection.run",
+        "capture.dlq.list",
+        "capture.dlq.replay",
         "view.get",
         "view.graph.project",
         "view.search",
         "view.search.reindex",
         "view.traverse",
         "view.tombstone",
+        "view.authoring.request",
+        "view.authoring.propose",
+        "view.authoring.inspect",
+        "view.authoring.approve",
+        "view.authoring.reject",
+        "view.authoring.apply",
         "transformation.submit",
         "transformation.get",
         "run.execute",
         "run.inspect",
         "run.cancel",
         "feedback.submit",
+        "feedback.apply",
         "failure.inspect",
         "policy.decision.get",
         "privacy.forget.request",
