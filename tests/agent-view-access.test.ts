@@ -79,6 +79,16 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
       }]),
       expected_revision: 0,
     })).view;
+    const personalizedRoot = (await composition.views.commit({
+      draft: viewDraft("view:agent:personalized", "Personalized workflow bridge evidence", [{
+        type: edgeType,
+        target: exactViewRef(neighbor),
+      }, {
+        type: edgeType,
+        target: exactViewRef(denied),
+      }]),
+      expected_revision: 0,
+    })).view;
     const port = await listen(server);
     const daemonUrl = `http://127.0.0.1:${port}`;
     const installedMf = installCli(directory);
@@ -166,6 +176,58 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
       ["GET", "/metaflow/v1/doctor"],
       ["POST", "/metaflow/v1/operations/view.graph.project"],
     ]);
+
+    const overrideRequestStart = requests.length;
+    const overrideAgentProcess = await runProcess(process.execPath, [agentFixture], {
+      cwd: isolatedCwd,
+      env: {
+        ...process.env,
+        METAFLOW_DAEMON_URL: daemonUrl,
+        MF_BIN: installedMf,
+        MF_SKILL: skillPath,
+        MF_EDGE_TYPE: edgeType,
+        MF_QUERY: "Personalized workflow bridge evidence",
+        METAFLOW_AUTH_TOKEN: operationAuthToken,
+      },
+    });
+    assert.equal(overrideAgentProcess.status, 0, overrideAgentProcess.stderr);
+    const overrideAgentOutput = JSON.parse(overrideAgentProcess.stdout);
+    assert.equal(overrideAgentOutput.selected_ref_source, "view.search.hit.ref");
+    assert.equal(overrideAgentOutput.citation, `${personalizedRoot.id}@${personalizedRoot.revision}`);
+    assert.deepEqual(overrideAgentOutput.graph_citations, [
+      `${neighbor.id}@${neighbor.revision}`,
+      `${personalizedRoot.id}@${personalizedRoot.revision}`,
+    ].sort());
+    assert.equal(overrideAgentProcess.stdout.includes(root.id), false);
+    assert.equal(overrideAgentProcess.stdout.includes(denied.id), false);
+    assert.deepEqual(requests.slice(overrideRequestStart).map(request => [request.method, request.path]), [
+      ["GET", "/metaflow/v1/doctor"],
+      ["GET", "/metaflow/v1/doctor"],
+      ["POST", "/metaflow/v1/operations/catalog.list"],
+      ["GET", "/metaflow/v1/doctor"],
+      ["POST", "/metaflow/v1/operations/view.search"],
+      ["GET", "/metaflow/v1/doctor"],
+      ["POST", "/metaflow/v1/operations/view.get"],
+      ["GET", "/metaflow/v1/doctor"],
+      ["POST", "/metaflow/v1/operations/view.graph.project"],
+    ]);
+
+    const rejectedRequestStart = requests.length;
+    const rejectedAgentProcess = await runProcess(process.execPath, [agentFixture], {
+      cwd: isolatedCwd,
+      env: {
+        ...process.env,
+        METAFLOW_DAEMON_URL: daemonUrl,
+        MF_BIN: installedMf,
+        MF_SKILL: skillPath,
+        MF_EDGE_TYPE: edgeType,
+        MF_QUERY: "   ",
+        METAFLOW_AUTH_TOKEN: operationAuthToken,
+      },
+    });
+    assert.notEqual(rejectedAgentProcess.status, 0);
+    assert.match(rejectedAgentProcess.stderr, /MF_QUERY must be non-empty when provided/u);
+    assert.equal(requests.length, rejectedRequestStart);
 
     const client = new Client({ name: "metaflow-view-access-conformance", version: "0.1.0" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp`), {

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const mf = required("MF_BIN");
 const skillPath = required("MF_SKILL");
 const edgeType = required("MF_EDGE_TYPE");
+const query = optionalQuery("MF_QUERY", "Agent exact evidence");
 const skill = readFileSync(skillPath, "utf8");
 
 for (const rule of [
@@ -19,7 +20,7 @@ call(["--json", "doctor"]);
 const search = call(["--json", "view.search", "--input", JSON.stringify({
   request: {
     contract_version: 1,
-    query: { text: "Agent exact evidence" },
+    query: { text: query },
     scope: { kind: "all_visible", max_nodes: 100, max_scan: 1_000 },
     target: { envelope: true, internal: true, related_views: false },
     modes: ["keyword"],
@@ -81,4 +82,12 @@ function required(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function optionalQuery(name, defaultValue) {
+  const value = process.env[name];
+  if (value === undefined) return defaultValue;
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${name} must be non-empty when provided`);
+  return normalized;
 }
