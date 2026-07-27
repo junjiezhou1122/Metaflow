@@ -1,46 +1,34 @@
-import { z } from "zod";
 import {
-  OperationEnvelopeSchema,
   OperationRequestSchema,
   type OperationEnvelope,
-  type OperationName,
 } from "@info/operations";
+import {
+  DEFAULT_DAEMON_TIMEOUT_MS,
+  METAFLOW_HTTP_PROTOCOL_VERSION,
+  OperationWireContractError,
+  createDoctorChallenge,
+  doctorAuthenticationProof,
+  operationHttpStatus,
+  validateDoctorWire,
+  validateDaemonToken,
+  validateOperationEnvelopeWire,
+  type MetaflowDaemonDoctor,
+} from "./wire-contract.js";
 
-export const METAFLOW_HTTP_PROTOCOL_NAME = "metaflow-operations-http" as const;
-export const METAFLOW_HTTP_PROTOCOL_VERSION = 1 as const;
-export const METAFLOW_AMBIENT_SERVER_NAME = "ambient-daemon" as const;
-export const METAFLOW_AMBIENT_SERVER_VERSION = "0.1.0" as const;
-export const DEFAULT_DAEMON_TIMEOUT_MS = 10_000;
-export const OPERATION_HTTP_STATUS_BY_CATEGORY = {
-  invalid_request: 400,
-  forbidden: 403,
-  not_found: 404,
-  conflict: 409,
-  failed_dependency: 502,
-  internal: 500,
-} as const;
-
-export const MetaflowDaemonDoctorSchema = z.object({
-  ok: z.literal(true),
-  protocol: z.object({
-    name: z.literal(METAFLOW_HTTP_PROTOCOL_NAME),
-    version: z.literal(METAFLOW_HTTP_PROTOCOL_VERSION),
-  }).strict(),
-  server: z.object({
-    name: z.literal(METAFLOW_AMBIENT_SERVER_NAME),
-    version: z.literal(METAFLOW_AMBIENT_SERVER_VERSION),
-  }).strict(),
-  authentication: z.object({
-    source: z.literal("composition_principal"),
-    required: z.boolean(),
-  }).strict(),
-  endpoints: z.object({
-    operations: z.literal("/metaflow/v1/operations/"),
-    mcp: z.literal("/mcp"),
-  }).strict(),
-}).strict();
-
-export type MetaflowDaemonDoctor = z.infer<typeof MetaflowDaemonDoctorSchema>;
+export {
+  DEFAULT_DAEMON_TIMEOUT_MS,
+  METAFLOW_AMBIENT_SERVER_NAME,
+  METAFLOW_AMBIENT_SERVER_VERSION,
+  METAFLOW_HTTP_PROTOCOL_NAME,
+  METAFLOW_HTTP_PROTOCOL_VERSION,
+  METAFLOW_OPERATION_CATALOG_FINGERPRINT,
+  METAFLOW_OPERATION_CATALOG_VERSION,
+  OPERATION_HTTP_STATUS_BY_CATEGORY,
+  createDoctorChallenge,
+  doctorAuthenticationProof,
+  operationHttpStatus,
+} from "./wire-contract.js";
+export type { MetaflowDaemonDoctor } from "./wire-contract.js";
 
 export type DaemonOperationClientOptions = {
   endpoint: URL;
@@ -65,7 +53,7 @@ export class DaemonOperationClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly authorization?: string;
-  private negotiated?: Promise<MetaflowDaemonDoctor>;
+  private readonly token?: string;
 
   constructor(options: DaemonOperationClientOptions);
   constructor(endpoint: URL, fetchImpl?: typeof fetch);
@@ -77,16 +65,22 @@ export class DaemonOperationClient {
     this.fetchImpl = options.fetch ?? fetch;
     this.timeoutMs = parseDaemonTimeout(options.timeout_ms ?? DEFAULT_DAEMON_TIMEOUT_MS);
     if (options.token !== undefined) {
-      if (!options.token.trim() || /[\r\n]/u.test(options.token)) {
-        throw new DaemonWireError("daemon_token_invalid", "Daemon authentication token is invalid");
+      let token: string;
+      try {
+        token = validateDaemonToken(options.token);
+      } catch (cause) {
+        if (cause instanceof OperationWireContractError) {
+          throw new DaemonWireError(cause.code, cause.message, { cause });
+        }
+        throw cause;
       }
-      this.authorization = `Bearer ${options.token}`;
+      this.authorization = `Bearer ${token}`;
+      this.token = token;
     }
   }
 
   negotiate(): Promise<MetaflowDaemonDoctor> {
-    this.negotiated ??= this.fetchDoctor();
-    return this.negotiated;
+    return this.fetchDoctor();
   }
 
   async execute(requestInput: unknown, _context: unknown): Promise<OperationEnvelope> {
@@ -99,8 +93,8 @@ export class DaemonOperationClient {
       body: JSON.stringify(request.input),
     }, true);
     this.assertProtocolHeader(response);
-    const envelope = OperationEnvelopeSchema.parse(await responseJson(response));
-    assertExpectedOperation(envelope, request.operation);
+    const responseBody = await responseJson(response);
+    const envelope = await wire(() => validateOperationEnvelopeWire(responseBody, request.operation)) as OperationEnvelope;
     const expectedStatus = operationHttpStatus(envelope);
     if (response.status !== expectedStatus) {
       throw new DaemonWireError(
@@ -112,21 +106,24 @@ export class DaemonOperationClient {
   }
 
   private async fetchDoctor(): Promise<MetaflowDaemonDoctor> {
-    const response = await this.request(new URL("/metaflow/v1/doctor", this.endpoint), { method: "GET" }, false);
+    const challenge = createDoctorChallenge();
+    const doctorUrl = new URL("/metaflow/v1/doctor", this.endpoint);
+    doctorUrl.searchParams.set("challenge", challenge);
+    const response = await this.request(doctorUrl, { method: "GET" }, false);
     this.assertProtocolHeader(response);
     if (response.status !== 200) {
       throw new DaemonWireError("daemon_doctor_failed", `Daemon doctor returned HTTP ${response.status}`);
     }
-    const parsed = MetaflowDaemonDoctorSchema.safeParse(await responseJson(response));
-    if (!parsed.success) {
-      throw new DaemonWireError("daemon_doctor_invalid", "Configured endpoint is not the compatible Metaflow resident daemon", {
-        cause: parsed.error,
-      });
-    }
-    if (parsed.data.authentication.required && !this.authorization) {
+    const responseBody = await responseJson(response);
+    const doctor = await wire(() => validateDoctorWire(responseBody, {
+      challenge,
+      endpoint_origin: this.endpoint.origin,
+      ...(this.token ? { proof: doctorAuthenticationProof(this.token, challenge, this.endpoint.origin) } : {}),
+    }));
+    if (!this.authorization) {
       throw new DaemonWireError("daemon_auth_required", "Daemon authentication is required");
     }
-    return parsed.data;
+    return doctor;
   }
 
   private async request(url: URL, init: RequestInit, authenticated: boolean): Promise<Response> {
@@ -166,6 +163,7 @@ export function parseLocalDaemonEndpoint(input: URL): URL {
       "Daemon endpoint must be a credential-free loopback HTTP origin",
     );
   }
+  if (endpoint.hostname === "localhost") endpoint.hostname = "127.0.0.1";
   endpoint.pathname = "/";
   return endpoint;
 }
@@ -177,21 +175,21 @@ export function parseDaemonTimeout(value: number): number {
   return value;
 }
 
-export function operationHttpStatus(envelope: OperationEnvelope): number {
-  if (envelope.ok) return 200;
-  return OPERATION_HTTP_STATUS_BY_CATEGORY[envelope.error.category];
-}
-
-function assertExpectedOperation(envelope: OperationEnvelope, expected: OperationName): void {
-  if (envelope.operation !== expected) {
-    throw new DaemonWireError("daemon_envelope_invalid", "Daemon returned the wrong Operation envelope");
-  }
-}
-
 async function responseJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
   } catch (cause) {
     throw new DaemonWireError("daemon_response_invalid", "Daemon returned invalid JSON", { cause });
+  }
+}
+
+async function wire<T>(run: () => T | Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (cause) {
+    if (cause instanceof OperationWireContractError) {
+      throw new DaemonWireError(cause.code, cause.message, { cause });
+    }
+    throw cause;
   }
 }

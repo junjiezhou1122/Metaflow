@@ -6,6 +6,69 @@ import XCTest
 @testable import MetaflowMac
 
 final class AccessibilitySmokeTests: XCTestCase {
+    func testResidentOperationWireConstantsMatchCanonicalContract() {
+        XCTAssertEqual(ResidentOperationWireContract.protocolName, "metaflow-operations-http")
+        XCTAssertEqual(ResidentOperationWireContract.protocolVersion, 1)
+        XCTAssertEqual(ResidentOperationWireContract.serverName, "ambient-daemon")
+        XCTAssertEqual(ResidentOperationWireContract.serverVersion, "0.1.0")
+        XCTAssertEqual(ResidentOperationWireContract.catalogVersion, 1)
+        XCTAssertEqual(ResidentOperationWireContract.catalogFingerprint, "sha256:1c363c4ecb05e39def4e8aa7ae27957b0298d6c4405a1cc048de7bbdc767bcfc")
+        XCTAssertEqual(ResidentOperationWireContract.authenticationSource, "METAFLOW_AUTH_TOKEN")
+        XCTAssertEqual(ResidentOperationWireContract.authenticationRequired, true)
+        XCTAssertEqual(ResidentOperationWireContract.authenticationScheme, "Bearer")
+        XCTAssertEqual(ResidentOperationWireContract.challengeScheme, "HMAC-SHA256")
+        XCTAssertEqual(ResidentOperationWireContract.operations.count, 20)
+        XCTAssertEqual(ResidentOperationWireContract.operationsEndpoint, "/metaflow/v1/operations/")
+        XCTAssertEqual(ResidentOperationWireContract.mcpEndpoint, "/mcp")
+    }
+
+    func testResidentOperationAccessRejectsRemoteAndCredentialBearingEndpoints() {
+        let token = "test-operation-auth-token-32-bytes"
+        XCTAssertThrowsError(try ResidentOperationAccessClient(endpoint: URL(string: "http://192.0.2.10:3111")!, token: token))
+        XCTAssertThrowsError(try ResidentOperationAccessClient(endpoint: URL(string: "http://user:secret@127.0.0.1:3111")!, token: token))
+        XCTAssertThrowsError(try ResidentOperationAccessClient(endpoint: URL(string: "http://127.0.0.1:3111/path")!, token: token))
+    }
+
+    func testResidentOperationDoctorIsCredentialFreeAndRejectsAnExactMimic() throws {
+        let token = "test-operation-auth-token-32-bytes"
+        let challenge = String(repeating: "a", count: 64)
+        let client = try ResidentOperationAccessClient(endpoint: URL(string: "http://localhost:3111")!, token: token)
+        let request = try client.makeDoctorRequest(challenge: challenge)
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.url?.host, "127.0.0.1")
+        XCTAssertEqual(request.url?.path, "/metaflow/v1/doctor")
+
+        let body: [String: Any] = [
+            "ok": true,
+            "protocol": ["name": ResidentOperationWireContract.protocolName, "version": ResidentOperationWireContract.protocolVersion],
+            "server": ["name": ResidentOperationWireContract.serverName, "version": ResidentOperationWireContract.serverVersion, "origin": "http://127.0.0.1:3111"],
+            "authentication": [
+                "source": "METAFLOW_AUTH_TOKEN",
+                "required": true,
+                "scheme": "Bearer",
+                "challenge_scheme": "HMAC-SHA256",
+                "challenge": challenge,
+                "proof": String(repeating: "0", count: 64)
+            ],
+            "catalog": [
+                "version": ResidentOperationWireContract.catalogVersion,
+                "fingerprint": ResidentOperationWireContract.catalogFingerprint,
+                "operations": ResidentOperationWireContract.operations
+            ],
+            "endpoints": ["operations": ResidentOperationWireContract.operationsEndpoint, "mcp": ResidentOperationWireContract.mcpEndpoint]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: try XCTUnwrap(request.url),
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["x-metaflow-protocol-version": "1"]
+        ))
+        XCTAssertThrowsError(try client.validateDoctor(data: data, response: response, challenge: challenge)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("credential proof mismatch"))
+        }
+    }
+
     func testPermissionDeniedFailsExplicitly() {
         let result = evaluateAccessibilitySmoke(trusted: false, snapshot: nil, requireSelectedText: false)
         XCTAssertEqual(result.exitCode, 2)

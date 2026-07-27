@@ -67,7 +67,7 @@ export const OperationMcpOutputJsonSchema: JsonObject = JsonValueSchema.parse({
           additionalProperties: false,
         },
       },
-      required: ["ok", "request_id", "error"],
+      required: ["ok", "request_id", "operation", "error"],
       additionalProperties: false,
     },
   ],

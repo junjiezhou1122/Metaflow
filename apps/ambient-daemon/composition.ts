@@ -84,9 +84,12 @@ import {
 } from "./definitions.js";
 import { createAmbientV1HttpHandler } from "./http-handler.js";
 import { createAmbientMcpHttpHandler } from "./mcp-handler.js";
+import { AmbientOperationAccess } from "./operation-access.js";
 
 export type AmbientDaemonCompositionOptions = {
   data_directory: string;
+  operation_auth_token: string;
+  trusted_operation_origins?: readonly string[];
   agent_runtime: AgentRuntimeAdapter;
   agent_aliases?: Record<string, string>;
   agent_mcp_servers?: import("@info/agent-runtime-adapter").AgentMcpServerConfig[];
@@ -120,6 +123,10 @@ export const AMBIENT_REACTIVE_CASCADE_POLICY: ReactiveCascadePolicySnapshot = {
 
 export async function createAmbientDaemonComposition(options: AmbientDaemonCompositionOptions) {
   const now = options.now ?? (() => new Date());
+  const operationAccess = new AmbientOperationAccess(
+    options.operation_auth_token,
+    options.trusted_operation_origins,
+  );
   const databasePath = join(options.data_directory, "metaflow.sqlite");
   const automationPath = join(options.data_directory, "automation.sqlite");
   const views = new SqliteViewRepository(databasePath);
@@ -301,8 +308,9 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       mac_automation: macAutomation,
       inbox_automation: inboxAutomation,
       operations: operationHttp,
+      operation_access: operationAccess,
     });
-    const mcpHandler = createAmbientMcpHttpHandler(operationService);
+    const mcpHandler = createAmbientMcpHttpHandler(operationService, operationAccess);
 
     return {
       handler,

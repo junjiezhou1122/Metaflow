@@ -29,6 +29,7 @@ import {
   resolveBrowserVisitState,
 } from "../apps/chrome-acp/packages/chrome-extension/src/lib/browser-capture-state.ts";
 import { createAmbientV1HttpHandler } from "../apps/ambient-daemon/http-handler.ts";
+import { AmbientOperationAccess } from "../apps/ambient-daemon/operation-access.ts";
 
 test("Browser Capture commits one atomic page/selection batch and advances stable page revisions", async () => {
   const repository = new SqliteViewRepository(":memory:");
@@ -535,6 +536,7 @@ function captureHttpHandler(
         throw new Error("Operation route is outside this Browser Capture smoke");
       },
     },
+    operation_access: new AmbientOperationAccess("test-operation-auth-token-32-bytes"),
     observe() {},
   });
 }

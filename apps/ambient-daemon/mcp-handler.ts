@@ -3,9 +3,67 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createOperationMcpServer } from "@info/operation-surfaces";
 import type { OperationService } from "@info/operations";
+import type { AmbientOperationAccess } from "./operation-access.js";
 
-export function createAmbientMcpHttpHandler(service: OperationService) {
+export type AmbientMcpAccessEvent = {
+  event: "mcp.authentication_rejected";
+  method: string;
+  path: string;
+  status: 401 | 403;
+  code: string;
+};
+
+export function createAmbientMcpHttpHandler(
+  service: OperationService,
+  operationAccess: Pick<AmbientOperationAccess, "authorize" | "authorizePreflight">,
+  observeAccess: (event: AmbientMcpAccessEvent) => void | Promise<void> = event => {
+    console.warn(JSON.stringify({ component: "ambient-mcp-http", ...event }));
+  },
+) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    if (request.method?.toUpperCase() === "OPTIONS") {
+      const preflight = operationAccess.authorizePreflight(request.headers);
+      if (!preflight.allowed) {
+        await observeAccess({
+          event: "mcp.authentication_rejected",
+          method: "OPTIONS",
+          path: request.url ?? "/mcp",
+          status: preflight.status,
+          code: preflight.code,
+        });
+      }
+      response.writeHead(preflight.allowed ? 204 : preflight.status, {
+        "content-type": "application/json; charset=utf-8",
+        ...preflight.headers,
+      });
+      response.end(preflight.allowed ? undefined : JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32001, message: preflight.message, data: { code: preflight.code } },
+        id: null,
+      }));
+      return;
+    }
+    const access = operationAccess.authorize(request.headers);
+    if (!access.allowed) {
+      await observeAccess({
+        event: "mcp.authentication_rejected",
+        method: request.method?.toUpperCase() ?? "POST",
+        path: request.url ?? "/mcp",
+        status: access.status,
+        code: access.code,
+      });
+      response.writeHead(access.status, {
+        "content-type": "application/json; charset=utf-8",
+        ...access.headers,
+      });
+      response.end(JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32001, message: access.message, data: { code: access.code } },
+        id: null,
+      }));
+      return;
+    }
+    for (const [name, value] of Object.entries(access.headers ?? {})) response.setHeader(name, value);
     const server = createOperationMcpServer({
       service,
       context: () => ({
@@ -28,7 +86,10 @@ export function createAmbientMcpHttpHandler(service: OperationService) {
         error: error instanceof Error ? error.message : String(error),
       }));
       if (!response.headersSent) {
-        response.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+        response.writeHead(500, {
+          "content-type": "application/json; charset=utf-8",
+          ...access.headers,
+        });
         response.end(JSON.stringify({
           jsonrpc: "2.0",
           error: { code: -32603, message: "Metaflow MCP request failed" },

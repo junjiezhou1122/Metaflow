@@ -124,6 +124,7 @@ test("cancel interaction aborts the active shared Execution and commits a cancel
   const agent = new BlockingAgentRuntime();
   const composition = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: agent,
     now: () => new Date("2026-07-26T11:00:02.010Z"),
   });
@@ -161,6 +162,7 @@ test("Agent and macOS Delivery failures remain separate observable facts", async
   const mailbox = new ThrowingMacMailbox();
   const composition = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: new RecordingAgentRuntime(),
     mac_delivery_mailbox: mailbox,
     now: () => new Date("2026-07-26T11:00:02.010Z"),
@@ -235,6 +237,7 @@ async function withComposition(
   let tick = Date.parse("2026-07-26T11:00:02.000Z");
   const composition = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: agent,
     agent_aliases: { codex: agent.id },
     now: () => new Date(tick += 5),

@@ -9,6 +9,7 @@ import {
   type AmbientHttpEvent,
   type AmbientV1HttpHandlerOptions,
 } from "../apps/ambient-daemon/http-handler.ts";
+import { AmbientOperationAccess } from "../apps/ambient-daemon/operation-access.ts";
 import { SqliteViewRepository } from "../packages/adapters/storage-sqlite/index.ts";
 import { parseViewDraft } from "../packages/view/index.ts";
 
@@ -249,6 +250,7 @@ function baseOptions(): AmbientV1HttpHandlerOptions {
         };
       },
     },
+    operation_access: new AmbientOperationAccess("test-operation-auth-token-32-bytes"),
     observe() {},
   };
 }
@@ -262,7 +264,11 @@ async function request(
   const req = Readable.from(body === undefined ? [] : [JSON.stringify(body)]) as any;
   req.method = method;
   req.url = url;
-  req.headers = { host: "localhost", "content-type": "application/json" };
+  req.headers = {
+    host: "localhost",
+    "content-type": "application/json",
+    authorization: "Bearer test-operation-auth-token-32-bytes",
+  };
   let status = 0;
   let raw = "";
   const res = {

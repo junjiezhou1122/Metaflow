@@ -5,6 +5,7 @@ import {
   type OperationEnvelope,
   type OperationService,
 } from "@info/operations";
+import { OPERATION_EXIT_CODE_BY_CATEGORY, operationExitCode } from "./wire-contract.js";
 
 export type CliOperationResult = {
   exit_code: number;
@@ -13,14 +14,7 @@ export type CliOperationResult = {
   envelope: OperationEnvelope;
 };
 
-export const OPERATION_EXIT_CODE_BY_CATEGORY = {
-  invalid_request: 2,
-  forbidden: 3,
-  not_found: 4,
-  conflict: 5,
-  failed_dependency: 6,
-  internal: 1,
-} as const;
+export { OPERATION_EXIT_CODE_BY_CATEGORY } from "./wire-contract.js";
 
 export class CliOperationAdapter {
   constructor(
@@ -66,6 +60,5 @@ function resultFor(envelope: OperationEnvelope): CliOperationResult {
 }
 
 function cliExitCode(envelope: OperationEnvelope): number {
-  if (envelope.ok) return 0;
-  return OPERATION_EXIT_CODE_BY_CATEGORY[envelope.error.category];
+  return operationExitCode(envelope);
 }

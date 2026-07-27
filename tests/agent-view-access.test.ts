@@ -5,9 +5,10 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { build } from "esbuild";
 import { OperationEnvelopeSchema, OPERATION_NAMES } from "@info/operations";
 import { exactViewRef, parseViewDraft, type ViewDraft } from "@info/view";
 import { createAmbientDaemonComposition } from "../apps/ambient-daemon/composition.ts";
@@ -18,6 +19,9 @@ import {
   METAFLOW_HTTP_PROTOCOL_VERSION,
   OPERATION_EXIT_CODE_BY_CATEGORY,
   OPERATION_HTTP_STATUS_BY_CATEGORY,
+  METAFLOW_OPERATION_CATALOG_FINGERPRINT,
+  METAFLOW_OPERATION_CATALOG_VERSION,
+  doctorAuthenticationProof,
 } from "@info/operation-surfaces";
 import type {
   AgentRuntimeAdapter,
@@ -33,6 +37,7 @@ const pluginRoot = join(repositoryRoot, "plugins", "metaflow-view-access");
 const skillPath = join(pluginRoot, "skills", "metaflow-view-access", "SKILL.md");
 const edgeType = "agent_context";
 const now = "2026-07-27T06:00:00.000Z";
+const operationAuthToken = "test-operation-auth-token-32-bytes";
 
 test("installed mf, real daemon MCP, and the canonical skill preserve exact authorized View access", async () => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-agent-view-access-"));
@@ -40,6 +45,7 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
   mkdirSync(dataDirectory);
   const composition = await createAmbientDaemonComposition({
     data_directory: dataDirectory,
+    operation_auth_token: operationAuthToken,
     agent_runtime: new UnusedAgentRuntime(),
     now: () => new Date(now),
   });
@@ -85,7 +91,9 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
     assert.equal(doctor.envelope.ok, true);
     assert.equal(doctor.envelope.command, "doctor");
     assert.equal(doctor.envelope.data.daemon.protocol.version, 1);
-    assert.equal(doctor.envelope.data.authentication.client_source, "daemon_local");
+    assert.equal(doctor.envelope.data.authentication.client_source, "METAFLOW_AUTH_TOKEN");
+    assert.equal(doctor.envelope.data.daemon.authentication.proof, undefined);
+    assert.equal(doctor.envelope.data.daemon.authentication.challenge, undefined);
 
     const help = await runMf(installedMf, isolatedCwd, daemonUrl, ["--json", "view.search", "--help"]);
     assert.equal(help.status, 0, help.stderr);
@@ -132,6 +140,7 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
         MF_BIN: installedMf,
         MF_SKILL: skillPath,
         MF_EDGE_TYPE: edgeType,
+        METAFLOW_AUTH_TOKEN: operationAuthToken,
       },
     });
     assert.equal(agentProcess.status, 0, agentProcess.stderr);
@@ -158,7 +167,9 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
     ]);
 
     const client = new Client({ name: "metaflow-view-access-conformance", version: "0.1.0" });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp`)));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${daemonUrl}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${operationAuthToken}` } },
+    }));
     try {
       const listed = await client.listTools();
       assert.equal(listed.tools.length, OPERATION_NAMES.length);
@@ -213,7 +224,16 @@ test("the skill-only plugin has one canonical validated skill body and no runtim
   assert.equal(skill.includes("data/ambient-v1"), false);
 });
 
-test("the installable two-file CLI wire contract cannot drift from the shared adapter contract", async () => {
+test("the generated installable CLI wire contract cannot drift from the shared adapter contract", async () => {
+  const { mfWireBuildPaths } = await import("../scripts/v1/build-mf-wire.mjs") as {
+    mfWireBuildPaths(moduleUrl: string): { absWorkingDir: string; outfile: string };
+  };
+  const escapedModuleUrl = pathToFileURL(join(tmpdir(), "metaflow repo with spaces", "scripts", "v1", "build-mf-wire.mjs")).href;
+  const escapedPaths = mfWireBuildPaths(escapedModuleUrl);
+  assert.equal(escapedPaths.absWorkingDir, join(tmpdir(), "metaflow repo with spaces"));
+  assert.equal(escapedPaths.outfile, join(tmpdir(), "metaflow repo with spaces", "apps", "mf-cli", "bin", "wire.mjs"));
+  assert.equal(escapedPaths.outfile.includes("%20"), false);
+
   const { MF_WIRE_CONTRACT } = await import("../apps/mf-cli/bin/mf.mjs") as {
     MF_WIRE_CONTRACT: {
       protocol: unknown;
@@ -239,6 +259,21 @@ test("the installable two-file CLI wire contract cannot drift from the shared ad
   assert.deepEqual(MF_WIRE_CONTRACT.operations, OPERATION_NAMES);
   assert.deepEqual(MF_WIRE_CONTRACT.http_status_by_category, OPERATION_HTTP_STATUS_BY_CATEGORY);
   assert.deepEqual(MF_WIRE_CONTRACT.exit_code_by_category, OPERATION_EXIT_CODE_BY_CATEGORY);
+
+  const wireOutput = join(repositoryRoot, "apps", "mf-cli", "bin", "wire.mjs");
+  const generated = await build({
+    absWorkingDir: repositoryRoot,
+    entryPoints: ["packages/adapters/operation-surfaces/wire-contract.ts"],
+    outfile: wireOutput,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22",
+    logLevel: "silent",
+    write: false,
+  });
+  assert.equal(generated.outputFiles.length, 1);
+  assert.equal(Buffer.from(generated.outputFiles[0]!.contents).equals(readFileSync(wireOutput)), true);
 });
 
 test("mf doctor fails closed on protocol, authentication, and credential-bearing URL configuration", async () => {
@@ -253,15 +288,40 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   const doctorBody = {
     ok: true,
     protocol: { name: "metaflow-operations-http", version: 1 },
-    server: { name: "ambient-daemon", version: "0.1.0" },
-    authentication: { source: "composition_principal", required: false },
+    server: { name: "ambient-daemon", version: "0.1.0", origin: "http://127.0.0.1:3111" },
+    authentication: {
+      source: "METAFLOW_AUTH_TOKEN",
+      required: true,
+      scheme: "Bearer",
+      challenge_scheme: "HMAC-SHA256",
+      challenge: "0".repeat(64),
+      proof: doctorAuthenticationProof(operationAuthToken, "0".repeat(64), "http://127.0.0.1:3111"),
+    },
+    catalog: {
+      version: METAFLOW_OPERATION_CATALOG_VERSION,
+      fingerprint: METAFLOW_OPERATION_CATALOG_FINGERPRINT,
+      operations: OPERATION_NAMES,
+    },
     endpoints: { operations: "/metaflow/v1/operations/", mcp: "/mcp" },
+  };
+  const doctorForInput = (input: RequestInfo | URL, token = operationAuthToken) => {
+    const url = new URL(String(input));
+    const challenge = url.searchParams.get("challenge") ?? "";
+    return {
+      ...doctorBody,
+      server: { ...doctorBody.server, origin: url.origin },
+      authentication: {
+        ...doctorBody.authentication,
+        challenge,
+        proof: doctorAuthenticationProof(token, challenge, url.origin),
+      },
+    };
   };
   const doctorHeaders = { "x-metaflow-protocol-version": "1" };
   const mismatch = await runMfCli(["--json", "doctor"], {
     env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
-    fetch: async () => new Response(JSON.stringify({
-      ...doctorBody,
+    fetch: async input => new Response(JSON.stringify({
+      ...doctorForInput(input),
       protocol: { ...doctorBody.protocol, version: 2 },
     }), { status: 200, headers: doctorHeaders }),
   });
@@ -274,7 +334,7 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   ] as const) {
     const incompatible = await runMfCli(["--json", "doctor"], {
       env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
-      fetch: async () => new Response(JSON.stringify({ ...doctorBody, server }), { status: 200, headers: doctorHeaders }),
+      fetch: async input => new Response(JSON.stringify({ ...doctorForInput(input), server }), { status: 200, headers: doctorHeaders }),
     });
     assert.equal(incompatible.exit_code, 6);
     assert.equal(incompatible.envelope.error?.code, code);
@@ -283,11 +343,10 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   let authRequiredRequests = 0;
   const authRequired = await runMfCli(["--json", "doctor"], {
     env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
-    fetch: async () => {
+    fetch: async input => {
       authRequiredRequests += 1;
       return new Response(JSON.stringify({
-        ...doctorBody,
-        authentication: { ...doctorBody.authentication, required: true },
+        ...doctorForInput(input),
       }), { status: 200, headers: doctorHeaders });
     },
   });
@@ -297,12 +356,15 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
 
   let request = 0;
   const authorizations: Array<string | null> = [];
+  const authToken = "do-not-print-this-token-at-least-32-bytes";
   const auth = await runMfCli(["--json", "doctor"], {
-    env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111", METAFLOW_AUTH_TOKEN: "do-not-print" },
-    fetch: async (_input, init) => {
+    env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111", METAFLOW_AUTH_TOKEN: authToken },
+    fetch: async (input, init) => {
       request += 1;
       authorizations.push(new Headers(init?.headers).get("authorization"));
-      if (request === 1) return new Response(JSON.stringify(doctorBody), { status: 200, headers: doctorHeaders });
+      if (request === 1) return new Response(JSON.stringify({
+        ...doctorForInput(input, authToken),
+      }), { status: 200, headers: doctorHeaders });
       return new Response(JSON.stringify({
         ok: false,
         request_id: "request:test:auth",
@@ -313,9 +375,9 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
   });
   assert.equal(auth.exit_code, 3);
   assert.equal(auth.envelope.error?.code, "operation_forbidden");
-  assert.deepEqual(authorizations, [null, "Bearer do-not-print"]);
-  assert.equal(auth.stdout.includes("do-not-print"), false);
-  assert.equal(auth.stderr.includes("do-not-print"), false);
+  assert.deepEqual(authorizations, [null, `Bearer ${authToken}`]);
+  assert.equal(auth.stdout.includes(authToken), false);
+  assert.equal(auth.stderr.includes(authToken), false);
 
   const configuredSecret = await runMfCli(["--json", "doctor"], {
     env: { METAFLOW_DAEMON_URL: "http://user:password@127.0.0.1:3111" },
@@ -331,21 +393,44 @@ test("mf doctor fails closed on protocol, authentication, and credential-bearing
     env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111" },
     fetch: async () => {
       unknownRequest += 1;
-      if (unknownRequest === 1) return new Response(JSON.stringify(doctorBody), { status: 200, headers: doctorHeaders });
-      return new Response(JSON.stringify({
-        ok: false,
-        request_id: "request:unknown-operation",
-        error: {
-          code: "operation_request_invalid",
-          message: "Operation request is invalid",
-          category: "invalid_request",
-          details: {},
-        },
-      }), { status: 400, headers: doctorHeaders });
+      throw new Error("unknown Operation must be rejected before fetch");
     },
   });
   assert.equal(unknown.exit_code, 2);
-  assert.equal(unknown.envelope.error?.code, "operation_request_invalid");
+  assert.equal(unknown.envelope.error?.code, "operation_unknown");
+  assert.equal((unknown.envelope as { operation?: unknown }).operation, undefined);
+  OperationEnvelopeSchema.parse(unknown.envelope);
+  assert.equal(unknownRequest, 0);
+
+  const leakedAuthorizations: Array<string | null> = [];
+  const authNotRequired = await runMfCli(["--json", "catalog.list"], {
+    env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111", METAFLOW_AUTH_TOKEN: operationAuthToken },
+    fetch: async (input, init) => {
+      leakedAuthorizations.push(new Headers(init?.headers).get("authorization"));
+      return new Response(JSON.stringify({
+        ...doctorForInput(input),
+        authentication: { ...doctorForInput(input).authentication, required: false },
+      }), { status: 200, headers: doctorHeaders });
+    },
+  });
+  assert.equal(authNotRequired.exit_code, 6);
+  assert.equal(authNotRequired.envelope.error?.code, "daemon_auth_contract_mismatch");
+  assert.deepEqual(leakedAuthorizations, [null]);
+
+  let emptyRequestIdCall = 0;
+  const emptyRequestId = await runMfCli(["--json", "catalog.list"], {
+    env: { METAFLOW_DAEMON_URL: "http://127.0.0.1:3111", METAFLOW_AUTH_TOKEN: operationAuthToken },
+    fetch: async input => {
+      emptyRequestIdCall += 1;
+      if (emptyRequestIdCall === 1) return new Response(JSON.stringify(doctorForInput(input)), { status: 200, headers: doctorHeaders });
+      return new Response(JSON.stringify({ ok: true, request_id: "", operation: "catalog.list", data: [] }), {
+        status: 200,
+        headers: doctorHeaders,
+      });
+    },
+  });
+  assert.equal(emptyRequestId.exit_code, 6);
+  assert.equal(emptyRequestId.envelope.error?.code, "daemon_envelope_invalid");
 });
 
 function installCli(directory: string): string {
@@ -375,7 +460,7 @@ function installCli(directory: string): string {
 async function runMf(binary: string, cwd: string, daemonUrl: string, args: string[]) {
   const result = await runProcess(binary, args, {
     cwd,
-    env: { ...process.env, METAFLOW_DAEMON_URL: daemonUrl },
+    env: { ...process.env, METAFLOW_DAEMON_URL: daemonUrl, METAFLOW_AUTH_TOKEN: operationAuthToken },
   });
   const lines = result.stdout.trim().split("\n");
   return {

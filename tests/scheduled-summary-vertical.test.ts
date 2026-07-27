@@ -19,6 +19,7 @@ test("scheduled period freezes exact activity, executes through ACP, delivers in
   const now = () => new Date("2026-07-26T16:00:10.000Z");
   const composition = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: agent,
     now,
   });

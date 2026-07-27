@@ -24,6 +24,11 @@ import {
   resolveBrowserVisitState,
   type PersistedBrowserTabState,
 } from "./browser-capture-state";
+import {
+  BrowserOperationAccessError,
+  isValidOperationAuthToken,
+  negotiateBrowserOperationAccess,
+} from "./operation-auth";
 
 const LEGACY_DEFAULT_ENDPOINTS = new Set([
   "http://localhost:3111/context/ingest",
@@ -31,6 +36,7 @@ const LEGACY_DEFAULT_ENDPOINTS = new Set([
 ]);
 const DEFAULT_SETTINGS = {
   endpoint: "http://localhost:3111",
+  operationAuthToken: "",
   captureStream: true,
   heartbeatSeconds: 15,
   snapshotOnVisit: true,
@@ -342,12 +348,25 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   if (message?.type === "get-current-status") {
     const tab = await getActiveTab();
     if (tab?.id && tab.url) await ensureVisit(tab, "status_check");
-    return { ok: true, tab, state: tab?.id ? summarizeState(tabState.get(tab.id)) : undefined, settings: await getSettings() };
+    return {
+      ok: true,
+      tab,
+      state: tab?.id ? summarizeState(tabState.get(tab.id)) : undefined,
+      settings: publicInfoSettings(await getSettings()),
+    };
   }
   if (message?.type === "update-info-capture-settings") {
+    if (message.settings?.operationAuthToken !== undefined
+      && !isValidOperationAuthToken(message.settings.operationAuthToken)) {
+      return {
+        ok: false,
+        code: "operation_auth_token_invalid",
+        error: "The resident daemon Operation token is invalid",
+      };
+    }
     await chrome.storage.local.set(message.settings ?? {});
     await configureInfoCaptureAlarms();
-    return { ok: true, settings: await getSettings() };
+    return { ok: true, settings: publicInfoSettings(await getSettings()) };
   }
   if (message?.type === "retry-browser-capture") {
     return retryBrowserCaptureFailure(requiredMessageText(message.failure_id, "failure_id"));
@@ -546,17 +565,44 @@ async function postBrowserDeliveryInteraction(message: any) {
 
 async function getAmbientExactView(message: any) {
   const settings = await getSettings();
-  let endpoint: string;
+  const operationAuthToken = settings.operationAuthToken;
+  if (!isValidOperationAuthToken(operationAuthToken)) {
+    return {
+      ok: false,
+      status: 0,
+      code: "operation_auth_configuration_required",
+      error: "A valid resident daemon Operation token is required for exact View reads",
+    };
+  }
+  let ref: { view_id: string; revision: number };
   try {
-    endpoint = browserExactViewEndpoint(settings.endpoint, {
+    ref = {
       view_id: requiredMessageText(message.view_id, "view_id"),
       revision: Number(message.revision),
-    });
+    };
+    browserExactViewEndpoint("http://127.0.0.1", ref);
   } catch (error) {
     return { ok: false, status: 0, code: "exact_view_ref_invalid", error: error instanceof Error ? error.message : String(error) };
   }
+  let access: { origin: string };
   try {
-    const response = await fetch(endpoint);
+    access = await negotiateBrowserOperationAccess({
+      endpoint: settings.endpoint,
+      token: operationAuthToken,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      code: error instanceof BrowserOperationAccessError ? error.code : "daemon_negotiation_failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const endpoint = browserExactViewEndpoint(access.origin, ref);
+  try {
+    const response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${operationAuthToken}` },
+    });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.ok === false) {
       await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
@@ -1438,6 +1484,14 @@ function tabCaptureScore(tab: chrome.tabs.Tab): number {
 async function getSettings(): Promise<InfoSettings> {
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   return { ...DEFAULT_SETTINGS, ...(await chrome.storage.local.get(keys)) };
+}
+
+function publicInfoSettings(settings: InfoSettings) {
+  const { operationAuthToken, ...publicSettings } = settings;
+  return {
+    ...publicSettings,
+    operationAuthConfigured: isValidOperationAuthToken(operationAuthToken),
+  };
 }
 
 function getTabState(

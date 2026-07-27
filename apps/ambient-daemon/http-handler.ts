@@ -1,12 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
-  METAFLOW_AMBIENT_SERVER_NAME,
-  METAFLOW_AMBIENT_SERVER_VERSION,
-  METAFLOW_HTTP_PROTOCOL_NAME,
   METAFLOW_HTTP_PROTOCOL_VERSION,
-  MetaflowDaemonDoctorSchema,
   type HttpOperationAdapter,
 } from "@info/operation-surfaces";
+import type { AmbientOperationAccess } from "./operation-access.js";
 
 const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -39,6 +36,7 @@ export type AmbientV1HttpHandlerOptions = {
   mac_automation: MacAutomationHttpPort;
   inbox_automation: InboxAutomationHttpPort;
   operations: Pick<HttpOperationAdapter, "handle">;
+  operation_access: Pick<AmbientOperationAccess, "authorize" | "authorizePreflight" | "doctor">;
   observe?: (event: AmbientHttpEvent, cause?: unknown) => void | Promise<void>;
 };
 
@@ -62,6 +60,9 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
   assertMethod(options.inbox_automation, "listDeliveries", "Inbox Automation");
   assertMethod(options.inbox_automation, "interact", "Inbox Automation");
   assertMethod(options.operations, "handle", "Operation HTTP adapter");
+  assertMethod(options.operation_access, "authorize", "Operation access");
+  assertMethod(options.operation_access, "authorizePreflight", "Operation access");
+  assertMethod(options.operation_access, "doctor", "Operation access");
   return async (request: HttpRequest, response: HttpResponse): Promise<void> => {
     const startedAt = Date.now();
     const method = request.method?.toUpperCase() ?? "GET";
@@ -70,26 +71,48 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
     let status = 500;
     let code: string | undefined;
     let failureCause: unknown;
+    let operationResponseHeaders: Record<string, string> = {};
     try {
       const url = new URL(requestUrl, `http://${request.headers.host ?? "localhost"}`);
       path = url.pathname;
-      if (method === "OPTIONS") {
+      if (method === "OPTIONS" && !isPrivilegedOperationPath(path)) {
         status = 204;
-        return send(response, status, {});
+        return sendForPath(response, path, status, {});
+      }
+      if (method === "OPTIONS" && isPrivilegedOperationPath(path)) {
+        const access = options.operation_access.authorizePreflight(request.headers);
+        status = access.allowed ? 204 : access.status;
+        if (!access.allowed) code = access.code;
+        return sendForPath(
+          response,
+          path,
+          status,
+          access.allowed ? {} : problem(access.code, access.message),
+          access.headers,
+        );
       }
       if (method === "GET" && path === "/health") {
         status = 200;
-        return send(response, status, { ok: true, architecture: "metaflow-v1" });
+        return sendForPath(response, path, status, { ok: true, architecture: "metaflow-v1" });
       }
       if (method === "GET" && path === "/metaflow/v1/doctor") {
         status = 200;
-        return send(response, status, MetaflowDaemonDoctorSchema.parse({
-          ok: true,
-          protocol: { name: METAFLOW_HTTP_PROTOCOL_NAME, version: METAFLOW_HTTP_PROTOCOL_VERSION },
-          server: { name: METAFLOW_AMBIENT_SERVER_NAME, version: METAFLOW_AMBIENT_SERVER_VERSION },
-          authentication: { source: "composition_principal", required: false },
-          endpoints: { operations: "/metaflow/v1/operations/", mcp: "/mcp" },
-        }), { "x-metaflow-protocol-version": String(METAFLOW_HTTP_PROTOCOL_VERSION) });
+        return sendForPath(response, path, status, options.operation_access.doctor(
+          operationEndpointOrigin(request),
+          url.searchParams.get("challenge"),
+        ), {
+          "x-metaflow-protocol-version": String(METAFLOW_HTTP_PROTOCOL_VERSION),
+        });
+      }
+
+      if (isPrivilegedOperationPath(path)) {
+        const access = options.operation_access.authorize(request.headers);
+        if (!access.allowed) {
+          status = access.status;
+          code = access.code;
+          return sendForPath(response, path, status, problem(code, access.message), access.headers);
+        }
+        operationResponseHeaders = access.headers ?? {};
       }
 
       const exactView = path.match(/^\/context\/v1\/views\/([^/]+)$/);
@@ -98,7 +121,7 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
         if (!Number.isInteger(revision) || revision < 1) {
           status = 400;
           code = "exact_view_revision_required";
-          return send(response, status, problem(code, "A positive exact View revision is required"));
+          return sendForPath(response, path, status, problem(code, "A positive exact View revision is required"), operationResponseHeaders);
         }
         const viewId = decodeURIComponent(exactView[1]!);
         const operation = await options.operations.handle({
@@ -107,68 +130,68 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
           body: { ref: { view_id: viewId, revision } },
         });
         status = operation.status;
-        if (operation.body.ok) return send(response, status, { ok: true, view: operation.body.data });
+        if (operation.body.ok) return sendForPath(response, path, status, { ok: true, view: operation.body.data }, operationResponseHeaders);
         code = operation.body.error.code === "view_not_found" ? "exact_view_not_found" : operation.body.error.code;
-        return send(response, status, problem(code, operation.body.error.message, operation.body.error.details));
+        return sendForPath(response, path, status, problem(code, operation.body.error.message, operation.body.error.details), operationResponseHeaders);
       }
 
       if (method === "POST" && path === "/capture/v1/browser-events") {
         const result = await options.browser_capture.submit(await readJson(request));
         status = browserCaptureSuccessStatus(result);
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
 
       if (method === "POST" && path === "/automation/v1/browser-signals") {
         const result = await options.browser_automation.submit(await readJson(request));
         status = 200;
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
       if (method === "GET" && path === "/automation/v1/browser-deliveries") {
         const deliveries = await options.browser_automation.listDeliveries(deliveryQuery(url));
         status = 200;
-        return send(response, status, { ok: true, deliveries });
+        return sendForPath(response, path, status, { ok: true, deliveries });
       }
       if (method === "POST" && path === "/automation/v1/browser-interactions") {
         const result = await options.browser_automation.interact(await readJson(request));
         status = 200;
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
 
       if (method === "POST" && path === "/automation/v1/macos/voice-signals") {
         const result = await options.mac_automation.submit(await readJson(request));
         status = 200;
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
       if (method === "GET" && path === "/automation/v1/macos/deliveries") {
         const deliveries = await options.mac_automation.listDeliveries(deliveryQuery(url));
         status = 200;
-        return send(response, status, { ok: true, deliveries });
+        return sendForPath(response, path, status, { ok: true, deliveries });
       }
       if (method === "POST" && path === "/automation/v1/macos/interactions") {
         const result = await options.mac_automation.interact(await readJson(request));
         status = 200;
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
       if (method === "GET" && path === "/automation/v1/macos/browser-context-requests") {
         const requests = await options.mac_automation.listBrowserContextRequests();
         status = 200;
-        return send(response, status, { ok: true, requests });
+        return sendForPath(response, path, status, { ok: true, requests });
       }
       if (method === "POST" && path === "/automation/v1/macos/browser-context-responses") {
         const result = await options.mac_automation.respondBrowserContext(await readJson(request));
         status = 200;
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
 
       if (method === "GET" && path === "/automation/v1/inbox/deliveries") {
         const deliveries = await options.inbox_automation.listDeliveries(deliveryQuery(url));
         status = 200;
-        return send(response, status, { ok: true, deliveries });
+        return sendForPath(response, path, status, { ok: true, deliveries });
       }
       if (method === "POST" && path === "/automation/v1/inbox/interactions") {
         const result = await options.inbox_automation.interact(await readJson(request));
         status = 200;
-        return send(response, status, { ok: true, result });
+        return sendForPath(response, path, status, { ok: true, result });
       }
 
       if (method === "POST" && path.startsWith("/metaflow/v1/operations/")) {
@@ -178,22 +201,31 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
           body: await readJson(request),
         });
         status = operation.status;
-        return send(response, status, operation.body, operation.headers);
+        return sendForPath(response, path, status, operation.body, {
+          ...operation.headers,
+          ...operationResponseHeaders,
+        });
       }
 
       status = 404;
       code = "route_not_found";
-      return send(response, status, problem(code, `No Metaflow v1 route for ${method} ${path}`));
+      return sendForPath(response, path, status, problem(code, `No Metaflow v1 route for ${method} ${path}`));
     } catch (cause) {
       failureCause = cause;
       const failure = routeFailure(path, cause);
       status = failure.status;
       code = failure.code;
-      send(response, status, problem(code, failure.message, failure.details));
+      sendForPath(
+        response,
+        path,
+        status,
+        problem(code, failure.message, failure.details),
+        operationResponseHeaders,
+      );
       return;
     } finally {
       await observe(options, {
-        type: failureCause === undefined ? "http.request_completed" : "http.request_failed",
+        type: failureCause === undefined && status < 400 ? "http.request_completed" : "http.request_failed",
         method,
         path,
         status,
@@ -250,12 +282,39 @@ function send(
 ): void {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
-    "access-control-allow-headers": "Content-Type, Authorization",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
     ...headers,
   });
   response.end(JSON.stringify(body, null, 2));
+}
+
+function sendForPath(
+  response: HttpResponse,
+  path: string,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void {
+  const corsHeaders: Record<string, string> = isPrivilegedOperationPath(path) ? {} : {
+    "access-control-allow-origin": "*",
+    "access-control-allow-headers": "Content-Type",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+  };
+  send(response, status, body, { ...corsHeaders, ...headers });
+}
+
+function isPrivilegedOperationPath(path: string): boolean {
+  return path.startsWith("/metaflow/v1/operations/") || path.startsWith("/context/v1/views/");
+}
+
+function operationEndpointOrigin(request: HttpRequest): string {
+  const address = request.socket.localAddress;
+  const port = request.socket.localPort;
+  if (address !== "127.0.0.1" || !Number.isInteger(port) || !port || port < 1 || port > 65_535) {
+    const error = new Error("Doctor requires the canonical IPv4 loopback listener identity");
+    Object.assign(error, { code: "daemon_listener_identity_invalid" });
+    throw error;
+  }
+  return new URL(`http://127.0.0.1:${port}`).origin;
 }
 
 function problem(code: string, error: string, details?: unknown) {
@@ -285,6 +344,9 @@ function routeFailure(path: string, cause: unknown): {
   const details = errorDetails(cause);
   if (code === "request_body_too_large") return { status: 413, code, message, details };
   if (code === "invalid_json") return { status: 400, code, message, details };
+  if (path === "/metaflow/v1/doctor" && code === "daemon_doctor_challenge_invalid") {
+    return { status: 400, code, message, details };
+  }
   if (path === "/capture/v1/browser-events") {
     return { status: browserCaptureHttpStatus(code), code, message, details };
   }

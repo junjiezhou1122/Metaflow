@@ -7,6 +7,9 @@
   "bin": {
     "mf": "./bin/mf.mjs"
   },
+  "scripts": {
+    "prepack": "node ../../scripts/v1/build-mf-wire.mjs"
+  },
   "files": [
     "bin"
   ],

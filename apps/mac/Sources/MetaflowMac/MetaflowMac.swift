@@ -9,6 +9,7 @@ import Foundation
 final class MetaflowMac: NSObject, NSApplicationDelegate {
     private let endpoint = URL(string: ProcessInfo.processInfo.environment["INFO_CONTEXT_INGEST_ENDPOINT"] ?? "http://localhost:3111/context/ingest")!
     private let ambientEndpoint = URL(string: ProcessInfo.processInfo.environment["METAFLOW_AMBIENT_ENDPOINT"] ?? "http://localhost:3112")!
+    private let operationAuthToken = LocalEnvironment.value("METAFLOW_AUTH_TOKEN")
     private lazy var assistClient = AmbientAssistClient(endpoint: ambientEndpoint)
     private let pollSeconds = TimeInterval(ProcessInfo.processInfo.environment["METAFLOW_MAC_POLL_SECONDS"].flatMap(Double.init) ?? 1.2)
     private let minWritingCharacters = Int(ProcessInfo.processInfo.environment["METAFLOW_MAC_MIN_WRITING_CHARS"].flatMap(Int.init) ?? 24)
@@ -735,27 +736,37 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
         guard
             let first = card.views.first,
             let viewID = first["view_id"] as? String,
-            let revision = first["revision"] as? Int,
-            let url = ambientExactViewURL(viewID: viewID, revision: revision)
+            let revision = first["revision"] as? Int
         else {
             suggestionTitleLabel.stringValue = card.phase == "failure" ? "Agent failed" : "Agent result"
             suggestionBodyLabel.stringValue = "No exact result View was attached."
             notchModel.fail("No exact result View was attached to the Delivery.")
             return
         }
+        guard
+            let operationAuthToken,
+            operationAuthToken.range(
+                of: #"^[A-Za-z0-9._~+/-]{32,}=*$"#,
+                options: .regularExpression
+            ) != nil
+        else {
+            suggestionTitleLabel.stringValue = card.phase == "failure" ? "Agent failed" : "Agent result"
+            suggestionBodyLabel.stringValue = "Exact View access is not configured."
+            notchModel.fail("A valid resident daemon Operation token is required.")
+            return
+        }
+        let accessClient: ResidentOperationAccessClient
+        do {
+            accessClient = try ResidentOperationAccessClient(endpoint: ambientEndpoint, token: operationAuthToken)
+        } catch {
+            suggestionBodyLabel.stringValue = error.localizedDescription
+            notchModel.fail(error.localizedDescription)
+            return
+        }
         let phase = card.phase
-        URLSession.shared.dataTask(with: URLRequest(url: url)) { [weak self] data, response, error in
-            Task { @MainActor in
-                if let error {
-                    self?.suggestionBodyLabel.stringValue = error.localizedDescription
-                    self?.notchModel.fail(error.localizedDescription)
-                    return
-                }
-                guard let data, let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                    self?.suggestionBodyLabel.stringValue = "Could not load exact result View."
-                    self?.notchModel.fail("Could not load the exact result View.")
-                    return
-                }
+        Task { [weak self] in
+            do {
+                let data = try await accessClient.loadExactView(viewID: viewID, revision: revision)
                 let text = ambientResultText(data) ?? String(data: data, encoding: .utf8) ?? "Unreadable result View"
                 self?.latestSuggestion = WritingSuggestion(id: viewID, viewType: phase, title: phase == "failure" ? "Agent failed" : "Agent result", text: text)
                 self?.suggestionTitleLabel.stringValue = phase == "failure" ? "Agent failed" : "Agent result"
@@ -766,8 +777,11 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
                     self?.notchModel.complete(title: "Agent result", text: text)
                 }
                 self?.notchPanel.show()
+            } catch {
+                self?.suggestionBodyLabel.stringValue = error.localizedDescription
+                self?.notchModel.fail(error.localizedDescription)
             }
-        }.resume()
+        }
     }
 
     private func postAmbientInteraction(action: String) {

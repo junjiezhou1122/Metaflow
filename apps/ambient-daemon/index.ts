@@ -4,11 +4,17 @@ import { AcpStdioAgentRuntimeAdapter } from "@info/agent-runtime-adapter";
 import { createAmbientDaemonComposition } from "./composition.js";
 import { createDirectAssistHttpHandler, DirectAssistService } from "./direct-assist.js";
 import { createNativeAgentPermissionBroker, DirectAssistRuntimeRouter } from "./direct-assist-runtime.js";
+import {
+  normalizeTrustedOperationOrigin,
+  requireAmbientOperationToken,
+} from "./operation-access.js";
 
 export async function startAmbientDaemon() {
-  const runtimeCommand = resolveAmbientAcpCommand();
   const port = Number(process.env.CONTEXT_HTTP_PORT ?? 3111);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("CONTEXT_HTTP_PORT must be a valid TCP port");
+  const operationAuthToken = requireAmbientOperationToken(process.env.METAFLOW_AUTH_TOKEN);
+  const trustedOperationOrigins = parseTrustedOperationOrigins(process.env.METAFLOW_TRUSTED_OPERATION_ORIGINS);
+  const runtimeCommand = resolveAmbientAcpCommand();
   const agentRuntime = new AcpStdioAgentRuntimeAdapter({
     id: process.env.AGENT_TASK_ACP_RUNTIME_ID ?? runtimeCommand.id,
     command: runtimeCommand.command,
@@ -27,6 +33,8 @@ export async function startAmbientDaemon() {
   }));
   const composition = await createAmbientDaemonComposition({
     data_directory: process.env.METAFLOW_DATA_DIR ?? "data/ambient-v1",
+    operation_auth_token: operationAuthToken,
+    trusted_operation_origins: trustedOperationOrigins,
     agent_runtime: agentRuntime,
     agent_aliases: parseAgentAliases(process.env.METAFLOW_AGENT_ALIASES),
     agent_mcp_servers: [],
@@ -182,6 +190,13 @@ function parseAgentAliases(value: string | undefined): Record<string, string> {
     aliases[name] = runtime;
   }
   return aliases;
+}
+
+export function parseTrustedOperationOrigins(value: string | undefined): string[] {
+  if (!value) return [];
+  const origins = value.split(",").map(item => item.trim()).filter(Boolean).map(normalizeTrustedOperationOrigin);
+  if (new Set(origins).size !== origins.length) throw new Error("METAFLOW_TRUSTED_OPERATION_ORIGINS contains duplicates");
+  return origins;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

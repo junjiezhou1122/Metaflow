@@ -155,9 +155,13 @@ but there is no separate canonical Worker domain layer.
   adapter does not import View Store, Execution, Capture, or SQLite directly.
   The installable `mf` executable and retained stdio MCP proxy are strict
   loopback resident-daemon clients: both negotiate exact doctor, protocol,
-  server, version, endpoint, authentication, timeout, response status, and
-  Operation-envelope evidence before use. The `mf` executable works from any
-  cwd, inline/file JSON never falls back to a string, and stdout contains one
+  server, version, endpoint, required Bearer scheme and nonce-bound credential
+  proof, frozen Operation allowlist/fingerprint, timeout, response status, and
+  Operation-envelope evidence before use. The generated installable CLI wire
+  module and `DaemonOperationClient` come from one canonical contract and share
+  the full discriminated-envelope validator plus status/exit mappings. The `mf`
+  executable works from any cwd, rejects unknown Operations before network
+  access, inline/file JSON never falls back to a string, and stdout contains one
   envelope. MCP v1 tools advertise and validate the canonical discriminated
   envelope schema and derive effect hints from the Operation catalog.
 - `packages/adapters/web-view-renderers`: the fail-fast Web Renderer ABI and
@@ -278,9 +282,23 @@ Operations.
   A transport never reconstructs View, Transformation, Run, policy, Failure,
   or trace behavior.
 - Installed Agent access reaches only the explicitly loopback-bound resident
-  daemon. `mf` and the retained stdio MCP proxy fail on protocol, server,
-  authentication, version, endpoint, status, Operation, timeout, or
-  reachability mismatch without printing credentials. `mf` validates strict
+  daemon. Doctor is credential-free, declares required Bearer authentication,
+  and proves credential possession for a client nonce while freezing the exact
+  catalog identity before a client may send its token. Every privileged
+  Operations, compatibility exact-read, and
+  HTTP MCP request authenticates before a `user:local` principal exists;
+  missing or wrong credentials fail closed, untrusted browser origins are
+  rejected, exact trusted browser origins still require Bearer authentication,
+  and privileged responses carry no wildcard CORS grant. `mf` and the retained
+  stdio MCP proxy fail on protocol, server, authentication, catalog, version,
+  endpoint, status, Operation, timeout, or reachability mismatch without
+  printing credentials; a long-lived client repeats the credential-free nonce
+  proof before every authenticated call so daemon replacement cannot inherit a
+  previously negotiated token path. The Chrome extension and macOS exact-result readers
+  enforce the same credential-free loopback endpoint, nonce proof, server,
+  protocol, authentication, and exact catalog contract before sending Bearer
+  credentials; their browser-safe and native constant copies have executable
+  conformance gates against the canonical wire contract. `mf` validates strict
   JSON or `@file` input, returns one stdout envelope, keeps diagnostics on
   stderr, and uses stable typed exit categories. MCP structured content is the
   authoritative validated Operation envelope; effect annotations are hints

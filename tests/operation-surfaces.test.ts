@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,11 +36,12 @@ import {
   type OperationTraceEvent,
 } from "@info/operations";
 import { SearchService } from "@info/search";
-import { PrivacyForgetService, exactViewRef, parseViewDraft } from "@info/view";
+import { PrivacyForgetService, canonicalJson, exactViewRef, parseViewDraft } from "@info/view";
 import {
   CliOperationAdapter,
   HttpOperationAdapter,
   OperationMcpOutputJsonSchema,
+  METAFLOW_OPERATION_CATALOG_FINGERPRINT,
   createOperationMcpServer,
   operationMcpToolName,
 } from "@info/operation-surfaces";
@@ -78,6 +80,10 @@ test("catalog schemas cover every Operation while examples remain limited to bou
     OPERATION_CATALOG.filter(entry => entry.input_example !== undefined).map(entry => entry.name),
     ["catalog.list", "view.get", "view.graph.project", "view.search"],
   );
+  assert.equal(
+    `sha256:${createHash("sha256").update(canonicalJson(OPERATION_CATALOG)).digest("hex")}`,
+    METAFLOW_OPERATION_CATALOG_FINGERPRINT,
+  );
 });
 
 test("official MCP client rejects structured content outside the advertised discriminated envelope", async () => {
@@ -102,6 +108,8 @@ test("official MCP client rejects structured content outside the advertised disc
     const schema = listed.tools[0]!.outputSchema as { type: string; oneOf?: unknown[] };
     assert.equal(schema.type, "object");
     assert.equal(schema.oneOf?.length, 2);
+    const failure = schema.oneOf?.[1] as { required?: string[] };
+    assert.deepEqual(failure.required, ["ok", "request_id", "operation", "error"]);
     await assert.rejects(
       client.callTool({ name: "invalid_envelope", arguments: {} }),
       /Structured content does not match the tool's output schema/u,
