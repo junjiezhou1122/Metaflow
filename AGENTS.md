@@ -415,6 +415,12 @@ Operations.
   to an untrusted candidate envelope. It projects bounded exact input evidence
   into Agent current context; Browser and Ambient adapters never construct
   output View envelopes or commit Execution results themselves.
+- Agent Operator output mode is explicit. `agent_task_output` preserves the
+  legacy summary envelope; `schema_value` returns one untrusted JSON-compatible
+  value for the frozen output Schema and never falls back to the legacy shape.
+  Execution alone validates and commits it. A zero-input Transformation must
+  freeze an explicit `output_policy`; legacy `failure_policy` is only an
+  equivalent input alias and conflicting values fail before Run creation.
 - Every Agent input projection retains role, exact View ref, Schema, and inline
   Representation or external reference under `raw.metaflow_inputs`. Static
   Operator context cannot overwrite frozen evidence. If `max_input_tokens`

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { buildAgentConversationPromptBlocks, buildAgentTaskPromptBlocks } from "./content.js";
-import { normalizeAgentTaskOutput, stripJsonCodeFence } from "../outputs/view-output.js";
+import { normalizeAgentSchemaValue, normalizeAgentTaskOutput, stripJsonCodeFence } from "../outputs/view-output.js";
 import type {
   AgentAcpStdioRuntimeOptions,
   AgentConversationContext,
@@ -14,6 +14,9 @@ import type {
   AgentRuntimeEvent,
   AgentTaskRequest,
   AgentTaskResult,
+  AgentSchemaValue,
+  AgentTaskOutput,
+  AgentTaskOutputMode,
 } from "../types.js";
 
 export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentConversationRuntimeAdapter {
@@ -159,13 +162,16 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
       });
       await emit(context, { type: "runtime.prompt_complete", runtime: this.id, taskId: task.id, sessionId, payload: { stopReason: response.stopReason } });
 
-      const agentOutput = outputFromUpdates(updates, response.stopReason);
+      const outputMode = task.outputContract.mode ?? "agent_task_output";
+      const agentOutput = outputMode === "schema_value"
+        ? { schemaValue: outputFromUpdates(updates, response.stopReason, "schema_value") }
+        : { output: outputFromUpdates(updates, response.stopReason, "agent_task_output") };
 
       await maybeCloseSession(connection, sessionId, initResult.agentCapabilities);
       return {
         ok: true,
         reason: `submitted agent task to ${this.id}`,
-        output: agentOutput,
+        ...agentOutput,
         diagnostics: {
           runtime: this.id,
           stop_reason: response.stopReason,
@@ -362,11 +368,14 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
         sessionId,
         payload: { stopReason: response.stopReason },
       });
-      const output = outputFromUpdates(updates, response.stopReason);
+      const outputMode = task.outputContract.mode ?? "agent_task_output";
+      const output = outputMode === "schema_value"
+        ? { schemaValue: outputFromUpdates(updates, response.stopReason, "schema_value") }
+        : { output: outputFromUpdates(updates, response.stopReason, "agent_task_output") };
       result = {
         ok: true,
         reason: `submitted agent task to persistent ${this.id}`,
-        output,
+        ...output,
         diagnostics: {
           runtime: this.id,
           lifecycle: "persistent",
@@ -582,7 +591,21 @@ type PersistentAcpConnection = {
   sessions: Map<string, PersistentTaskSession>;
 };
 
-function outputFromUpdates(updates: acp.SessionNotification[], stopReason: string) {
+function outputFromUpdates(
+  updates: acp.SessionNotification[],
+  stopReason: string,
+  mode: "schema_value",
+): AgentSchemaValue;
+function outputFromUpdates(
+  updates: acp.SessionNotification[],
+  stopReason: string,
+  mode: "agent_task_output",
+): AgentTaskOutput;
+function outputFromUpdates(
+  updates: acp.SessionNotification[],
+  stopReason: string,
+  mode: AgentTaskOutputMode,
+): AgentSchemaValue | AgentTaskOutput {
   const runs: string[] = [];
   const chunks: string[] = [];
   let current = "";
@@ -603,7 +626,10 @@ function outputFromUpdates(updates: acp.SessionNotification[], stopReason: strin
   for (const text of candidates) {
     if (!text.trim()) continue;
     try {
-      return normalizeAgentTaskOutput(JSON.parse(stripJsonCodeFence(text)));
+      const parsed = JSON.parse(stripJsonCodeFence(text)) as unknown;
+      return mode === "schema_value"
+        ? normalizeAgentSchemaValue(parsed)
+        : normalizeAgentTaskOutput(parsed);
     } catch (error) {
       lastError = error;
     }
@@ -612,8 +638,9 @@ function outputFromUpdates(updates: acp.SessionNotification[], stopReason: strin
     throw new Error(`ACP prompt completed with ${stopReason} but emitted no text agent_message_chunk`);
   }
   const characters = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const expected = mode === "schema_value" ? "schema_value" : "AgentTaskOutput";
   throw new Error(
-    `ACP prompt completed with ${stopReason} and emitted ${chunks.length} text chunks (${characters} characters), but no valid AgentTaskOutput was found: ${errorMessage(lastError)}`,
+    `ACP prompt completed with ${stopReason} and emitted ${chunks.length} text chunks (${characters} characters), but no valid ${expected} was found: ${errorMessage(lastError)}`,
   );
 }
 

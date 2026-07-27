@@ -34,5 +34,12 @@ The adapter returns candidate output only. Execution remains responsible for
 validating the output contract, committing a Derived View or Failure View, and
 atomically recording the completed Transformation Run.
 
+Agent tasks have two explicit output modes. The default `agent_task_output`
+mode preserves the legacy summary/analysis/key-points envelope.
+`schema_value` instead returns one JSON-compatible value for the frozen View
+Schema. CLI and ACP runtimes parse strictly according to that mode and never
+fall back to the other shape. They do not validate the View Schema or commit a
+View; the Execution Runtime remains the sole validation and commit boundary.
+
 Session reuse is only a latency optimization for ACP-style agents. The durable
 state remains the task handoff, traces, artifacts, and committed Views.

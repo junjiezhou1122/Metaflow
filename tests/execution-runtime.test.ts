@@ -385,6 +385,101 @@ test("existing AgentExecutionAdapter crosses the canonical bridge and commits a 
   }
 });
 
+test("zero-input schema_value Agent output is validated and committed only by Execution", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-zero-input-agent-"));
+  const repository = new SqliteViewRepository(join(directory, "agent.sqlite"));
+  const agentRuntime = new SchemaValueAgentRuntime({
+    headline: "Daily English plan",
+    tags: ["reading", "listening"],
+  });
+  try {
+    const bridge = new AgentOperatorExecutionBridge(new AgentExecutionAdapter({
+      runtimes: [agentRuntime],
+      default_runtime: agentRuntime.id,
+      now: () => new Date("2026-07-26T12:20:02.000Z"),
+    }), {
+      now: () => "2026-07-26T12:20:03.000Z",
+      output_view_id: () => "view:learning:daily-plan",
+    });
+    const runtime = new ExecutionRuntime(
+      repository,
+      repository,
+      new DeterministicViewAccessAuthorizer(),
+      bridge,
+      undefined,
+      { now: deterministicClock(), id: kind => `${kind}:zero-input-agent` },
+    );
+    assert.equal(await repository.getLatest("view:learning:daily-plan"), undefined);
+
+    const result = await runtime.execute(zeroInputAgentRequest("run:zero-input-agent", agentRuntime.id));
+
+    assert.equal(result.run.status, "succeeded");
+    assert.deepEqual(result.run.frozen.output_policy, externalModelPolicy);
+    assert.equal(result.run.frozen.inputs.length, 0);
+    assert.equal(result.outputs.length, 1);
+    assert.deepEqual(result.outputs[0]?.representation, {
+      form: "inline",
+      kind: "agent_output",
+      value: { headline: "Daily English plan", tags: ["reading", "listening"] },
+      metadata: {},
+    });
+    assert.deepEqual(result.outputs[0]?.policy, externalModelPolicy);
+    assert.deepEqual(result.outputs[0]?.provenance.inputs, []);
+    assert.equal(result.outputs[0]?.provenance.operator_run_id, "run:zero-input-agent");
+    assert.equal(agentRuntime.sawSchemaValueContract, true);
+  } finally {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("schema-invalid schema_value output becomes Failure evidence without a target View", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-invalid-schema-value-agent-"));
+  const repository = new SqliteViewRepository(join(directory, "agent.sqlite"));
+  const agentRuntime = new SchemaValueAgentRuntime({ headline: 42, tags: "reading" });
+  try {
+    const bridge = new AgentOperatorExecutionBridge(new AgentExecutionAdapter({
+      runtimes: [agentRuntime],
+      default_runtime: agentRuntime.id,
+    }), { output_view_id: () => "view:learning:invalid-plan" });
+    const runtime = new ExecutionRuntime(
+      repository,
+      repository,
+      new DeterministicViewAccessAuthorizer(),
+      bridge,
+      undefined,
+      { now: deterministicClock(), id: kind => `${kind}:invalid-schema-value-agent` },
+    );
+
+    const result = await runtime.execute(zeroInputAgentRequest("run:invalid-schema-value-agent", agentRuntime.id));
+
+    assert.equal(result.run.status, "failed");
+    assert.equal(result.run.error?.code, "candidate_invalid");
+    assert.equal(await repository.getLatest("view:learning:invalid-plan"), undefined);
+    assert.equal(result.failure?.schema.name, "metaflow.execution.failure");
+    assert.deepEqual(result.failure?.policy, externalModelPolicy);
+  } finally {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("conflicting output_policy and legacy failure_policy fail before Run creation", async () => {
+  await withHarness(async harness => {
+    await assert.rejects(
+      harness.runtime.execute(request(harness.input, "run:conflicting-output-policy", {
+        output_policy: privatePolicy,
+        failure_policy: { ...privatePolicy, retention: "archive" },
+      })),
+      (error: unknown) => error instanceof Error
+        && Reflect.get(error, "code") === "policy_mismatch"
+        && /output_policy and legacy failure_policy/.test(error.message),
+    );
+    assert.equal(await harness.repository.getRun("run:conflicting-output-policy"), undefined);
+    assert.equal(harness.operator.executions, 0);
+  });
+});
+
 test("Agent bridge bounds large inline evidence while preserving exact refs and external references", async () => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-agent-context-budget-"));
   const repository = new SqliteViewRepository(join(directory, "agent.sqlite"));
@@ -751,6 +846,30 @@ class BoundedContextAgentRuntime implements AgentRuntimeAdapter {
   }
 }
 
+class SchemaValueAgentRuntime implements AgentRuntimeAdapter {
+  readonly id = "schema-value-agent";
+  readonly kind = "mock" as const;
+  sawSchemaValueContract = false;
+
+  constructor(private readonly value: unknown) {}
+
+  async capabilities() {
+    return { runtimeId: this.id, kind: this.kind, modes: ["invoke" as const] };
+  }
+
+  async submit(task: AgentTaskRequest, _context: AgentRuntimeContext): Promise<AgentTaskResult> {
+    assert.equal(task.outputContract.mode, "schema_value");
+    assert.equal(task.outputContract.viewType, "learning.daily_plan");
+    this.sawSchemaValueContract = true;
+    return {
+      ok: true,
+      reason: "returned an untrusted Schema value",
+      schemaValue: this.value as never,
+      diagnostics: { runtime: this.id },
+    };
+  }
+}
+
 async function invocationEvent(invocation: OperatorExecutionInvocation): Promise<void> {
   const emit = Reflect.get(invocation, "emit") as ((event: { type: string; payload: { phase: string } }) => Promise<void>);
   await emit({ type: "operator.progress", payload: { phase: "summarizing" } });
@@ -768,6 +887,68 @@ function request(input: View, runId: string, overrides: Partial<StartExecutionIn
     },
     access_use: "local_execution",
     ...overrides,
+  };
+}
+
+const externalModelPolicy: ViewPolicy = {
+  ...privatePolicy,
+  allow_external_model: true,
+};
+
+function zeroInputAgentRequest(runId: string, runtimeId: string): StartExecutionInput {
+  return {
+    run_id: runId,
+    correlation_id: `correlation:${runId}`,
+    transformation: {
+      id: "transformation:daily-learning-plan",
+      revision: 1,
+      name: "Daily learning plan",
+      instruction: { format: "natural_language", text: "Create today's English learning plan.", parameters: {} },
+      operator: {
+        id: "operator:daily-learning-plan",
+        revision: 1,
+        reference: { kind: "agent", adapter: "agent-execution" },
+        configuration: {
+          runtime_override: runtimeId,
+          output_mode: "schema_value",
+        },
+        required_capabilities: [],
+      },
+      inputs: [],
+      output: {
+        schema: {
+          name: "learning.daily_plan",
+          version: 1,
+          mode: "strict",
+          dialect: "https://json-schema.org/draft/2020-12/schema",
+          json_schema: {
+            type: "object",
+            required: ["headline", "tags"],
+            additionalProperties: false,
+            properties: {
+              headline: { type: "string" },
+              tags: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        schema_origin: "declared",
+        cardinality: { min: 1, max: 1 },
+      },
+      policy: {
+        id: "policy:approve-all",
+        revision: 1,
+        configuration: { kind: "view_access", profile: "approve_all", rules: [] },
+      },
+      created_at: "2026-07-26T12:20:00.000Z",
+      metadata: {},
+    },
+    access_policy: {
+      id: "policy:approve-all",
+      revision: 1,
+      configuration: { kind: "view_access", profile: "approve_all", rules: [] },
+    },
+    access_use: "external_model",
+    output_policy: externalModelPolicy,
   };
 }
 

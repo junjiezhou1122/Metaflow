@@ -109,13 +109,25 @@ export class AgentExecutionAdapter implements AgentOperatorPort {
           emit: event => this.forwardRuntimeEvent(context, invocation, runtime.id, event),
         },
       });
-      if (!result.ok || !result.output) {
+      const outputMode = task.outputContract.mode ?? "agent_task_output";
+      const candidate = outputMode === "schema_value" ? result.schemaValue : result.output;
+      if (!result.ok) {
         return this.fail(
           invocation,
           context,
           runtime.id,
           "runtime_failed",
-          result.reason || `Agent runtime ${runtime.id} returned no candidate output`,
+          result.reason || `Agent runtime ${runtime.id} failed without a reason`,
+          result.diagnostics,
+        );
+      }
+      if (candidate === undefined) {
+        return this.fail(
+          invocation,
+          context,
+          runtime.id,
+          "runtime_failed",
+          `Agent runtime ${runtime.id} returned no ${outputMode} candidate output`,
           result.diagnostics,
         );
       }
@@ -129,7 +141,7 @@ export class AgentExecutionAdapter implements AgentOperatorPort {
       return {
         status: "succeeded",
         runtime: runtime.id,
-        candidate: result.output,
+        candidate,
         diagnostics: result.diagnostics,
       };
     } catch (error) {
@@ -242,6 +254,7 @@ function taskFromInvocation(invocation: AgentOperatorInvocation, runtime: string
       },
     },
     outputContract: {
+      mode: invocation.output_contract.mode ?? "agent_task_output",
       viewType: invocation.output_contract.view_type,
       title: invocation.output_contract.title,
       purpose: invocation.output_contract.purpose,

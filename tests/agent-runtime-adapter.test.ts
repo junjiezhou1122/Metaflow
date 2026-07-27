@@ -4,11 +4,14 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AcpStdioAgentRuntimeAdapter,
+  CliJsonAgentRuntimeAdapter,
   MockAgentRuntimeAdapter,
   buildAgentHandoff,
   buildAgentTaskPromptBlocks,
   normalizeAgentTaskOutput,
+  normalizeAgentSchemaValue,
   parseAgentTaskOutput,
+  parseAgentSchemaValue,
   httpMcpServer,
   type AgentRuntimeEvent,
 } from "@info/agent-runtime-adapter";
@@ -35,6 +38,22 @@ test("MockAgentRuntimeAdapter returns structured agent task output", async () =>
   ]);
 });
 
+test("MockAgentRuntimeAdapter fails explicitly when schema_value is not implemented", async () => {
+  const result = await new MockAgentRuntimeAdapter().submit({
+    id: "task:mock-schema-value",
+    goal: "Create a plan.",
+    outputContract: {
+      mode: "schema_value",
+      viewType: "learning.daily_plan",
+      schema: { name: "learning.daily_plan", version: 1, mode: "freeform" },
+    },
+  }, { signal: {} });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /does not implement schema_value/);
+  assert.equal(result.output, undefined);
+  assert.equal(result.schemaValue, undefined);
+});
+
 test("AgentTask output parser rejects action-oriented fields", () => {
   assert.throws(
     () => normalizeAgentTaskOutput({ summary: "Looks good", next_actions: ["edit files"] }),
@@ -48,6 +67,24 @@ test("AgentTask output parser rejects action-oriented fields", () => {
     views: undefined,
     raw: { summary: "Ok", confidence: 0.7 },
   });
+});
+
+test("schema_value output parser preserves arbitrary JSON and rejects non-JSON values", () => {
+  const value = {
+    headline: "Daily English plan",
+    tags: ["reading", "listening"],
+    sessions: 2,
+  };
+  assert.deepEqual(normalizeAgentSchemaValue(value), value);
+  assert.deepEqual(
+    parseAgentSchemaValue(JSON.stringify({ result: `\`\`\`json\n${JSON.stringify(value)}\n\`\`\`` })),
+    value,
+  );
+  assert.equal(parseAgentSchemaValue(JSON.stringify("plain string value")), "plain string value");
+  assert.throws(() => parseAgentSchemaValue("not-json"), /JSON/);
+  assert.throws(() => normalizeAgentSchemaValue({ headline: undefined }), /JSON-compatible/);
+  assert.throws(() => normalizeAgentSchemaValue(new Date()), /JSON-compatible/);
+  assert.throws(() => normalizeAgentSchemaValue(Array(1)), /JSON-compatible/);
 });
 
 test("AgentTask output parser accepts optional evidence Views without treating them as tools", () => {
@@ -102,6 +139,61 @@ test("buildAgentTaskPromptBlocks maps simple handoff to ACP text content", () =>
   assert.match(blocks[0].text, /analysis\.acp_agent_task/);
   assert.match(blocks[0].text, /context:\/\/records\/record:1/);
   assert.doesNotMatch(blocks[0].text, /Use the provided task and Context Pack/);
+});
+
+test("schema_value prompt requests the frozen Schema instead of the legacy AgentTaskOutput shape", () => {
+  const blocks = buildAgentTaskPromptBlocks({
+    task: {
+      id: "task:schema-value-prompt",
+      goal: "Create today's learning plan.",
+      outputContract: {
+        mode: "schema_value",
+        viewType: "learning.daily_plan",
+        schema: {
+          name: "learning.daily_plan",
+          version: 1,
+          mode: "strict",
+          json_schema: {
+            type: "object",
+            required: ["headline", "tags"],
+            properties: {
+              headline: { type: "string" },
+              tags: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+    },
+    signal: {},
+  });
+  assert.equal(blocks[0]?.type, "text");
+  if (blocks[0]?.type !== "text") throw new Error("expected text prompt block");
+  assert.match(blocks[0].text, /complete JSON value must satisfy the frozen output Schema/);
+  assert.match(blocks[0].text, /learning\.daily_plan/);
+  assert.doesNotMatch(blocks[0].text, /key_points/);
+  assert.doesNotMatch(blocks[0].text, /optional views array/);
+});
+
+test("CLI schema_value mode unwraps the command envelope without legacy output coercion", async () => {
+  const adapter = new CliJsonAgentRuntimeAdapter({
+    id: "schema-value-cli",
+    command: process.execPath,
+    buildArgs() {
+      return ["-e", "process.stdout.write(JSON.stringify({result:JSON.stringify({headline:'Daily English plan',tags:['reading']})}))"];
+    },
+  });
+  const result = await adapter.submit({
+    id: "task:schema-value-cli",
+    goal: "Create a plan.",
+    outputContract: {
+      mode: "schema_value",
+      viewType: "learning.daily_plan",
+      schema: { name: "learning.daily_plan", version: 1, mode: "freeform" },
+    },
+  }, { signal: {} });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.schemaValue, { headline: "Daily English plan", tags: ["reading"] });
+  assert.equal(result.output, undefined);
 });
 
 test("buildAgentHandoff derives current context and default View tools from a signal", () => {
@@ -169,6 +261,39 @@ test("AcpStdioAgentRuntimeAdapter initializes, creates a session, injects MCP se
     assert.ok(events.some(event => event.type === "runtime.session_created" && event.sessionId === "sess_fake"));
     assert.ok(events.some(event => event.type === "runtime.prompt_update"));
     assert.ok(events.some(event => event.type === "runtime.prompt_complete"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ACP schema_value mode returns arbitrary JSON without requiring summary", async () => {
+  const dir = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-schema-value-test-"));
+  const script = join(dir, "fake-acp-agent.mjs");
+  writeFileSync(script, fakeAcpAgentSource());
+  chmodSync(script, 0o755);
+  const adapter = new AcpStdioAgentRuntimeAdapter({
+    id: "acp_schema_value_test",
+    command: process.execPath,
+    args: [script],
+    cwd: dir,
+  });
+
+  try {
+    const result = await adapter.submit({
+      id: "task:acp-schema-value",
+      goal: "SCHEMA_VALUE_OUTPUT",
+      outputContract: {
+        mode: "schema_value",
+        viewType: "learning.daily_plan",
+        schema: { name: "learning.daily_plan", version: 1, mode: "freeform" },
+      },
+    }, { signal: {} });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.schemaValue, {
+      headline: "Daily English plan",
+      tags: ["reading", "listening"],
+    });
+    assert.equal(result.output, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -270,12 +395,16 @@ const agent = {
     return { sessionId: "sess_fake" };
   },
   async prompt(params) {
-    const output = "\`\`\`json\\n" + JSON.stringify({
-      summary: "Fake ACP agent completed task",
-      analysis: "Prompt blocks: " + params.prompt.length,
-      key_points: ["mcp_servers:" + lastMcpServerCount],
-      confidence: 0.82
-    }) + "\\n\`\`\`";
+    const prompt = JSON.stringify(params.prompt);
+    const value = prompt.includes("SCHEMA_VALUE_OUTPUT")
+      ? { headline: "Daily English plan", tags: ["reading", "listening"] }
+      : {
+          summary: "Fake ACP agent completed task",
+          analysis: "Prompt blocks: " + params.prompt.length,
+          key_points: ["mcp_servers:" + lastMcpServerCount],
+          confidence: 0.82
+        };
+    const output = "\`\`\`json\\n" + JSON.stringify(value) + "\\n\`\`\`";
     for (const text of [output.slice(0, 17), output.slice(17, 61), output.slice(61)]) {
       await connection.sessionUpdate({
         sessionId: params.sessionId,

@@ -2,6 +2,7 @@ import type { ExactViewRef, JsonObject, JsonValue, ViewPolicy } from "@info/view
 import type { ExactTransformationRef } from "@info/transformation";
 
 export type AgentExecutionMode = "invoke" | "interactive" | "background";
+export type AgentOperatorOutputMode = "agent_task_output" | "schema_value";
 
 export type AgentOperatorInput = {
   role: string;
@@ -34,6 +35,7 @@ export type AgentOperatorInvocation = {
   inputs: AgentOperatorInput[];
   view_tools: AgentOperatorViewTool[];
   output_contract: {
+    mode?: AgentOperatorOutputMode;
     view_type: string;
     title?: string;
     purpose?: string;

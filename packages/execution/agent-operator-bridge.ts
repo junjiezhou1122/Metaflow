@@ -51,12 +51,10 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
       };
     }
     const policies = invocation.inputs.flatMap(binding => binding.views.map(view => view.policy));
-    if (policies.length === 0) {
-      return {
-        status: "failed",
-        error: { code: "missing_input_policy", message: "Agent bridge requires at least one input View policy" },
-      };
-    }
+    const outputPolicy = inheritedOrFrozenOutputPolicy(
+      policies,
+      invocation.run.frozen.output_policy ?? invocation.run.frozen.failure_policy,
+    );
     const configuration = transformation.operator.configuration;
     let currentContext: JsonObject;
     try {
@@ -99,6 +97,7 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
       })),
       view_tools: viewTools(configuration.view_tools),
       output_contract: {
+        mode: agentOutputMode(configuration.output_mode),
         view_type: transformation.output.schema.name,
         title: transformation.name,
         purpose: transformation.instruction.text,
@@ -106,7 +105,7 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
       },
       policy_snapshot: {
         autonomy: autonomy(configuration.autonomy),
-        allow_external_model: policies.every(policy => policy.allow_external_model),
+        allow_external_model: outputPolicy.allow_external_model,
         allow_network: booleanValue(configuration.allow_network),
         allow_write: booleanValue(configuration.allow_write),
       },
@@ -152,7 +151,6 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
       };
     }
     const inputs = invocation.inputs.flatMap(binding => binding.views.map(view => exactViewRef(view)));
-    const policy = inheritStrictestViewPolicy(policies);
     const draft: ViewDraft = {
       id: this.outputViewId(invocation),
       name: transformation.name,
@@ -178,7 +176,7 @@ export class AgentOperatorExecutionBridge implements OperatorExecutionPort {
         actor: `agent:${result.runtime}`,
         trace_id: invocation.run.trace_id,
       },
-      policy,
+      policy: outputPolicy,
       metadata: { agent_runtime: result.runtime },
     };
     return {
@@ -230,6 +228,18 @@ function booleanValue(value: JsonValue | undefined): boolean {
 
 function agentMode(value: JsonValue | undefined): AgentOperatorInvocation["mode"] {
   return value === "interactive" || value === "background" ? value : "invoke";
+}
+
+function agentOutputMode(value: JsonValue | undefined): NonNullable<AgentOperatorInvocation["output_contract"]["mode"]> {
+  if (value === undefined || value === "agent_task_output") return "agent_task_output";
+  if (value === "schema_value") return "schema_value";
+  throw new TypeError(`Agent Operator configuration.output_mode is unsupported: ${String(value)}`);
+}
+
+function inheritedOrFrozenOutputPolicy(policies: View["policy"][], frozen?: View["policy"]): View["policy"] {
+  if (policies.length > 0) return inheritStrictestViewPolicy(policies);
+  if (frozen) return frozen;
+  throw new TypeError("A zero-input Agent Operator requires a frozen output policy");
 }
 
 function autonomy(value: JsonValue | undefined): AgentOperatorInvocation["policy_snapshot"]["autonomy"] {

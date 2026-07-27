@@ -18,6 +18,13 @@ export class MockAgentRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   async submit(task: AgentTaskRequest, context: AgentRuntimeContext): Promise<AgentTaskResult> {
+    if (task.outputContract.mode === "schema_value") {
+      return {
+        ok: false,
+        reason: `Agent runtime ${this.id} does not implement schema_value output`,
+        diagnostics: { runtime: this.id, output_mode: task.outputContract.mode },
+      };
+    }
     const text = signalText(context.signal);
     const prompt = task.prompt ?? task.goal;
     const base = text ? firstSentence(text, 220) : "Agent task completed.";

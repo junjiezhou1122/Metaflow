@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { buildAgentTaskPromptBlocks, promptTextFromBlocks } from "./acp/content.js";
-import { parseAgentTaskOutput } from "./outputs/view-output.js";
+import { parseAgentSchemaValue, parseAgentTaskOutput } from "./outputs/view-output.js";
 import type { AgentCliJsonRuntimeOptions, AgentRuntimeAdapter, AgentRuntimeContext, AgentTaskRequest, AgentTaskResult } from "./types.js";
 
 export class CliJsonAgentRuntimeAdapter implements AgentRuntimeAdapter {
@@ -54,11 +54,14 @@ export class CliJsonAgentRuntimeAdapter implements AgentRuntimeAdapter {
         cwd: task.cwd ?? this.options.cwd ?? process.cwd(),
         env: this.options.env ?? process.env,
       });
-      const output = parseAgentTaskOutput(stdout);
+      const mode = task.outputContract.mode ?? "agent_task_output";
+      const output = mode === "schema_value"
+        ? { schemaValue: parseAgentSchemaValue(stdout) }
+        : { output: parseAgentTaskOutput(stdout) };
       return {
         ok: true,
         reason: `submitted agent task to ${this.id}`,
-        output,
+        ...output,
         diagnostics: {
           runtime: this.id,
           task_prompt: task.prompt ?? task.goal,

@@ -114,6 +114,23 @@ test("unsupported background mode fails before runtime submission", async () => 
   assert.equal(runtime.submissions, 0);
 });
 
+test("schema_value mode never falls back to a legacy AgentTaskOutput result", async () => {
+  const runtime = new CountingRuntime();
+  const bridge = new AgentExecutionAdapter({ runtimes: [runtime], default_runtime: runtime.id });
+  const result = await bridge.execute(invocation({
+    output_contract: {
+      mode: "schema_value",
+      view_type: "learning.daily_plan",
+      schema: { name: "learning.daily_plan", version: 1, mode: "freeform" },
+    },
+  }));
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") {
+    assert.equal(result.failure.code, "runtime_failed");
+    assert.match(result.failure.message, /no schema_value candidate output/);
+  }
+});
+
 test("cancellation is routed to the active selected runtime", async () => {
   const runtime = new DeferredRuntime();
   const bridge = new AgentExecutionAdapter({ runtimes: [runtime], default_runtime: runtime.id });

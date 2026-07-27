@@ -129,6 +129,7 @@ export class ExecutionRuntime {
   }
 
   async execute(input: StartExecutionInput, options: { signal?: AbortSignal } = {}): Promise<ExecutionResult> {
+    const outputPolicy = resolveOutputPolicy(input.output_policy, input.failure_policy);
     if (input.idempotency_key) {
       const replay = await this.runs.getRunByIdempotencyKey(input.idempotency_key);
       if (replay) {
@@ -143,6 +144,7 @@ export class ExecutionRuntime {
       input.pre_execution_failure !== undefined || input.cascade?.disposition === "terminal",
     );
     const selectedViews = resolved.flatMap(binding => binding.views);
+    inheritedPolicy(selectedViews, outputPolicy);
     const decision = await this.authorizer.authorize({
       policy: input.access_policy,
       operator: transformation.operator,
@@ -165,6 +167,7 @@ export class ExecutionRuntime {
         ...(input.runtime_override ? { runtime_override: input.runtime_override } : {}),
         ...(input.idempotency_key ? { idempotency_key: input.idempotency_key } : {}),
         ...(input.repair_context ? { repair: input.repair_context } : {}),
+        ...(outputPolicy ? { output_policy: outputPolicy } : {}),
         ...(input.failure_policy ? { failure_policy: input.failure_policy } : {}),
         ...(input.previous_attempt_id ? { previous_attempt_id: input.previous_attempt_id } : {}),
         ...(input.cascade ? {
@@ -203,7 +206,7 @@ export class ExecutionRuntime {
         run,
         undefined,
         selectedViews,
-        input.failure_policy,
+        frozenOutputPolicy(run),
         new ExecutionRuntimeError(terminal.message, "cascade_stopped", "execution", {
           cascade_attempt_id: run.frozen.cascade.attempt_id,
           root_correlation_id: run.frozen.cascade.root_correlation_id,
@@ -226,7 +229,7 @@ export class ExecutionRuntime {
             decision_id: decision.decision_id,
             approval_required_views: decision.approval_required_views,
           });
-      return this.failRun(run, undefined, selectedViews, input.failure_policy, error, undefined, 0, "failed");
+      return this.failRun(run, undefined, selectedViews, frozenOutputPolicy(run), error, undefined, 0, "failed");
     }
 
     if (run.frozen.pre_execution_failure) {
@@ -235,7 +238,7 @@ export class ExecutionRuntime {
         run,
         undefined,
         selectedViews,
-        input.failure_policy,
+        frozenOutputPolicy(run),
         new ExecutionRuntimeError(failure.message, "pre_execution_failed", failure.stage, {
           pre_execution_code: failure.code,
           ...failure.details,
@@ -287,7 +290,7 @@ export class ExecutionRuntime {
           { cost_usd: cost, max_cost_usd: budgetCost },
         );
       }
-      const outputs = await this.validateCandidate(run, selectedViews, candidate, input.failure_policy);
+      const outputs = await this.validateCandidate(run, selectedViews, candidate, frozenOutputPolicy(run));
       const completedAt = this.now();
       const completedAttempt = finishAttempt(attempt, "succeeded", completedAt, cost);
       const committed = await this.runs.commitSuccess({
@@ -321,7 +324,7 @@ export class ExecutionRuntime {
       const status: Extract<ExecutionRunStatus, "failed" | "cancelled" | "timed_out"> = error.code === "cancelled"
         ? "cancelled"
         : error.code === "timeout" ? "timed_out" : "failed";
-      return this.failRun(run, attempt, selectedViews, input.failure_policy, error, candidate, cost, status);
+      return this.failRun(run, attempt, selectedViews, frozenOutputPolicy(run), error, candidate, cost, status);
     }
   }
 
@@ -399,7 +402,7 @@ export class ExecutionRuntime {
       run,
       running[0],
       views,
-      run.frozen.failure_policy,
+      frozenOutputPolicy(run),
       new ExecutionRuntimeError(input.message, input.code, "execution", {
         run_id: runId,
         recovery: "abandoned_run",
@@ -922,6 +925,21 @@ function inheritedPolicy(inputs: View[], explicit?: ViewPolicy): ViewPolicy {
   );
 }
 
+function resolveOutputPolicy(outputPolicy?: ViewPolicy, legacyFailurePolicy?: ViewPolicy): ViewPolicy | undefined {
+  if (outputPolicy && legacyFailurePolicy && canonicalJson(outputPolicy) !== canonicalJson(legacyFailurePolicy)) {
+    throw new ExecutionRuntimeError(
+      "output_policy and legacy failure_policy must describe the same View policy",
+      "policy_mismatch",
+      "validation",
+    );
+  }
+  return outputPolicy ?? legacyFailurePolicy;
+}
+
+function frozenOutputPolicy(run: ExecutionRun): ViewPolicy | undefined {
+  return run.frozen.output_policy ?? run.frozen.failure_policy;
+}
+
 function policyIsAtLeastAsStrict(candidate: ViewPolicy, inherited: ViewPolicy): boolean {
   const visibility = { public: 0, shared: 1, private: 2 } as const;
   const privacy = { public: 0, private: 1, sensitive: 2 } as const;
@@ -983,7 +1001,7 @@ function assertIdempotentExecutionRequest(run: ExecutionRun, input: StartExecuti
     invocation_inputs: input.invocation_inputs ?? null,
     runtime_override: input.runtime_override ?? null,
     repair: input.repair_context ?? null,
-    failure_policy: input.failure_policy ?? null,
+    output_policy: resolveOutputPolicy(input.output_policy, input.failure_policy) ?? null,
     previous_attempt_id: input.previous_attempt_id ?? null,
     cascade: comparableCascade(input.cascade),
     pre_execution_failure: input.pre_execution_failure ?? null,
@@ -997,7 +1015,7 @@ function assertIdempotentExecutionRequest(run: ExecutionRun, input: StartExecuti
     invocation_inputs: run.frozen.invocation_inputs ?? null,
     runtime_override: run.frozen.runtime_override ?? null,
     repair: run.frozen.repair ?? null,
-    failure_policy: run.frozen.failure_policy ?? null,
+    output_policy: run.frozen.output_policy ?? run.frozen.failure_policy ?? null,
     previous_attempt_id: run.frozen.previous_attempt_id ?? null,
     cascade: comparableCascade(run.frozen.cascade),
     pre_execution_failure: run.frozen.pre_execution_failure ?? null,

@@ -6,9 +6,19 @@ import type {
   RequestPermissionResponse,
   SessionNotification,
 } from "@agentclientprotocol/sdk";
-import type { AgentExecutionMode } from "@info/execution";
+import type { AgentExecutionMode, AgentOperatorOutputMode } from "@info/execution";
 
 export type AgentRuntimeKind = "acp_stdio" | "cli_json" | "mock";
+
+export type AgentTaskOutputMode = AgentOperatorOutputMode;
+
+export type AgentSchemaValue =
+  | null
+  | boolean
+  | number
+  | string
+  | AgentSchemaValue[]
+  | { [key: string]: AgentSchemaValue };
 
 export type AgentTaskOutput = {
   summary: string;
@@ -45,6 +55,7 @@ export type AgentTaskRequest = {
     diagnostics?: Record<string, unknown>;
   };
   outputContract: {
+    mode?: AgentTaskOutputMode;
     viewType: string;
     title?: string;
     purpose?: string;
@@ -186,6 +197,7 @@ export type AgentTaskResult = {
   ok: boolean;
   reason: string;
   output?: AgentTaskOutput;
+  schemaValue?: AgentSchemaValue;
   diagnostics?: Record<string, unknown>;
 };
 

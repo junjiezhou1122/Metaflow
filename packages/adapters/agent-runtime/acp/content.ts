@@ -3,37 +3,23 @@ import type {
   AgentConversationRequest,
   AgentHandoff,
   AgentPromptBuildInput,
+  AgentTaskRequest,
   AgentViewToolDescriptor,
   ContentBlock,
 } from "../types.js";
 
 export function buildAgentTaskPromptBlocks(input: AgentPromptBuildInput): ContentBlock[] {
   const { task, contextSources = [] } = input;
+  if (task.outputContract.mode === "schema_value" && task.outputContract.schema === undefined) {
+    throw new TypeError("schema_value Agent output requires a frozen output Schema");
+  }
   const handoff = buildAgentHandoff(input);
   const sections = [
     "You are an external agent called by Metaflow.",
     "Use your installed skills. Do not expect skill bodies in this prompt.",
     "Use the current voice/screen/app context below as the immediate user context.",
     "If related Metaflow Views are useful, search them yourself through the available View CLI or MCP tools.",
-    "Return artifacts for Metaflow to validate and commit as Views.",
-    "Do not return next_actions, tasks, tool plans, file diffs, or diffs.",
-    "Return only JSON matching this shape:",
-    JSON.stringify({
-      summary: "string",
-      analysis: "string",
-      key_points: ["string"],
-      confidence: 0.5,
-      views: [
-        {
-          view_type: "extraction.reader_snapshot",
-          title: "optional evidence title",
-          summary: "optional evidence summary",
-          content: { url: "optional source URL", text: "optional extracted evidence" },
-          confidence: 0.5,
-        },
-      ],
-    }, null, 2),
-    "The optional views array is for evidence you acquired with your own skills or tools. Info will assign provenance, scope, and ids.",
+    ...outputInstructions(task.outputContract.mode ?? "agent_task_output"),
     "",
     "USER PROMPT:",
     handoff.prompt,
@@ -63,6 +49,37 @@ export function buildAgentTaskPromptBlocks(input: AgentPromptBuildInput): Conten
   ];
 
   return [{ type: "text", text: sections.join("\n") }];
+}
+
+function outputInstructions(mode: NonNullable<AgentTaskRequest["outputContract"]["mode"]>): string[] {
+  if (mode === "schema_value") {
+    return [
+      "Return one JSON value. Its complete JSON value must satisfy the frozen output Schema in OUTPUT CONTRACT.",
+      "Do not wrap the value in an AgentTaskOutput envelope or add fields not declared by that Schema.",
+      "Metaflow Execution will validate the value and is the only component allowed to commit the resulting View.",
+    ];
+  }
+  return [
+    "Return artifacts for Metaflow to validate and commit as Views.",
+    "Do not return next_actions, tasks, tool plans, file diffs, or diffs.",
+    "Return only JSON matching this shape:",
+    JSON.stringify({
+      summary: "string",
+      analysis: "string",
+      key_points: ["string"],
+      confidence: 0.5,
+      views: [
+        {
+          view_type: "extraction.reader_snapshot",
+          title: "optional evidence title",
+          summary: "optional evidence summary",
+          content: { url: "optional source URL", text: "optional extracted evidence" },
+          confidence: 0.5,
+        },
+      ],
+    }, null, 2),
+    "The optional views array is for evidence you acquired with your own skills or tools. Info will assign provenance, scope, and ids.",
+  ];
 }
 
 export function buildAgentConversationPromptBlocks(request: AgentConversationRequest): ContentBlock[] {
