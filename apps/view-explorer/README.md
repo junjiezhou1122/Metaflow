@@ -15,8 +15,14 @@ engine, and worker positions/camera state never become View relations.
 - Browser decoding imports only `@info/view/schema`, `@info/view/graph`, and
   `@info/search/contracts`; server services and Node crypto stay out of the
   browser bundle.
-- Fixture-only entry: `?fixture=1|10|500|2000`; it injects an in-memory
-  Operation transport and performs no Operation network requests.
+- Fixture-only entry: `?fixture=1|10|500|2000|personalized`; it injects an
+  in-memory Operation transport and performs no Operation network requests.
+  The deterministic `personalized` fixture contains synthetic Codex and
+  Obsidian Raw Views, one working-state bridge, and one Application Space. Its
+  `view:fixture:view-explorer:personalized:*` refs are sanitized UI-only
+  identities and never claim to be the backend acceptance Views or personal
+  data. The personalized Playwright scenario drives this same fixture through
+  the production-shaped HTTP Operation boundary.
 - Exact entry: `?root=<encoded-view-id>@<revision>`. Query state stores exact
   refs, filters, selection, and camera only; no View content is placed in URLs.
 - The ambient daemon must serve the built static app or proxy its Vite server

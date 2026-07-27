@@ -1,7 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PNG } from "pngjs";
-import { createFixtureTransport, type FixtureTransport } from "../src/fixtures.js";
-import type { ExplorerOperation } from "../src/contracts.js";
+import {
+  createFixtureTransport,
+  PERSONALIZED_FIXTURE_ID,
+  PERSONALIZED_VIEW_REFS,
+  type FixtureTransport,
+} from "../src/fixtures.js";
+import { refKey, type ExplorerOperation } from "../src/contracts.js";
 
 const viewports = [
   { name: "desktop", width: 1_440, height: 900 },
@@ -36,6 +41,64 @@ for (const viewport of viewports) {
       await expect(page.locator(".right-panel")).toHaveClass(/mobile-open/);
       await assertSeparatedLayout(page);
     }
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const viewport of [viewports[0], viewports[2]]) {
+  test(`${viewport.name} personalized Application Space focuses exact working-state evidence`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const transport = createFixtureTransport(PERSONALIZED_FIXTURE_ID);
+    await installOperationRoute(page, transport);
+    const operationRequests: string[] = [];
+    const errors = watchErrors(page);
+    page.on("request", request => { if (request.url().includes("/metaflow/v1/operations/")) operationRequests.push(request.url()); });
+    await page.goto(`/?root=${encodeURIComponent(refKey(PERSONALIZED_VIEW_REFS.application_space))}`);
+    await ready(page, 6);
+
+    expect(new URL(page.url()).searchParams.get("root")).toBe(refKey(PERSONALIZED_VIEW_REFS.application_space));
+    await expect(page.getByRole("option", { name: /Personal Knowledge Workspace/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /Synthetic Codex Architecture Session/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /View Model Decisions/ })).toBeVisible();
+    await expect(page.getByLabel("Relations in projection")).toContainText("derived_from: 4");
+
+    await page.getByRole("search").getByRole("textbox").fill("Metaflow Implementation Working State");
+    await page.getByRole("button", { name: "Focus search result" }).click();
+    const workingStateKey = refKey(PERSONALIZED_VIEW_REFS.working_state);
+    await expect(page.locator(".detail-heading code")).toHaveText(workingStateKey);
+    await assertFocusedNodeVisible(page, workingStateKey);
+    expect(new URL(page.url()).searchParams.get("selected")).toBe(workingStateKey);
+
+    if (viewport.name === "mobile") {
+      await page.getByRole("button", { name: "Toggle exact View details" }).click();
+      await expect(page.locator(".right-panel")).toHaveClass(/mobile-open/);
+    }
+    await expect(page.locator(".detail-heading h2")).toHaveText("Metaflow Implementation Working State");
+    await expect(page.locator(".details")).toContainText("personalized.working_state@1");
+    const provenance = page.locator("section.provenance");
+    await expect(provenance).toContainText("operator:personalized-working-state");
+    for (const ref of [
+      PERSONALIZED_VIEW_REFS.codex_history,
+      PERSONALIZED_VIEW_REFS.obsidian_view_model,
+      PERSONALIZED_VIEW_REFS.obsidian_search_graph,
+      PERSONALIZED_VIEW_REFS.obsidian_connector_design,
+    ]) {
+      await expect(provenance).toContainText(`${ref.view_id}@${ref.revision}`);
+    }
+
+    const histogram = await canvasHistogram(page);
+    expect(histogram.nonBackgroundPixels).toBeGreaterThan(20);
+    expect(histogram.uniqueColors).toBeGreaterThan(4);
+    await assertSeparatedLayout(page);
+    await assertViewportContainment(page, viewport.width, viewport.height);
+    await testInfo.attach(`${viewport.name}-personalized-application-space`, {
+      body: await page.screenshot({ animations: "disabled" }),
+      contentType: "image/png",
+    });
+    expect(operationRequests.length).toBeGreaterThan(0);
+    expect(transport.calls.some(call => call.operation === "view.graph.project")).toBe(true);
+    expect(transport.calls.some(call => call.operation === "view.get")).toBe(true);
+    expect(transport.calls.some(call => call.operation === "view.search")).toBe(false);
     expect(errors).toEqual([]);
   });
 }
@@ -430,4 +493,33 @@ async function assertSeparatedLayout(page: Page): Promise<void> {
   expect(boxes[".graph-stage"]!.bottom).toBeLessThanOrEqual(boxes[".companion"]!.top + 1);
   expect(boxes[".left-panel"]!.bottom).toBeLessThanOrEqual(boxes[".companion"]!.top + 1);
   expect(boxes[".right-panel"]!.bottom).toBeLessThanOrEqual(boxes[".companion"]!.top + 1);
+}
+
+async function assertViewportContainment(page: Page, width: number, height: number): Promise<void> {
+  const boxes = await page.evaluate(() => Object.fromEntries([
+    ".topbar",
+    ".graph-stage",
+    ".companion",
+    ".detail-heading",
+    "section.provenance",
+  ].map(selector => {
+    const element = document.querySelector(selector);
+    const rect = element?.getBoundingClientRect();
+    if (!element || !rect) throw new Error(`Missing personalized workflow surface ${selector}`);
+    return [selector, {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }];
+  })));
+  for (const [selector, box] of Object.entries(boxes)) {
+    expect(box.top, `${selector} top`).toBeGreaterThanOrEqual(-1);
+    expect(box.right, `${selector} right`).toBeLessThanOrEqual(width + 1);
+    expect(box.bottom, `${selector} bottom`).toBeLessThanOrEqual(height + 1);
+    expect(box.left, `${selector} left`).toBeGreaterThanOrEqual(-1);
+    expect(box.scrollWidth, `${selector} horizontal overflow`).toBeLessThanOrEqual(box.clientWidth + 1);
+  }
 }

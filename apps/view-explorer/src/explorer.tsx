@@ -26,7 +26,7 @@ import {
   type ViewGraphProjectionRequest,
   type ViewGraphProjectionResult,
 } from "./contracts.js";
-import { createFixtureTransport, parseFixtureSize } from "./fixtures.js";
+import { createFixtureTransport, fixtureRoot, parseFixtureId } from "./fixtures.js";
 import { type CameraState, mergeProjection } from "./graph-projection.js";
 import { ExplorerClientError, ViewExplorerOperationClient } from "./operation-client.js";
 import { ExplorerRequestCoordinator } from "./request-coordinator.js";
@@ -53,7 +53,7 @@ export function ViewExplorer() {
   const initial = useMemo(readUrlState, []);
   const fixtureTransport = useMemo(() => initial.fixture ? createFixtureTransport(initial.fixture) : undefined, [initial.fixture]);
   const client = useMemo(() => new ViewExplorerOperationClient(fixtureTransport), [fixtureTransport]);
-  const [root, setRoot] = useState<ExactViewRef | undefined>(initial.root ?? (initial.fixture ? { view_id: "view:fixture:0000", revision: 1 } : undefined));
+  const [root, setRoot] = useState<ExactViewRef | undefined>(initial.root ?? (initial.fixture ? fixtureRoot(initial.fixture) : undefined));
   const [projection, setProjection] = useState<ViewGraphProjectionResult>();
   const [selectedKey, setSelectedKey] = useState(initial.selected);
   const [view, setView] = useState<View>();
@@ -183,7 +183,7 @@ export function ViewExplorer() {
   }, [client, commitProjection]);
 
   useEffect(() => {
-    const initialRoot = initial.root ?? (initial.fixture ? { view_id: "view:fixture:0000", revision: 1 } : undefined);
+    const initialRoot = initial.root ?? (initial.fixture ? fixtureRoot(initial.fixture) : undefined);
     if (initialRoot) void loadProjection(initialRoot, {
       direction: initial.direction,
       depth: initial.depth,
@@ -513,7 +513,7 @@ function readUrlState() {
   const depthValue = Number(params.get("depth") ?? 2);
   const cameraValues = ["cx", "cy", "ratio", "angle"].map(key => Number(params.get(key)));
   const camera = cameraValues.every(Number.isFinite) && cameraValues[2]! > 0 ? { x: cameraValues[0]!, y: cameraValues[1]!, ratio: cameraValues[2]!, angle: cameraValues[3]! } : undefined;
-  return { fixture: parseFixtureSize(params.get("fixture")), root: parseExactRef(params.get("root") ?? ""), selected: parseExactRef(params.get("selected") ?? "") ? params.get("selected")! : undefined, direction, depth: Number.isInteger(depthValue) ? Math.max(0, Math.min(5, depthValue)) : 2, edgeTypes: edgeTypes.length ? edgeTypes : [...EXPLORER_DEFAULT_EDGE_TYPES], camera, forceWebglFailure: params.get("webgl") === "off" };
+  return { fixture: parseFixtureId(params.get("fixture")), root: parseExactRef(params.get("root") ?? ""), selected: parseExactRef(params.get("selected") ?? "") ? params.get("selected")! : undefined, direction, depth: Number.isInteger(depthValue) ? Math.max(0, Math.min(5, depthValue)) : 2, edgeTypes: edgeTypes.length ? edgeTypes : [...EXPLORER_DEFAULT_EDGE_TYPES], camera, forceWebglFailure: params.get("webgl") === "off" };
 }
 
 class ExplorerNavigationError extends Error {

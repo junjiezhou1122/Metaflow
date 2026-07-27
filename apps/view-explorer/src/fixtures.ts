@@ -3,6 +3,7 @@ import {
   refKey,
   type ExactViewRef,
   type ExplorerOperation,
+  type JsonValue,
   type OperationEnvelope,
   type View,
   type ViewGraphProjectionEdge,
@@ -13,6 +14,18 @@ import type { OperationTransport } from "./operation-client.js";
 
 export const FIXTURE_SIZES = [1, 10, 500, 2_000] as const;
 export type FixtureSize = typeof FIXTURE_SIZES[number];
+export const PERSONALIZED_FIXTURE_ID = "personalized" as const;
+export type FixtureId = FixtureSize | typeof PERSONALIZED_FIXTURE_ID;
+
+export const PERSONALIZED_VIEW_REFS = {
+  application_space: { view_id: "view:fixture:view-explorer:personalized:application-space", revision: 1 },
+  working_state: { view_id: "view:fixture:view-explorer:personalized:working-state", revision: 1 },
+  codex_history: { view_id: "view:fixture:view-explorer:personalized:codex-history:session-001", revision: 1 },
+  obsidian_view_model: { view_id: "view:fixture:view-explorer:personalized:obsidian-note:view-model", revision: 1 },
+  obsidian_search_graph: { view_id: "view:fixture:view-explorer:personalized:obsidian-note:search-graph", revision: 1 },
+  obsidian_connector_design: { view_id: "view:fixture:view-explorer:personalized:obsidian-note:connector-design", revision: 1 },
+} as const satisfies Record<string, ExactViewRef>;
+
 const CREATED_AT = "2026-07-27T08:00:00.000Z";
 const EDGE_TYPES = EXPLORER_DEFAULT_EDGE_TYPES;
 
@@ -25,8 +38,18 @@ export function parseFixtureSize(value: string | null): FixtureSize | undefined 
   return FIXTURE_SIZES.find(candidate => candidate === size);
 }
 
-export function createFixtureTransport(size: FixtureSize): FixtureTransport {
-  const full = makeFixtureProjection(size);
+export function parseFixtureId(value: string | null): FixtureId | undefined {
+  if (value === PERSONALIZED_FIXTURE_ID) return PERSONALIZED_FIXTURE_ID;
+  return parseFixtureSize(value);
+}
+
+export function fixtureRoot(fixture: FixtureId): ExactViewRef {
+  return fixture === PERSONALIZED_FIXTURE_ID ? PERSONALIZED_VIEW_REFS.application_space : fixtureRef(0);
+}
+
+export function createFixtureTransport(fixture: FixtureId): FixtureTransport {
+  const full = fixture === PERSONALIZED_FIXTURE_ID ? makePersonalizedProjection() : makeFixtureProjection(fixture);
+  const views = fixture === PERSONALIZED_FIXTURE_ID ? makePersonalizedViews() : undefined;
   const calls: Array<{ operation: ExplorerOperation; input: unknown }> = [];
   return {
     calls,
@@ -45,8 +68,9 @@ export function createFixtureTransport(size: FixtureSize): FixtureTransport {
       if (operation === "view.get") {
         const ref = (input as { ref?: ExactViewRef }).ref;
         const node = ref ? full.nodes.find(candidate => refKey(candidate.ref) === refKey(ref)) : undefined;
-        const data = makeFixtureView(node ?? makeExpandedNode(ref ?? full.roots[0]!));
-        return { ok: true, request_id, operation, data };
+        const data = ref ? views?.get(refKey(ref)) : undefined;
+        const resolved = data ?? makeFixtureView(node ?? makeExpandedNode(ref ?? full.roots[0]!));
+        return { ok: true, request_id, operation, data: resolved };
       }
       const text = String((input as { request?: { query?: { text?: string } } }).request?.query?.text ?? "").toLowerCase();
       const matches = full.nodes.filter(node => `${node.name} ${node.schema.name} ${node.ref.view_id}`.toLowerCase().includes(text)).slice(0, 20);
@@ -71,6 +95,42 @@ export function createFixtureTransport(size: FixtureSize): FixtureTransport {
         },
       };
     },
+  };
+}
+
+export function makePersonalizedProjection(): ViewGraphProjectionResult {
+  const refs = PERSONALIZED_VIEW_REFS;
+  const relations = {
+    working: "personalized:application:working-state",
+    codex: "personalized:application:codex-history",
+    viewModel: "personalized:application:obsidian-view-model",
+    searchGraph: "personalized:application:obsidian-search-graph",
+    connectorDesign: "personalized:application:obsidian-connector-design",
+  } as const;
+  const inputs = [
+    [relations.codex, refs.codex_history, "Synthetic Codex Architecture Session", "codex.history.session", "json"],
+    [relations.viewModel, refs.obsidian_view_model, "View Model Decisions", "obsidian.markdown.note", "markdown"],
+    [relations.searchGraph, refs.obsidian_search_graph, "Search and Graph Notes", "obsidian.markdown.note", "markdown"],
+    [relations.connectorDesign, refs.obsidian_connector_design, "Connector Design Notes", "obsidian.markdown.note", "markdown"],
+  ] as const;
+  const nodes: ViewGraphProjectionNode[] = [
+    personalizedNode(refs.application_space, "Personal Knowledge Workspace", "Keep useful exact Views in one immutable Application Space", "metaflow.application_space", "derived", "graph", 0, []),
+    personalizedNode(refs.working_state, "Metaflow Implementation Working State", "Reconcile code-reflected decisions, wiki-only decisions, and contradictions", "personalized.working_state", "derived", "json", 1, [relations.working]),
+    ...inputs.map(([edgeId, ref, name, schema, representation]) => personalizedNode(ref, name, "Synthetic source evidence for personalized workflow acceptance", schema, "raw", representation, 1, [edgeId])),
+  ];
+  const edges: ViewGraphProjectionEdge[] = [
+    { id: relations.working, type: "application_composition", source: refs.application_space, target: refs.working_state, depth: 1 },
+    ...inputs.map(([edgeId, ref]) => ({ id: edgeId, type: "application_member", source: refs.application_space, target: ref, depth: 1 })),
+    ...inputs.map(([, ref], index) => ({ id: `personalized:working-state:input:${index + 1}`, type: "derived_from", source: refs.working_state, target: ref, depth: 2 })),
+  ];
+  return {
+    projection_version: 1,
+    roots: [refs.application_space],
+    nodes,
+    edges,
+    frontier: [],
+    truncation: { truncated: false, reasons: [] },
+    redacted_boundary: false,
   };
 }
 
@@ -210,5 +270,84 @@ export function makeFixtureView(node: ViewGraphProjectionNode): View {
     } : { inputs: node.depth > 0 ? [{ view_id: "view:fixture:0000", revision: 1 }] : [], actor: "operator:fixture", operator_run_id: "run:fixture" },
     policy: { owner: "user:fixture", visibility: "private", privacy: "private", retention: "normal", allow_external_model: false, allow_embedding: false, allow_local_search: true, labels: [] },
     metadata: {},
+  };
+}
+
+function makePersonalizedViews(): Map<string, View> {
+  const projection = makePersonalizedProjection();
+  const inputRefs = [
+    PERSONALIZED_VIEW_REFS.codex_history,
+    PERSONALIZED_VIEW_REFS.obsidian_view_model,
+    PERSONALIZED_VIEW_REFS.obsidian_search_graph,
+    PERSONALIZED_VIEW_REFS.obsidian_connector_design,
+  ];
+  return new Map(projection.nodes.map(node => {
+    const raw = node.role === "raw";
+    const isWorkingState = refKey(node.ref) === refKey(PERSONALIZED_VIEW_REFS.working_state);
+    const value: JsonValue = isWorkingState ? {
+      code_reflected_decisions: ["Exact View revisions remain immutable evidence"],
+      wiki_only_decisions: ["Parser Workers form bounded searchable fragments"],
+      contradictions: ["One synthetic decision requires explicit reconciliation"],
+      sources: inputRefs.map(refKey),
+    } : refKey(node.ref) === refKey(PERSONALIZED_VIEW_REFS.application_space) ? {
+      entries: projection.nodes.slice(1).map(candidate => refKey(candidate.ref)),
+    } : {
+      synthetic: true,
+      source_kind: node.schema.name === "codex.history.session" ? "codex_history" : "obsidian_markdown",
+      title: node.name,
+    };
+    const view: View = {
+      ...makeFixtureView(node),
+      representation: {
+        form: "inline",
+        kind: node.representation.kind,
+        ...(node.representation.media_type ? { media_type: node.representation.media_type } : {}),
+        value,
+        metadata: { fixture: PERSONALIZED_FIXTURE_ID },
+      },
+      provenance: raw ? {
+        inputs: [],
+        actor: "capture-ingress",
+        capture: {
+          connector: node.schema.name === "codex.history.session" ? "codex-history" : "obsidian",
+          connection_id: node.schema.name === "codex.history.session" ? "fixture:codex-history" : "fixture:obsidian",
+          source_id: node.ref.view_id,
+          source_kind: "synthetic_fixture",
+          identity: "stable_source",
+          assertion: "direct",
+        },
+      } : {
+        inputs: isWorkingState ? inputRefs : projection.nodes.slice(1).map(candidate => candidate.ref),
+        actor: isWorkingState ? "operator:personalized-working-state" : "operator:application-space",
+        operator_run_id: isWorkingState ? "run:personalized-working-state:001" : "run:personalized-application-space:001",
+      },
+    };
+    return [refKey(node.ref), view];
+  }));
+}
+
+function personalizedNode(
+  ref: ExactViewRef,
+  name: string,
+  purpose: string,
+  schemaName: string,
+  role: ViewGraphProjectionNode["role"],
+  representationKind: string,
+  depth: number,
+  path: string[],
+): ViewGraphProjectionNode {
+  return {
+    ref,
+    name,
+    purpose,
+    schema: { name: schemaName, version: 1 },
+    role,
+    time: { ...(role === "raw" ? { observed_at: CREATED_AT } : {}), created_at: CREATED_AT },
+    representation: {
+      kind: representationKind,
+      media_type: representationKind === "markdown" ? "text/markdown" : "application/json",
+    },
+    depth,
+    path,
   };
 }

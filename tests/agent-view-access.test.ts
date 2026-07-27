@@ -80,7 +80,7 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
       expected_revision: 0,
     })).view;
     const personalizedRoot = (await composition.views.commit({
-      draft: viewDraft("view:agent:personalized", "Personalized workflow bridge evidence", [{
+      draft: viewDraft("view:fixture:agent-access:personalized-working-state", "Metaflow Implementation Working State", [{
         type: edgeType,
         target: exactViewRef(neighbor),
       }, {
@@ -89,6 +89,7 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
       }]),
       expected_revision: 0,
     })).view;
+    assert.notEqual(personalizedRoot.id, "view:personalized:working-state");
     const port = await listen(server);
     const daemonUrl = `http://127.0.0.1:${port}`;
     const installedMf = installCli(directory);
@@ -186,7 +187,7 @@ test("installed mf, real daemon MCP, and the canonical skill preserve exact auth
         MF_BIN: installedMf,
         MF_SKILL: skillPath,
         MF_EDGE_TYPE: edgeType,
-        MF_QUERY: "Personalized workflow bridge evidence",
+        MF_QUERY: "Metaflow Implementation Working State",
         METAFLOW_AUTH_TOKEN: operationAuthToken,
       },
     });
