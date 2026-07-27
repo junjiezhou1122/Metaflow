@@ -35,6 +35,7 @@ import {
   ViewBrowserAutomationCatalog,
 } from "@info/browser-automation-adapter";
 import { configureBrowserCapture } from "@info/browser-capture-adapter";
+import { FunctionOperatorAdapter } from "@info/function-operator-adapter";
 import {
   CodexHistoryCaptureConnector,
   configureCodexHistoryCapture,
@@ -43,6 +44,17 @@ import {
   ObsidianCaptureAdapter,
   configureObsidianCapture,
 } from "@info/obsidian-capture-adapter";
+import {
+  ScreenpipeCaptureConnector,
+  ScreenpipeOpenParametersSchema,
+  configureScreenpipeCapture,
+} from "@info/screenpipe-capture-adapter";
+import {
+  SCREENPIPE_AUDIO_FUNCTION,
+  SCREENPIPE_TIMELINE_FUNCTION,
+  executeScreenpipeAudio,
+  executeScreenpipeTimeline,
+} from "@info/screenpipe-derived-views";
 import {
   BrowserDomRequestBroker,
   MacAutomationController,
@@ -100,6 +112,10 @@ export type AmbientDaemonCompositionOptions = {
       connector?: ObsidianCaptureAdapter;
       connections: readonly SourceConnection[];
     };
+    screenpipe?: {
+      connector?: ScreenpipeCaptureConnector;
+      connection?: SourceConnection;
+    };
   };
   now?: () => Date;
 };
@@ -144,8 +160,13 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       mcp_servers: options.agent_mcp_servers,
       now,
     });
+    const functions = new FunctionOperatorAdapter([
+      { reference: SCREENPIPE_TIMELINE_FUNCTION, execute: executeScreenpipeTimeline },
+      { reference: SCREENPIPE_AUDIO_FUNCTION, execute: executeScreenpipeAudio },
+    ]);
     const operators = new OperatorExecutionRouter([
       { kind: "agent", port: new AgentOperatorExecutionBridge(agent, { now: () => now().toISOString() }) },
+      { kind: "function", port: functions },
     ]);
     const execution = new ExecutionRuntime(
       views,
@@ -355,6 +376,7 @@ async function configureExternalCaptureSources(
   sources: AmbientDaemonCompositionOptions["capture_sources"],
 ) {
   const configured = new Set<string>();
+  const explicitParametersRequired = new Set<string>();
   if (sources?.codex_history) {
     const result = await configureCodexHistoryCapture({
       runtime,
@@ -376,16 +398,46 @@ async function configureExternalCaptureSources(
       configured.add(connection.id);
     }
   }
+  if (sources?.screenpipe) {
+    const result = await configureScreenpipeCapture({
+      runtime,
+      ...(sources.screenpipe.connector ? { connector: sources.screenpipe.connector } : {}),
+      ...(sources.screenpipe.connection ? { connection: sources.screenpipe.connection } : {}),
+    });
+    configured.add(result.connection.id);
+    explicitParametersRequired.add(result.connection.id);
+  }
   const connectionIds = Object.freeze([...configured].sort());
   return Object.freeze({
     connection_ids: connectionIds,
-    async pull(connectionId: string) {
+    async pull(connectionId: string, parameters?: Record<string, unknown>) {
       if (!configured.has(connectionId)) {
         throw new Error(`Capture Source Connection is not configured in this composition: ${connectionId}`);
       }
-      return runtime.run(connectionId, "pull", {});
+      const boundedParameters = explicitParametersRequired.has(connectionId)
+        ? boundedScreenpipePullParameters(connectionId, parameters)
+        : parameters ?? {};
+      return runtime.run(connectionId, "pull", boundedParameters);
     },
   });
+}
+
+function boundedScreenpipePullParameters(
+  connectionId: string,
+  parameters: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const parsed = ScreenpipeOpenParametersSchema.safeParse(parameters);
+  if (!parsed.success) {
+    throw new Error(`Screenpipe Capture Source Connection requires strict explicit pull parameters: ${connectionId}`);
+  }
+  const { start_time: start, end_time: end } = parsed.data.query;
+  if (!start || !end) {
+    throw new Error(`Screenpipe Capture Source Connection requires an explicit bounded period: ${connectionId}`);
+  }
+  if (Date.parse(end) - Date.parse(start) > 86_400_000) {
+    throw new Error(`Screenpipe Capture Source Connection period exceeds 24 hours: ${connectionId}`);
+  }
+  return parsed.data;
 }
 
 async function seedTransformation(

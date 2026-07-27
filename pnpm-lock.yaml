@@ -68,6 +68,12 @@ importers:
       '@info/screenpipe-capture-adapter':
         specifier: workspace:*
         version: link:packages/adapters/screenpipe-capture
+      '@info/screenpipe-contracts':
+        specifier: workspace:*
+        version: link:packages/screenpipe-contracts
+      '@info/screenpipe-derived-views':
+        specifier: workspace:*
+        version: link:packages/adapters/screenpipe-derived-views
       '@info/search':
         specifier: workspace:*
         version: link:packages/search
@@ -144,6 +150,9 @@ importers:
       '@info/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@info/function-operator-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/function-operator
       '@info/inbox-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/inbox-automation
@@ -162,6 +171,12 @@ importers:
       '@info/scheduler-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/scheduler-automation
+      '@info/screenpipe-capture-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/screenpipe-capture
+      '@info/screenpipe-derived-views':
+        specifier: workspace:*
+        version: link:../../packages/adapters/screenpipe-derived-views
       '@info/search':
         specifier: workspace:*
         version: link:../../packages/search
@@ -536,6 +551,27 @@ importers:
       '@info/capture':
         specifier: workspace:*
         version: link:../../capture
+      '@info/screenpipe-contracts':
+        specifier: workspace:*
+        version: link:../../screenpipe-contracts
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../view
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
+  packages/adapters/screenpipe-derived-views:
+    dependencies:
+      '@info/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@info/screenpipe-contracts':
+        specifier: workspace:*
+        version: link:../../screenpipe-contracts
+      '@info/transformation':
+        specifier: workspace:*
+        version: link:../../transformation
       '@info/view':
         specifier: workspace:*
         version: link:../../view
@@ -662,6 +698,15 @@ importers:
         version: link:../view
       zod:
         specifier: ^3.25.76
+        version: 3.25.76
+
+  packages/screenpipe-contracts:
+    dependencies:
+      '@info/view':
+        specifier: workspace:*
+        version: link:../view
+      zod:
+        specifier: ^3.24.4
         version: 3.25.76
 
   packages/search:

@@ -75,6 +75,10 @@ but there is no separate canonical Worker domain layer.
   `rrf@1` fusion. It receives only exact authorized View refs at retriever
   ports and never imports SQLite, a parser, model SDK, vector store, or
   transport.
+- `packages/screenpipe-contracts`: the transport-neutral strict Screenpipe wire
+  and admitted Raw source-value contract shared by Screenpipe Capture and
+  Screenpipe-derived Operators. It owns no service access, credentials,
+  checkpoint, View admission, Transformation, or storage behavior.
 - `packages/adapters/*`: independent workspace packages implementing storage,
   Browser, Screenpipe, III, Agent Operator, Trigger, Delivery, and
   Materialization ports.
@@ -137,10 +141,21 @@ but there is no separate canonical Worker domain layer.
   capture; pulls OCR, Audio, Input, and Accessibility separately because
   Screenpipe `content_type=all` is incomplete; uses per-modality ascending time
   watermarks with bounded inclusive overlap instead of unstable global offsets;
+  keeps one endpoint-scoped Source Connection identity while modalities, bounds,
+  and explicit time windows change, and rejects drift in content selectors after
+  a watermark exists;
   resolves Bearer credentials from one exact `SecretReference` only for
   protected endpoints; and leaves checkpoint, retry, atomic admission, trace,
   and DLQ to the shared Connector Runtime. Do not vendor, bundle, auto-install,
   or read Screenpipe's internal SQLite.
+- `packages/adapters/screenpipe-derived-views`: registers deterministic Function
+  Operators that compress exact Screenpipe Raw Views into strict searchable
+  `metaflow.screenpipe.timeline@1` and `metaflow.screenpipe.audio@1` Derived
+  Views. Timeline preserves bounded chronological multimodal entries; Audio
+  composes only source transcript segments and performs no speaker or semantic
+  inference. Both retain every exact input as provenance and `derived_from`
+  relations, return untrusted candidates through Execution, and never access
+  Screenpipe, Capture Runtime, or storage directly.
 - `packages/adapters/clipboard-capture`: the minimum Connector Kit reference.
   It preserves accepted native clipboard fields in one occurrence Raw View,
   emits file values as external-reference Raw Views, and delegates admission,

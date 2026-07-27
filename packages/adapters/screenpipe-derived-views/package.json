@@ -1,5 +1,5 @@
 {
-  "name": "@info/screenpipe-capture-adapter",
+  "name": "@info/screenpipe-derived-views",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,8 +7,9 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "@info/capture": "workspace:*",
+    "@info/execution": "workspace:*",
     "@info/screenpipe-contracts": "workspace:*",
+    "@info/transformation": "workspace:*",
     "@info/view": "workspace:*",
     "zod": "^3.24.4"
   }

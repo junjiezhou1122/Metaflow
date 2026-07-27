@@ -56,7 +56,10 @@ export function safeCaptureError(
       message: `Capture storage operation failed with ${error.code}`,
       stage: error.code === "storage_failure" ? "storage" : "admission",
       retryable: error.code === "storage_failure",
-      details: { operation: error.details.operation, phase: error.details.phase ?? "unknown" },
+      details: {
+        operation: error.details.operation,
+        phase: error.details.phase ?? "unknown",
+      },
     });
   }
   if (error instanceof ConnectorProtocolError) {

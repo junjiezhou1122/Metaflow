@@ -21,8 +21,8 @@ A Schema may declare `search_projection@1`, a bounded list of RFC 6901-compatibl
 JSON Pointers (with `*` for array items) categorized as title, text, identifier,
 URL, timestamp, or provenance.
 Only those scalar source fields enter local full-text search. Missing optional
-fields and empty strings contribute nothing; an invalid declared scalar, URL,
-or timestamp rejects the complete View transaction.
+fields, explicit nulls, and empty strings contribute nothing; an array, object,
+invalid URL, or invalid timestamp rejects the complete View transaction.
 
 `policy.allow_local_search` is independent from external-model and embedding
 permission. An omitted legacy value means allowed; explicit false excludes that

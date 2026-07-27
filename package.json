@@ -39,6 +39,8 @@
     "test:failure-repair": "node --experimental-sqlite --import tsx --test tests/failure-repair.test.ts",
     "test:browser-capture": "node --experimental-sqlite --import tsx --test tests/browser-capture.test.ts tests/browser-automation.test.ts tests/browser-automation-extension.test.ts tests/browser-automation-http.test.ts tests/ambient-daemon-vertical.test.ts",
     "test:screenpipe-capture": "node --experimental-sqlite --import tsx --test tests/screenpipe-capture.test.ts",
+    "test:screenpipe-derived": "node --experimental-sqlite --import tsx --test tests/screenpipe-derived-views.test.ts",
+    "screenpipe:derive": "node --experimental-sqlite --import tsx scripts/v1/screenpipe-capture-derived.ts",
     "test:obsidian-capture": "node --experimental-sqlite --import tsx --test tests/obsidian-capture.test.ts",
     "test:codex-history-capture": "node --experimental-sqlite --import tsx --test tests/codex-history-capture.test.ts",
     "test:web-view-renderers": "node --import tsx --test packages/adapters/web-view-renderers/web-view-renderers.test.ts tests/view-package.test.ts",
@@ -56,7 +58,7 @@
     "test:boundaries": "node --import tsx --test tests/package-boundaries.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.v1.json && pnpm --dir apps/view-explorer exec tsc --noEmit",
     "typecheck:v1": "tsc --noEmit -p tsconfig.v1.json && pnpm --dir apps/view-explorer exec tsc --noEmit",
-    "check:boundaries": "depcruise --config dependency-cruiser.config.cjs packages/view packages/view-package packages/transformation packages/execution packages/automation packages/capture packages/search packages/operations packages/adapters view-packages && tsx scripts/check-v1-package-manifests.ts",
+    "check:boundaries": "depcruise --config dependency-cruiser.config.cjs packages/view packages/view-package packages/transformation packages/execution packages/automation packages/capture packages/search packages/operations packages/screenpipe-contracts packages/adapters view-packages && tsx scripts/check-v1-package-manifests.ts",
     "verify:v1:boundaries": "pnpm typecheck:v1 && pnpm check:boundaries && pnpm test:boundaries"
   },
   "dependencies": {
@@ -79,7 +81,9 @@
     "@info/operations": "workspace:*",
     "@info/search": "workspace:*",
     "@info/scheduler-automation-adapter": "workspace:*",
+    "@info/screenpipe-contracts": "workspace:*",
     "@info/screenpipe-capture-adapter": "workspace:*",
+    "@info/screenpipe-derived-views": "workspace:*",
     "@info/storage-sqlite": "workspace:*",
     "@info/transformation": "workspace:*",
     "@info/transformation-sqlite": "workspace:*",

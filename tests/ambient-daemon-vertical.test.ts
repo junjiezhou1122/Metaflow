@@ -15,6 +15,10 @@ import {
   OBSIDIAN_SECRET_POLICY,
   obsidianSourceConnection,
 } from "@info/obsidian-capture-adapter";
+import {
+  ScreenpipeCaptureConnector,
+  screenpipeSourceConnection,
+} from "@info/screenpipe-capture-adapter";
 import { buildBrowserAutomationEvent, buildBrowserDeliveryInteraction } from "../apps/chrome-acp/packages/chrome-extension/src/lib/ambient/browser-trigger.ts";
 import type {
   AgentRuntimeAdapter,
@@ -166,7 +170,7 @@ test("Ambient composition persists exact Transformation owners and projects cano
   }
 });
 
-test("Ambient composition registers and pulls explicit Codex and Obsidian Source Connections", async () => {
+test("Ambient composition registers explicit Codex, Obsidian, and Screenpipe Source Connections", async () => {
   const directory = mkdtempSync(join(tmpdir(), "metaflow-ambient-sources-"));
   const codexHome = join(directory, "codex-home");
   const rolloutDirectory = join(codexHome, "sessions", "2026", "07", "27");
@@ -198,6 +202,11 @@ test("Ambient composition registers and pulls explicit Codex and Obsidian Source
       secret_policy: OBSIDIAN_SECRET_POLICY,
     },
   });
+  const screenpipeConnection = screenpipeSourceConnection({
+    id: "screenpipe:composition",
+    endpoint: "http://screenpipe.test",
+    required_capabilities: ["frame_ocr", "audio"],
+  });
   const composition = await createAmbientDaemonComposition({
     data_directory: join(directory, "data"),
     agent_runtime: new DeterministicAcpRuntime(),
@@ -210,6 +219,10 @@ test("Ambient composition registers and pulls explicit Codex and Obsidian Source
         connection: codexConnection,
       },
       obsidian: { connections: [obsidianConnection] },
+      screenpipe: {
+        connector: new ScreenpipeCaptureConnector(),
+        connection: screenpipeConnection,
+      },
     },
     now: () => new Date("2026-07-27T01:05:00.000Z"),
   });
@@ -217,9 +230,32 @@ test("Ambient composition registers and pulls explicit Codex and Obsidian Source
     assert.deepEqual(composition.captureSources.connection_ids, [
       "codex-history:composition",
       "obsidian:composition",
+      "screenpipe:composition",
     ]);
     await composition.captureSources.pull(codexConnection.id);
     await composition.captureSources.pull(obsidianConnection.id);
+    await assert.rejects(
+      composition.captureSources.pull(screenpipeConnection.id),
+      /requires strict explicit pull parameters/,
+    );
+    await assert.rejects(
+      composition.captureSources.pull(screenpipeConnection.id, {}),
+      /requires strict explicit pull parameters/,
+    );
+    await assert.rejects(
+      composition.captureSources.pull(screenpipeConnection.id, { resource: "search", query: {} }),
+      /requires an explicit bounded period/,
+    );
+    await assert.rejects(
+      composition.captureSources.pull(screenpipeConnection.id, {
+        resource: "search",
+        query: {
+          start_time: "2026-07-25T01:05:00.000Z",
+          end_time: "2026-07-27T01:05:00.000Z",
+        },
+      }),
+      /period exceeds 24 hours/,
+    );
     assert.equal((await composition.views.query({
       schema_name: "capture.codex.session",
       revisions: "latest",

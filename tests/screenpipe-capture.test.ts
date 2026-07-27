@@ -241,6 +241,34 @@ test("recorded Screenpipe REST fixtures retain source-native modalities through 
   }
 });
 
+test("nullable Screenpipe browser URLs remain Raw evidence without creating invalid search units", async () => {
+  const calls: string[] = [];
+  const baseFetch = recordedFixtureFetch(calls);
+  const harness = await setup({
+    required_capabilities: ["frame_ocr"],
+    fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+      const response = await baseFetch(input, init);
+      const url = new URL(String(input));
+      if (url.pathname !== "/search") return response;
+      const body = await response.json() as { data: Array<{ content: { browser_url: string | null } }> };
+      for (const item of body.data) item.content.browser_url = null;
+      return jsonResponse(body);
+    }) as typeof fetch,
+  });
+  try {
+    const result = await harness.runtime.run(harness.connection.id, "pull", {
+      resource: "search",
+      query: { content_types: ["ocr"], limit: 1 },
+    });
+    assert.equal(result[0]?.receipts.length, 1);
+    const views = await harness.repository.query({ schema_name: "capture.screenpipe.frame_ocr", limit: 10 });
+    assert.equal(views.length, 1);
+    assert.deepEqual((await harness.repository.query({ text: "exact Raw View evidence" })).map(view => view.id), [views[0]?.id]);
+  } finally {
+    harness.repository.close();
+  }
+});
+
 test("incompatible and degraded health responses fail before capability probes", async () => {
   for (const [name, expectedCode] of [
     ["health-incompatible-0.5.0.json", "screenpipe_incompatible_version"],
@@ -547,6 +575,7 @@ test("failed admission freezes the watermark and exact replay remains stable acr
               "forced Screenpipe admission failure",
               "storage_failure",
               { operation: "commit_capture_batch", phase: "test" },
+              { cause: new Error("provider cause_message=must-not-persist") },
             );
           }
           return target.commitCaptureBatch(...args);
@@ -589,6 +618,9 @@ test("failed admission freezes the watermark and exact replay remains stable acr
     assert.deepEqual((await repository.getCaptureCheckpoint(harness.connection.id))?.cursor, {});
     const deadLetters = await repository.listCaptureDeadLetters(harness.connection.id, "pending");
     assert.equal(deadLetters.length, 1);
+    assert.equal("cause_name" in (deadLetters[0]?.error.details ?? {}), false);
+    assert.equal("cause_message" in (deadLetters[0]?.error.details ?? {}), false);
+    assert.doesNotMatch(JSON.stringify(deadLetters), /must-not-persist|cause_message/);
 
     const recovered = await harness.runtime.run(harness.connection.id, "pull", {
       resource: "search",
@@ -680,7 +712,7 @@ test("inclusive overlap scans past replayed rows and advances multiple identitie
   }
 });
 
-test("a modality watermark rejects selector drift instead of silently applying the old scope", async () => {
+test("a modality watermark accepts rolling time bounds but rejects true selector drift", async () => {
   const captureRequests: URL[] = [];
   const harness = await setup({
     required_capabilities: ["frame_ocr"],
@@ -694,9 +726,42 @@ test("a modality watermark rejects selector drift instead of silently applying t
   try {
     await harness.runtime.run(harness.connection.id, "pull", {
       resource: "search",
-      query: { content_types: ["ocr"], app_name: "App A", start_time: "2026-07-26T09:00:00.000Z", limit: 1 },
+      query: {
+        content_types: ["ocr"],
+        app_name: "App A",
+        start_time: "2026-07-26T09:00:00.000Z",
+        end_time: "2026-07-26T12:01:00.000Z",
+        limit: 1,
+      },
     });
+    const rolling = await harness.runtime.run(harness.connection.id, "pull", {
+      resource: "search",
+      query: {
+        content_types: ["ocr"],
+        app_name: "App A",
+        start_time: "2026-07-26T10:00:00.000Z",
+        end_time: "2026-07-26T12:02:00.000Z",
+        max_content_length: 50_000,
+        limit: 1,
+      },
+    });
+    assert.deepEqual(rolling, []);
     const before = await harness.repository.getCaptureCheckpoint(harness.connection.id);
+    await assert.rejects(
+      harness.runtime.run(harness.connection.id, "pull", {
+        resource: "search",
+        query: {
+          content_types: ["ocr"],
+          app_name: "App A",
+          start_time: "2026-07-26T09:00:00.000Z",
+          end_time: "2026-07-26T11:00:00.000Z",
+          limit: 1,
+        },
+      }),
+      (error: unknown) => error instanceof CaptureRuntimeError
+        && error.code === "screenpipe_checkpoint_window_regression"
+        && error.retryable === false,
+    );
     await assert.rejects(
       harness.runtime.run(harness.connection.id, "pull", {
         resource: "search",
@@ -706,8 +771,9 @@ test("a modality watermark rejects selector drift instead of silently applying t
         && error.code === "screenpipe_checkpoint_scope_mismatch"
         && error.retryable === false,
     );
-    assert.equal(captureRequests.length, 1);
+    assert.equal(captureRequests.length, 2);
     assert.deepEqual(await harness.repository.getCaptureCheckpoint(harness.connection.id), before);
+    assert.equal((await harness.repository.query({ schema_name: "capture.screenpipe.frame_ocr", limit: 10 })).length, 1);
   } finally {
     harness.repository.close();
   }

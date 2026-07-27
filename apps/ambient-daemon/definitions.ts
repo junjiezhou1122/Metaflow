@@ -390,7 +390,7 @@ export const dailySummaryInputSchemas = [
   "capture.browser.selection",
   "capture.macos.accessibility_snapshot",
   "capture.macos.voice_utterance",
-  "capture.screenpipe.activity",
+  "capture.screenpipe.activity_summary",
 ] as const;
 
 export const dailySummaryTransformation = parseTransformation({

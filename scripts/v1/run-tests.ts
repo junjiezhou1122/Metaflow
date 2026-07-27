@@ -36,6 +36,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/scheduled-summary-vertical.test.ts",
   "tests/scheduler-automation.test.ts",
   "tests/screenpipe-capture.test.ts",
+  "tests/screenpipe-derived-views.test.ts",
   "tests/transformation-contract.test.ts",
   "tests/iii-runtime.test.ts",
   "tests/v0-migration-boundaries.test.ts",

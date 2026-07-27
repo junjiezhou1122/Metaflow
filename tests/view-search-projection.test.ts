@@ -130,6 +130,30 @@ test("Schema-declared fields alone enter FTS and category weights produce stable
   assert.deepEqual((await repository.query({ text: "view:title" })).map(view => view.id), ["view:title"]);
 }));
 
+test("optional null search fields emit no unit while structured values fail", () => withRepository(async repository => {
+  const nullable = rawDraft({ id: "view:nullable", body: "nullable projection" });
+  if (nullable.representation.form !== "inline" || typeof nullable.representation.value !== "object"
+    || nullable.representation.value === null || Array.isArray(nullable.representation.value)) {
+    throw new Error("search fixture must be an inline object");
+  }
+  nullable.representation.value.url = null;
+  await repository.commit({ draft: nullable, expected_revision: 0 });
+  assert.deepEqual((await repository.query({ text: "nullable projection" })).map(view => view.id), [nullable.id]);
+
+  const structured = rawDraft({ id: "view:structured", body: "invalid projection" });
+  if (structured.representation.form !== "inline" || typeof structured.representation.value !== "object"
+    || structured.representation.value === null || Array.isArray(structured.representation.value)) {
+    throw new Error("search fixture must be an inline object");
+  }
+  structured.representation.value.url = { nested: true };
+  await assert.rejects(
+    repository.commit({ draft: structured, expected_revision: 0 }),
+    (error: unknown) => error instanceof ViewRepositoryError
+      && error.code === "invalid_request"
+      && error.details.phase === "persist_search_projection",
+  );
+}));
+
 test("unicode61 search is case/diacritic tolerant and punctuation compiles to safe AND tokens", () => withRepository(async repository => {
   await repository.commit({
     draft: rawDraft({ id: "view:tokenizer", body: "Résumé about MetaFlow graph-based retrieval" }),

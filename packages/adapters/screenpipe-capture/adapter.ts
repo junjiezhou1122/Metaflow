@@ -402,6 +402,15 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
         { content_type: contentType },
       );
     }
+    if (previous && input.end_time && Date.parse(input.end_time) < Date.parse(previous.observed_at)) {
+      throw new CaptureRuntimeError(
+        "Screenpipe search period ends before the committed modality watermark",
+        "screenpipe_checkpoint_window_regression",
+        "connector",
+        false,
+        { content_type: contentType },
+      );
+    }
     const startTime = effectiveSearchStart(input.start_time, previous?.observed_at);
     const known = new Set(previous?.seen.map(item => item.item_key) ?? []);
     const selected: ScreenpipeContentItem[] = [];
@@ -895,7 +904,14 @@ function searchItemKey(item: ScreenpipeContentItem): string {
 }
 
 function searchQueryFingerprint(input: Extract<ScreenpipeOpenParameters, { resource: "search" }>["query"]): string {
-  const { content_types: _ContentTypes, limit: _limit, ...selector } = input;
+  const {
+    content_types: _ContentTypes,
+    limit: _limit,
+    start_time: _startTime,
+    end_time: _endTime,
+    max_content_length: _maxContentLength,
+    ...selector
+  } = input;
   return digest(selector);
 }
 

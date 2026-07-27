@@ -47,6 +47,7 @@ test("canonical workspace exposes only v1 capability owners", () => {
     "packages/capture",
     "packages/search",
     "packages/operations",
+    "packages/screenpipe-contracts",
     "packages/adapters/*",
     "view-packages/*",
     "apps/ambient-daemon",

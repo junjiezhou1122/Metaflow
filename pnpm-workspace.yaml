@@ -9,6 +9,7 @@ packages:
   - "packages/capture"
   - "packages/search"
   - "packages/operations"
+  - "packages/screenpipe-contracts"
   - "packages/adapters/*"
   - "view-packages/*"
   - "apps/ambient-daemon"
