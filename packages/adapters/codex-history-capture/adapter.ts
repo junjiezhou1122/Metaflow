@@ -47,7 +47,7 @@ const CODEX_SESSION_SCHEMA = {
     type: "object",
     required: [
       "kind", "byte_offset", "byte_length", "record_sha256", "timestamp", "session_id", "source",
-      "originator", "cli_version", "model_provider", "workspace_path",
+      "originator", "cli_version", "workspace_path",
     ],
     properties: {
       kind: { const: "session_meta" },

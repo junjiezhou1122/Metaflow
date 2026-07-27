@@ -962,7 +962,8 @@ authenticated principal
 ```
 
 The catalog covers Capture Batch admission, exact View get/search/reindex/traversal,
-Transformation submit/get, Run execute/inspect/cancel, Feedback submission,
+Transformation submit/get, Run execute/inspect/cancel, Feedback submission and
+Feedback-driven immutable Transformation evolution,
 Failure inspection, frozen policy-decision lookup, and Run or Capture trace
 reads. `run.execute` accepts an exact Transformation reference and loads that
 committed revision; a transport cannot provide a competing definition.
@@ -1001,6 +1002,10 @@ Execution and Agent routing, Capture Runtime, Feedback and Privacy services,
 and the authenticated OperationService. `pnpm dev` and `pnpm http` both start
 this composition. `pnpm mf` and `pnpm mcp` project the same OperationService;
 none of these commands import the archived ContextStore or legacy server.
+Semantic Search is available in this composition only when an exact
+`sqlite-vec` profile set and one query embedding port are injected together.
+Either one without the other fails before persistence opens; Search never
+silently computes or substitutes document embeddings.
 
 ## First acceptance slice
 
@@ -1031,3 +1036,35 @@ repair, approve-all with an exact deny override, and equivalent in-process,
 CLI, HTTP, and official MCP SDK reads. Live source probes remain separate smoke
 evidence because local Screenpipe and a loaded Chrome extension are environment
 dependencies, not deterministic test fixtures.
+
+## Personalized View acceptance slice
+
+The second deterministic front-half boundary starts from real-shaped but
+synthetic private source files so no personal conversation or vault content
+enters Git:
+
+```text
+Codex rollout JSONL + Obsidian Markdown
+  -> strict Connectors and exact Raw Views
+  -> Markdown Parser Transformations
+  -> natural-language Request / Agent Proposal / approval / apply
+  -> strict working-state View with exact source refs
+  -> immutable Application Space
+  -> keyword + internal + relation + committed-vector Search
+  -> Agent exact citation + Graph Explorer projection
+  -> Feedback View -> Transformation revision 2
+  -> restart/replay -> Privacy Forget closure
+```
+
+The executable backend boundary uses
+`view:personalized:working-state@1` and
+`view:personalized:application-space@1` in
+`tests/personalized-view-workflow.test.ts`, run with
+`pnpm test:personalized-view-workflow`. That test passes the committed exact
+Views through the production View Explorer Operation client. The visual
+`?fixture=personalized` route deliberately uses the disjoint
+`view:fixture:view-explorer:personalized:*` namespace, while the installed
+Agent-access fixture uses `view:fixture:agent-access:*`. These sanitized
+fixtures prove their respective clients without asserting a false immutable
+identity equivalence; their source content contains no local paths or personal
+text.

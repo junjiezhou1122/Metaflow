@@ -85,7 +85,7 @@ import {
   OperationService,
   RepositoryViewReadAuthorizer,
 } from "@info/operations";
-import { SearchService } from "@info/search";
+import { SearchService, type QueryEmbeddingPort } from "@info/search";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
 import { exactTransformationRef, type Transformation } from "@info/transformation";
 import { ViewPackageCatalog } from "@info/view-package";
@@ -116,6 +116,9 @@ export type AmbientDaemonCompositionOptions = {
   data_directory: string;
   operation_auth_token: string;
   view_store?: SqliteViewRepositoryOptions;
+  semantic_search?: {
+    query_embedding: QueryEmbeddingPort;
+  };
   trusted_operation_origins?: readonly string[];
   agent_runtime: AgentRuntimeAdapter;
   agent_aliases?: Record<string, string>;
@@ -157,6 +160,10 @@ export const AMBIENT_REACTIVE_CASCADE_POLICY: ReactiveCascadePolicySnapshot = {
 };
 
 export async function createAmbientDaemonComposition(options: AmbientDaemonCompositionOptions) {
+  const hasSemanticStore = options.view_store?.semantic_search !== undefined;
+  if (hasSemanticStore !== (options.semantic_search !== undefined)) {
+    throw new TypeError("Ambient semantic Search requires both a SQLite semantic profile and a query embedding port");
+  }
   const now = options.now ?? (() => new Date());
   const operationAccess = new AmbientOperationAccess(
     options.operation_auth_token,
@@ -339,6 +346,10 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       scope_source: views.search,
       descriptors: views.search,
       keyword: views.search,
+      ...(options.semantic_search ? {
+        semantic: views.semantic_search,
+        query_embedding: options.semantic_search.query_embedding,
+      } : {}),
       observer: {
         async record(event, cause) {
           console.info(JSON.stringify({

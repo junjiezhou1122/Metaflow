@@ -244,7 +244,9 @@ but there is no separate canonical Worker domain layer.
   through Views or Automation. Deployments may inject an explicit
   signed Connector Package catalog, artifact port, publisher trust store, and
   host permission allowlist; omitting it is a valid no-package deployment and
-  never enables an implicit marketplace.
+  never enables an implicit marketplace. Semantic Search is enabled only when
+  the composition receives both an exact SQLite semantic profile set and a
+  query embedding port; providing only one side fails before persistence opens.
 - `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
   shared Operations, validates graph/search/exact-View responses, and keeps a
   disposable Graphology projection plus Sigma camera/layout state in the
@@ -434,6 +436,9 @@ Operations.
   freezes the exact target/location, source digest, embedding evidence ref,
   provider/model profile, dimension, metric, and policy; configured exact scope
   and target-kind filters execute inside KNN before distance affects rank.
+  Product composition must wire the SQLite semantic retriever and query
+  embedding port as one explicit pair. A configured vector store without query
+  embedding, or query embedding without the exact store profile, is invalid.
 - Same-purpose evolution creates a new immutable revision; a new purpose forks
   a new View identity. Stale base revisions fail rather than overwrite.
 - View Store `get` requires an exact revision. Moving-head access is explicit
@@ -754,3 +759,9 @@ corepack pnpm test:v1-vertical
 release gate. The Chrome extension remains a separately built temporary
 surface; do not claim its full typecheck passes until its documented migration
 work and unrelated errors are resolved.
+
+`pnpm test:personalized-view-workflow` is the deterministic Codex JSONL and
+Obsidian Markdown acceptance boundary for Parser formation, natural-language
+Transformation authoring, strict Agent output, Application Space composition,
+keyword/internal/relation/semantic Search, Feedback evolution, restart/replay,
+and Privacy Forget.

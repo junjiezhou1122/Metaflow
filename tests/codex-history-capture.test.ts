@@ -245,6 +245,38 @@ test("complete records commit once, restart is idle, and archive moves preserve 
   }
 });
 
+test("current official SessionMeta context is validated and structurally excluded", async () => {
+  const home = await syntheticHome("current-session-meta.jsonl");
+  const harness = await setup({ root: home.root });
+  try {
+    await harness.connector.health(harness.connection);
+    const batches: CaptureBatch[] = [];
+    for await (const batch of harness.connector.open(harness.connection, {
+      delivery: "pull",
+      checkpoint: { connection_id: harness.connection.id, revision: 0, cursor: {}, updated_at: fixedTimestamp },
+      parameters: {},
+    })) batches.push(batch);
+    assert.equal(batches.length, 1);
+    assert.equal(
+      (batches[0]?.metadata.excluded_record_counts as Record<string, number>).instruction_or_context,
+      4,
+    );
+    const committed = await harness.runtime.submitBatch(batches[0]!);
+    assert.equal(committed.receipts.length, 2);
+    const views = await harness.repository.query({ role: "raw", revisions: "all", limit: 10 });
+    const session = views.find(view => view.schema.name === "capture.codex.session");
+    assert.ok(session);
+    const serialized = JSON.stringify(session);
+    assert.doesNotMatch(serialized, /context_window|window_id|history_mode|repository_url|commit_hash/);
+    assert.doesNotMatch(serialized, /SYNTHETIC_REVIEW_(?:INSTRUCTION|HINT|OUTPUT)_MUST_NOT_SURVIVE/);
+    assert.equal(session.metadata.parser_contract, CODEX_ROLLOUT_PARSER_CONTRACT);
+    assert.deepEqual(await harness.runtime.run(harness.connection.id, "pull", {}), []);
+  } finally {
+    harness.repository.close();
+    await home.cleanup();
+  }
+});
+
 test("structural exclusions never enter candidates while text parts retain offset evidence", async () => {
   const home = await syntheticHome("excluded-records.jsonl");
   const connector = new CodexHistoryCaptureConnector({ codex_home: home.root, now: deterministicClock() });

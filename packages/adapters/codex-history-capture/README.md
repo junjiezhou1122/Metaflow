@@ -7,14 +7,22 @@ Codex SQLite previews, `history.jsonl`, or `session_index.jsonl`.
 
 ## Safety boundary
 
-The parser contract is exactly `codex-rollout-jsonl@0.145-safe-v1`. It admits
+The parser contract is exactly `codex-rollout-jsonl@0.145-safe-v3`. It follows
+the official `SessionMeta` and `SessionMetaLine` source shape at
+`openai/codex@95637f7056835fea66bdd0044414af480fc0fd74` while retaining explicit
+compatibility with older 0.145 records. It admits
 safe session metadata and user/assistant text only. Version 1 supports only
 `content_mode: "messages"`; the former `metadata_only` shape is rejected as an
 incompatible configuration because Capture has no canonical checkpoint-only
 transition. Developer/system messages,
 reasoning, tool calls and results, world state, instructions, duplicate event
 projections, compaction data, images, and token/rate data are structurally
-excluded. Unknown envelopes, event types, response types, content parts, and
+excluded. Optional Git, context-window, history, Agent, capability, dynamic-tool,
+and base-instruction metadata is validated but never copied into candidates.
+The outer RolloutLine timestamp and the nested SessionMeta timestamp are
+independently validated because the official format does not require equality;
+an optional outer ordinal is validated and excluded.
+Unknown envelopes, event types, response types, content parts, and
 changed session identity fail compatibility instead of being skipped.
 
 Every accepted text field passes `secretlint`'s recommended v13 preset before a

@@ -11,11 +11,16 @@ import {
 } from "./contracts.js";
 import { assertCodexContentSafe, type CodexContentGate } from "./secret-gate.js";
 
-const OUTER_KEYS = new Set(["type", "timestamp", "payload"]);
+const OUTER_KEYS = new Set(["type", "timestamp", "ordinal", "payload"]);
 const SESSION_META_KEYS = new Set([
   "session_id", "id", "timestamp", "cwd", "originator", "cli_version", "source", "thread_source",
-  "model_provider", "base_instructions", "dynamic_tools", "forked_from_id", "multi_agent_version",
+  "model_provider", "base_instructions", "dynamic_tools", "forked_from_id", "parent_thread_id",
+  "agent_nickname", "agent_role", "agent_type", "agent_path", "selected_capability_roots", "memory_mode",
+  "history_mode", "history_base", "subagent_history_start_ordinal", "multi_agent_version", "context_window", "git",
 ]);
+const GIT_INFO_KEYS = new Set(["commit_hash", "branch", "repository_url"]);
+const HISTORY_POSITION_KEYS = new Set(["thread_id", "end_ordinal_exclusive", "end_byte_offset"]);
+const SESSION_CONTEXT_WINDOW_KEYS = new Set(["window_id"]);
 const TURN_CONTEXT_KEYS = new Set([
   "turn_id", "cwd", "workspace_roots", "current_date", "timezone", "approval_policy", "sandbox_policy",
   "permission_profile", "model", "personality", "collaboration_mode", "multi_agent_version", "realtime_active",
@@ -49,6 +54,8 @@ const EVENT_EXCLUSIONS: Readonly<Record<string, CodexExclusionCategory>> = {
   thread_settings_applied: "instruction_or_context",
   sub_agent_activity: "instruction_or_context",
   context_compacted: "compaction",
+  entered_review_mode: "instruction_or_context",
+  exited_review_mode: "instruction_or_context",
   mcp_tool_call_end: "tool_result",
   patch_apply_end: "tool_result",
   web_search_end: "tool_result",
@@ -227,7 +234,7 @@ export async function parseAndGateCodexRolloutLine(input: {
         outcome.record.source,
         outcome.record.originator,
         outcome.record.cli_version,
-        outcome.record.model_provider,
+        ...(outcome.record.model_provider ? [outcome.record.model_provider] : []),
         outcome.record.workspace_path,
       ]
     : [
@@ -266,23 +273,18 @@ export function parseCodexRolloutLine(input: {
   assertKnownKeys(envelope, OUTER_KEYS, input.line.byte_offset, "rollout envelope");
   const outerType = requireString(envelope.type, input.line.byte_offset, "envelope type");
   const timestamp = requireTimestamp(envelope.timestamp, input.line.byte_offset);
+  if (envelope.ordinal !== undefined) requireNonnegativeInteger(envelope.ordinal, input.line.byte_offset, "rollout ordinal");
   const payload = requireObject(envelope.payload, input.line.byte_offset, `${outerType} payload`);
   const recordSha256 = createHash("sha256").update(input.line.bytes).digest("hex");
 
   if (outerType === "session_meta") {
     assertKnownKeys(payload, SESSION_META_KEYS, input.line.byte_offset, "session metadata");
-    for (const key of ["base_instructions", "dynamic_tools", "thread_source"] as const) {
-      if (!(key in payload)) throw sourceContractError(`Codex session metadata omitted ${key}`, input.line.byte_offset);
-    }
     const sessionId = requireString(payload.session_id, input.line.byte_offset, "session id");
     if (requireString(payload.id, input.line.byte_offset, "session metadata id") !== sessionId) {
       throw sourceContractError("Codex session metadata id does not match session_id", input.line.byte_offset);
     }
-    const payloadTimestamp = requireTimestamp(payload.timestamp, input.line.byte_offset);
-    if (payloadTimestamp !== timestamp) throw sourceContractError("Codex session timestamps disagree", input.line.byte_offset);
-    requireObject(payload.base_instructions, input.line.byte_offset, "base instructions");
-    if (!Array.isArray(payload.dynamic_tools)) throw sourceContractError("Codex dynamic_tools must be an array", input.line.byte_offset);
-    requireString(payload.thread_source, input.line.byte_offset, "thread source");
+    requireTimestamp(payload.timestamp, input.line.byte_offset);
+    validateOptionalSessionContext(payload, input.line.byte_offset);
     const declaredForkedFromId = payload.forked_from_id === undefined
       ? undefined
       : requireString(payload.forked_from_id, input.line.byte_offset, "forked session id");
@@ -303,7 +305,9 @@ export function parseCodexRolloutLine(input: {
       source: requireString(payload.source, input.line.byte_offset, "session source"),
       originator: requireString(payload.originator, input.line.byte_offset, "session originator"),
       cli_version: requireString(payload.cli_version, input.line.byte_offset, "CLI version"),
-      model_provider: requireString(payload.model_provider, input.line.byte_offset, "model provider"),
+      ...(payload.model_provider === undefined || payload.model_provider === null
+        ? {}
+        : { model_provider: requireString(payload.model_provider, input.line.byte_offset, "model provider") }),
       workspace_path: requireString(payload.cwd, input.line.byte_offset, "workspace path"),
     }, input.line.byte_offset);
     return {
@@ -386,6 +390,76 @@ export function parseCodexRolloutLine(input: {
   throw sourceContractError("Codex rollout envelope type is not in the parser contract", input.line.byte_offset);
 }
 
+function validateOptionalSessionContext(payload: Record<string, unknown>, byteOffset: number): void {
+  for (const [key, label] of [
+    ["thread_source", "thread source"],
+    ["parent_thread_id", "parent thread id"],
+    ["agent_nickname", "agent nickname"],
+    ["agent_role", "agent role"],
+    ["agent_type", "agent type"],
+    ["agent_path", "agent path"],
+    ["memory_mode", "memory mode"],
+    ["multi_agent_version", "multi-agent version"],
+  ] as const) {
+    if (payload[key] !== undefined && payload[key] !== null) requireString(payload[key], byteOffset, label);
+  }
+  if (payload.agent_role !== undefined && payload.agent_type !== undefined) {
+    throw sourceContractError("Codex session metadata cannot contain both agent_role and agent_type", byteOffset);
+  }
+  if (payload.base_instructions !== undefined && payload.base_instructions !== null) {
+    requireObject(payload.base_instructions, byteOffset, "base instructions");
+  }
+  if (payload.dynamic_tools !== undefined && payload.dynamic_tools !== null && !Array.isArray(payload.dynamic_tools)) {
+    throw sourceContractError("Codex dynamic_tools must be an array", byteOffset);
+  }
+  if (payload.selected_capability_roots !== undefined && !Array.isArray(payload.selected_capability_roots)) {
+    throw sourceContractError("Codex selected_capability_roots must be an array", byteOffset);
+  }
+  if (payload.history_mode !== undefined && !["legacy", "paginated"].includes(requireString(payload.history_mode, byteOffset, "history mode"))) {
+    throw sourceContractError("Codex history_mode is not in the parser contract", byteOffset);
+  }
+  if (payload.subagent_history_start_ordinal !== undefined) {
+    requireNonnegativeInteger(payload.subagent_history_start_ordinal, byteOffset, "subagent history start ordinal");
+  }
+  validateExactOptionalObject(payload.history_base, HISTORY_POSITION_KEYS, byteOffset, "history base", value => {
+    requireString(value.thread_id, byteOffset, "history base thread id");
+    requireNonnegativeInteger(value.end_ordinal_exclusive, byteOffset, "history base end ordinal");
+    requireNonnegativeInteger(value.end_byte_offset, byteOffset, "history base end byte offset");
+  });
+  validateExactOptionalObject(payload.context_window, SESSION_CONTEXT_WINDOW_KEYS, byteOffset, "context window", value => {
+    requireString(value.window_id, byteOffset, "context window id");
+  });
+  validateExactOptionalObject(payload.git, GIT_INFO_KEYS, byteOffset, "git metadata", value => {
+    for (const [key, label] of [
+      ["commit_hash", "git commit hash"],
+      ["branch", "git branch"],
+      ["repository_url", "git repository URL"],
+    ] as const) {
+      if (value[key] !== undefined && value[key] !== null) requireString(value[key], byteOffset, label);
+    }
+  });
+}
+
+function validateExactOptionalObject(
+  value: unknown,
+  keys: ReadonlySet<string>,
+  byteOffset: number,
+  label: string,
+  validate: (value: Record<string, unknown>) => void,
+): void {
+  if (value === undefined || value === null) return;
+  const object = requireObject(value, byteOffset, label);
+  assertKnownKeys(object, keys, byteOffset, label);
+  validate(object);
+}
+
+function requireNonnegativeInteger(value: unknown, byteOffset: number, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw sourceContractError(`Codex ${label} must be a nonnegative safe integer`, byteOffset);
+  }
+  return value as number;
+}
+
 export function applyExclusions(
   target: ReturnType<typeof emptyCodexExcludedRecordCounts>,
   additions: Partial<Record<CodexExclusionCategory, number>>,
@@ -418,7 +492,7 @@ function requireTimestamp(value: unknown, byteOffset: number): string {
   return timestamp;
 }
 
-function assertKnownKeys(value: Record<string, unknown>, allowed: Set<string>, byteOffset: number, label: string): void {
+function assertKnownKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, byteOffset: number, label: string): void {
   const unknown = Object.keys(value).filter(key => !allowed.has(key));
   if (unknown.length > 0) {
     throw sourceContractError(`Codex ${label} contains fields outside the parser contract`, byteOffset, {
