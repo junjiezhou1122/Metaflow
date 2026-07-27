@@ -6,13 +6,14 @@ category: accepted-design
 tags: [application, viewgraph, subview, composition, feedback]
 sources: [vision/dream-log, current-v0-inspection]
 created: 2026-07-24T17:01:16Z
-updated: 2026-07-27T08:00:00Z
+updated: 2026-07-27T11:56:03+08:00
 ---
 
 # Application View Spaces
 
 > Status: v1 Application Space View and graph projection boundary accepted by
-> issue 71. Explorer UI remains future work.
+> issue 71. The first Graphology/Sigma View Explorer is integrated; richer
+> Application-specific navigation remains future work.
 
 ## v1 contract
 
