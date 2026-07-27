@@ -1,11 +1,20 @@
 import { z } from "zod";
 import { SecretReferenceSchema } from "@info/capture";
 import { JsonValueSchema } from "@info/view";
+import {
+  ScreenpipeActivityQuerySchema,
+  ScreenpipeActivitySummarySchema,
+  ScreenpipeAudioContentSchema,
+  ScreenpipeElementSchema,
+  ScreenpipeInputContentSchema,
+  ScreenpipeOcrContentSchema,
+  ScreenpipeUiContentSchema,
+} from "@info/screenpipe-contracts";
+export { ScreenpipeActivityQuerySchema, ScreenpipeElementSchema } from "@info/screenpipe-contracts";
 
 const TimestampSchema = z.string().datetime({ offset: true });
 const NullableStringSchema = z.string().nullable();
 const NullableNumberSchema = z.number().nullable();
-const JsonObjectSchema = z.record(JsonValueSchema);
 
 export const SCREENPIPE_API_CONTRACT_VERSION = "1.0.0";
 export const SCREENPIPE_ENGINE_VERSION_FAMILY = { major: 0, minor: 4 } as const;
@@ -44,85 +53,11 @@ export const ScreenpipeHealthResponseSchema = z.object({
   version: NullableStringSchema,
 }).strict();
 
-const OcrContentSchema = z.object({
-  frame_id: z.number().int(),
-  text: z.string(),
-  timestamp: TimestampSchema,
-  file_path: z.string(),
-  offset_index: z.number().int(),
-  app_name: z.string(),
-  window_name: z.string(),
-  tags: z.array(z.string()),
-  frame: z.null(),
-  frame_name: NullableStringSchema,
-  browser_url: NullableStringSchema,
-  focused: z.boolean().nullable(),
-  device_name: z.string(),
-  text_source: NullableStringSchema,
-}).strict();
-
-const AudioContentSchema = z.object({
-  chunk_id: z.number().int(),
-  transcription: z.string(),
-  text: z.string(),
-  timestamp: TimestampSchema,
-  file_path: z.string(),
-  offset_index: z.number().int(),
-  tags: z.array(z.string()),
-  device_name: z.string(),
-  device_type: z.enum(["Input", "Output"]),
-  speaker: z.object({
-    id: z.number().int(),
-    name: z.string(),
-    metadata: z.string(),
-  }).strict().nullable(),
-  speaker_label: NullableStringSchema,
-  speaker_source: NullableStringSchema,
-  speaker_confidence: NullableNumberSchema,
-  speaker_provisional: z.boolean(),
-  start_time: NullableNumberSchema,
-  end_time: NullableNumberSchema,
-  source: z.string().optional(),
-  meeting_id: z.number().int().optional(),
-  provider: z.string().optional(),
-  model: z.string().optional(),
-}).strict();
-
-const UiContentSchema = z.object({
-  id: z.number().int(),
-  text: z.string(),
-  timestamp: TimestampSchema,
-  app_name: z.string(),
-  window_name: z.string(),
-  initial_traversal_at: TimestampSchema.nullable(),
-  file_path: z.string(),
-  offset_index: z.number().int(),
-  frame_name: NullableStringSchema,
-  browser_url: NullableStringSchema,
-}).strict();
-
-const InputContentSchema = z.object({
-  id: z.number().int(),
-  timestamp: TimestampSchema,
-  event_type: z.string().min(1),
-  app_name: NullableStringSchema,
-  window_title: NullableStringSchema,
-  browser_url: NullableStringSchema,
-  text_content: NullableStringSchema,
-  x: z.number().int().nullable(),
-  y: z.number().int().nullable(),
-  key_code: z.number().int().nullable(),
-  modifiers: z.number().int().nullable(),
-  element_role: NullableStringSchema,
-  element_name: NullableStringSchema,
-  frame_id: z.number().int().optional(),
-}).strict();
-
 export const ScreenpipeContentItemSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("OCR"), content: OcrContentSchema }).strict(),
-  z.object({ type: z.literal("Audio"), content: AudioContentSchema }).strict(),
-  z.object({ type: z.literal("UI"), content: UiContentSchema }).strict(),
-  z.object({ type: z.literal("Input"), content: InputContentSchema }).strict(),
+  z.object({ type: z.literal("OCR"), content: ScreenpipeOcrContentSchema }).strict(),
+  z.object({ type: z.literal("Audio"), content: ScreenpipeAudioContentSchema }).strict(),
+  z.object({ type: z.literal("UI"), content: ScreenpipeUiContentSchema }).strict(),
+  z.object({ type: z.literal("Input"), content: ScreenpipeInputContentSchema }).strict(),
 ]);
 
 const PaginationSchema = z.object({
@@ -138,56 +73,12 @@ export const ScreenpipeSearchResponseSchema = z.object({
   related: z.record(z.array(z.string())).optional(),
 }).strict();
 
-const ElementBoundsSchema = z.object({
-  left: z.number(),
-  top: z.number(),
-  width: z.number(),
-  height: z.number(),
-}).strict();
-
-const ElementStateSchema = z.object({
-  disabled: z.boolean().optional(),
-  focused: z.boolean().optional(),
-  selected: z.boolean().optional(),
-  expanded: z.boolean().optional(),
-}).strict();
-
-export const ScreenpipeElementSchema = z.object({
-  id: z.number().int(),
-  frame_id: z.number().int(),
-  source: z.string().min(1),
-  role: z.string().min(1),
-  text: NullableStringSchema,
-  parent_id: z.number().int().nullable(),
-  depth: z.number().int(),
-  bounds: ElementBoundsSchema.nullable(),
-  confidence: NullableNumberSchema,
-  sort_order: z.number().int(),
-  on_screen: z.boolean().optional(),
-  state: ElementStateSchema.optional(),
-}).strict();
-
 export const ScreenpipeElementsResponseSchema = z.object({
   data: z.array(ScreenpipeElementSchema),
   pagination: PaginationSchema,
 }).strict();
 
-export const ScreenpipeActivitySummaryResponseSchema = z.object({
-  apps: z.array(JsonValueSchema).optional(),
-  windows: z.array(JsonValueSchema).optional(),
-  key_texts: z.array(JsonValueSchema).optional(),
-  edited_files: z.array(JsonValueSchema),
-  audio_summary: JsonValueSchema,
-  total_frames: z.number().int(),
-  total_active_minutes: z.number(),
-  time_range: z.object({ start: z.string(), end: z.string() }).strict(),
-  data_status: z.string(),
-  query_status: z.string(),
-  recording: JsonValueSchema.optional(),
-  memories: z.array(JsonValueSchema).optional(),
-  snippets: z.array(JsonValueSchema).optional(),
-  guidance: JsonValueSchema.optional(),
-}).strict();
+export const ScreenpipeActivitySummaryResponseSchema = ScreenpipeActivitySummarySchema;
 
 export const ScreenpipeSearchQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
@@ -224,16 +115,6 @@ export const ScreenpipeElementsQuerySchema = z.object({
 }).strict().superRefine((value, context) => {
   if (value.start_time && value.end_time && Date.parse(value.start_time) > Date.parse(value.end_time)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["end_time"], message: "end_time must not precede start_time" });
-  }
-});
-
-export const ScreenpipeActivityQuerySchema = z.object({
-  start_time: TimestampSchema,
-  end_time: TimestampSchema,
-  app_name: z.string().trim().min(1).optional(),
-}).strict().superRefine((value, context) => {
-  if (Date.parse(value.start_time) >= Date.parse(value.end_time)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["end_time"], message: "end_time must be after start_time" });
   }
 });
 

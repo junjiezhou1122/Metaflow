@@ -26,6 +26,7 @@ test("v1 packages obey the declared dependency direction", () => {
     "packages/automation",
     "packages/capture",
     "packages/operations",
+    "packages/screenpipe-contracts",
     "packages/adapters",
     "view-packages",
   ]);
@@ -39,6 +40,7 @@ const invalidSourceCases = [
   ["Execution -> Capture", "execution-to-capture", "v1-execution-depends-only-on-contracts"],
   ["Automation -> Capture", "automation-to-capture", "v1-automation-depends-only-on-runtime-contracts"],
   ["Operations -> adapter", "operations-to-adapter", "v1-operations-depends-only-on-v1-ports"],
+  ["Screenpipe contracts -> Execution", "screenpipe-contracts-to-execution", "v1-screenpipe-contracts-depends-only-on-view"],
   ["Adapter -> legacy package", "adapter-to-legacy", "v1-adapters-depend-only-on-v1-ports"],
   ["III adapter -> legacy package", "iii-adapter-to-legacy", "v1-adapters-depend-only-on-v1-ports"],
   ["Adapter -> sibling adapter", "adapter-to-sibling", "v1-adapter-agent-runtime-is-independent"],
@@ -62,6 +64,7 @@ const invalidManifestCases = [
   ["Execution -> Capture", "manifest-execution-to-capture", "v1-execution-manifest-depends-only-on-contracts"],
   ["Automation -> Capture", "manifest-automation-to-capture", "v1-automation-manifest-depends-only-on-runtime-contracts"],
   ["Operations -> adapter", "manifest-operations-to-adapter", "v1-operations-manifest-depends-only-on-v1-ports"],
+  ["Screenpipe contracts -> Execution", "manifest-screenpipe-contracts-to-execution", "v1-screenpipe-contracts-manifest-depends-only-on-view"],
   ["Adapter -> sibling adapter", "manifest-adapter-to-sibling", "v1-adapter-manifest-depends-only-on-v1-ports"],
   ["III adapter -> legacy package", "manifest-iii-adapter-to-legacy", "v1-adapter-manifest-depends-only-on-v1-ports"],
 ] as const;

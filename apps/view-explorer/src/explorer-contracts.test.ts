@@ -9,7 +9,10 @@ import {
   parseFixtureId,
   PERSONALIZED_FIXTURE_ID,
   PERSONALIZED_VIEW_REFS,
+  PRODUCT_VIEW_REFS,
+  PRODUCT_VIEWS_FIXTURE_ID,
 } from "./fixtures.js";
+import { makeProductViewProjection } from "./product-view-fixture.js";
 import { mergeProjection, ProjectionMergeError } from "./graph-projection.js";
 import { LayoutProtocolError, validateLayoutResponse } from "./layout-protocol.js";
 import { ExplorerClientError, ViewExplorerOperationClient, createHttpOperationTransport } from "./operation-client.js";
@@ -34,6 +37,12 @@ test("all browser fixtures conform to the canonical graph contract", () => {
   assert.deepEqual(parseFixtureId(PERSONALIZED_FIXTURE_ID), PERSONALIZED_FIXTURE_ID);
   assert.equal(JSON.stringify(personalized).includes("/Users/"), false);
 
+  const productViews = ViewGraphProjectionResultSchema.parse(makeProductViewProjection());
+  assert.equal(refKey(productViews.roots[0]!), refKey(PRODUCT_VIEW_REFS.daily_summary));
+  assert.equal(productViews.nodes.length, 4);
+  assert.equal(productViews.edges.filter(edge => edge.type === "derived_from").length, 3);
+  assert.deepEqual(parseFixtureId(PRODUCT_VIEWS_FIXTURE_ID), PRODUCT_VIEWS_FIXTURE_ID);
+
   const expected = { generation: 4, request_id: "layout-4", node_keys: new Set(["a", "b"]) };
   assert.deepEqual(validateLayoutResponse({
     protocol_version: 1,
@@ -51,6 +60,20 @@ test("all browser fixtures conform to the canonical graph contract", () => {
   ]) {
     assert.throws(() => validateLayoutResponse({ protocol_version: 1, generation: 4, request_id: "layout-4", ok: true, positions }, expected), LayoutProtocolError);
   }
+});
+
+test("product fixture freezes the Audio to Timeline to Daily Summary provenance chain", async () => {
+  const client = new ViewExplorerOperationClient(createFixtureTransport(PRODUCT_VIEWS_FIXTURE_ID));
+  const signal = new AbortController().signal;
+  const daily = ViewRevisionSchema.parse(await client.getView(PRODUCT_VIEW_REFS.daily_summary, signal));
+  const timeline = ViewRevisionSchema.parse(await client.getView(PRODUCT_VIEW_REFS.timeline, signal));
+  const audio = ViewRevisionSchema.parse(await client.getView(PRODUCT_VIEW_REFS.audio_design, signal));
+  assert.equal(daily.schema.name, "personal.summary.daily");
+  assert.deepEqual(daily.provenance.inputs, [PRODUCT_VIEW_REFS.timeline]);
+  assert.equal(timeline.schema.name, "personal.timeline.activity");
+  assert.deepEqual(timeline.provenance.inputs, [PRODUCT_VIEW_REFS.audio_design, PRODUCT_VIEW_REFS.audio_scope]);
+  assert.equal(audio.schema.name, "personal.audio.semantic");
+  assert.equal(audio.representation.kind, "personal_audio");
 });
 
 test("personalized fixture returns exact Application Space, working-state provenance, and synthetic Search evidence", async () => {

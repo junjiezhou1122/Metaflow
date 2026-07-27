@@ -14,6 +14,7 @@ const required = {
   graph_engine: /^graph-.*\.js$/u,
   sigma_surface: /^sigma-surface-.*\.js$/u,
   layout_worker: /^layout\.worker-.*\.js$/u,
+  view_content_dialog: /^view-content-dialog-.*\.js$/u,
 };
 const measured = {};
 for (const [name, pattern] of Object.entries(required)) {

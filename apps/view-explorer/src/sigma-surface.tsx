@@ -9,14 +9,10 @@ import {
   type LayoutRequest,
 } from "./layout-protocol.js";
 
-const SCHEMA_COLORS = ["#137a65", "#4263a9", "#a54835", "#9b6a17", "#7a4f91", "#39767d"];
-const EDGE_COLORS: Record<string, string> = {
-  derived_from: "#d86638",
-  member_of: "#4878b7",
-  references: "#7b6d61",
-  application_member: "#2d8b72",
-  application_composition: "#2d8b72",
-};
+const FOCUSED_COLOR = "#6558d9";
+const NEIGHBOR_COLOR = "#505553";
+const MUTED_NODE_COLOR = "#d9dcda";
+const DEFAULT_EDGE_COLOR = "#cfd2d0";
 
 type LayoutFailureCode = "graph_layout_worker_start_failed" | "graph_layout_worker_failed" | "graph_layout_protocol_failed";
 
@@ -89,23 +85,23 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
       renderer = new Sigma(graph, container, {
         allowInvalidContainer: false,
         renderEdgeLabels: false,
-        labelRenderedSizeThreshold: 9,
-        defaultNodeColor: "#4263a9",
-        defaultEdgeColor: "#a7aaa5",
+        labelRenderedSizeThreshold: 6,
+        defaultNodeColor: NEIGHBOR_COLOR,
+        defaultEdgeColor: DEFAULT_EDGE_COLOR,
         nodeReducer: (key, attributes) => {
           const selected = selectedRef.current;
           if (!selected) return attributes;
-          if (key === selected) return { ...attributes, color: "#e9ad31", highlighted: true, zIndex: 2, size: Number(attributes.size) * 1.45 };
-          if (graph.hasNode(selected) && graph.areNeighbors(key, selected)) return { ...attributes, zIndex: 1 };
-          return { ...attributes, color: "#c8cbc6", label: "", zIndex: 0 };
+          if (key === selected) return { ...attributes, color: FOCUSED_COLOR, highlighted: true, zIndex: 2, size: Number(attributes.size) * 1.5 };
+          if (graph.hasNode(selected) && graph.areNeighbors(key, selected)) return { ...attributes, color: NEIGHBOR_COLOR, zIndex: 1 };
+          return { ...attributes, color: MUTED_NODE_COLOR, label: "", zIndex: 0 };
         },
         edgeReducer: (key, attributes) => {
           const selected = selectedRef.current;
           if (!selected || !graph.hasEdge(key)) return attributes;
           const [source, target] = graph.extremities(key);
           return source === selected || target === selected
-            ? { ...attributes, color: EDGE_COLORS[String(attributes.relationType)] ?? "#594f46", size: 2.2, zIndex: 1 }
-            : { ...attributes, color: "#dedfda", hidden: false, size: 0.35, zIndex: 0 };
+            ? { ...attributes, color: FOCUSED_COLOR, size: 1.65, zIndex: 1 }
+            : { ...attributes, color: "#e5e7e5", hidden: false, size: 0.3, zIndex: 0 };
         },
       });
     } catch (error) {
@@ -150,10 +146,11 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         ...position,
         type: "circle",
         label: node.name,
-        color: schemaColor(node.schema.name),
-        size: node.role === "raw" ? 4.2 : 5.4,
-        borderColor: node.role === "raw" ? "#1c2521" : "transparent",
+        color: node.role === "raw" ? "#777c79" : "#444947",
+        size: node.role === "raw" ? 3.8 : 4.8,
+        borderColor: "transparent",
         schema: node.schema.name,
+        role: node.role,
       });
     });
     for (const edge of props.projection.edges) {
@@ -163,10 +160,15 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         graph.addDirectedEdgeWithKey(edge.id, source, target, {
           type: "line",
           relationType: edge.type,
-          color: EDGE_COLORS[edge.type] ?? "#8c8f89",
-          size: 0.7,
+          color: DEFAULT_EDGE_COLOR,
+          size: 0.55,
         });
       }
+    }
+    for (const key of graph.nodes()) {
+      const degree = graph.degree(key);
+      const roleBase = graph.getNodeAttribute(key, "role") === "derived" ? 4.2 : 3.4;
+      graph.setNodeAttribute(key, "size", Math.min(12, roleBase + Math.sqrt(degree + 1) * 1.35));
     }
     const restoredCamera = cameraTargetRef.current;
     if (restoredCamera) {
@@ -296,12 +298,6 @@ function applyAuthoritativeCamera(renderer: Sigma, target: CameraState): void {
   camera.animate(state, { duration: 0 }, () => undefined);
   camera.setState(state);
   debug().camera = camera.getState();
-}
-
-function schemaColor(schema: string): string {
-  let hash = 0;
-  for (const character of schema) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) | 0;
-  return SCHEMA_COLORS[Math.abs(hash) % SCHEMA_COLORS.length]!;
 }
 
 function debug(): DebugState {

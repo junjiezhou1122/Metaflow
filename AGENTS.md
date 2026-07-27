@@ -54,6 +54,12 @@ remain backend capability; neither product surface is a release blocker.
   depend only on `view`, `transformation`, and `view-package`; concrete hosts
   resolve its Renderer descriptors and existing Operation/Transformation
   references.
+- `view-packages/personal-activity`: the first product-View bundle. It owns the
+  strict semantic Audio, Activity Timeline, and Daily Summary Schema families,
+  exact Timeline/Summary Transformations, Processor descriptors, Renderer
+  descriptors, and conformance fixtures. Its executable acceptance begins
+  from already admitted Audio Views; it does not claim that semantic Audio
+  formation from Screenpipe Raw Views is implemented.
 - `view-packages/application-space`: the strict ordinary View definition for an
   immutable Application Space graph root. It freezes exact entry refs and
   explicit membership/composition semantics. Its Schema relation projection
@@ -98,6 +104,13 @@ remain backend capability; neither product surface is a release blocker.
 - `packages/adapters/*`: independent workspace packages implementing storage,
   Browser, Screenpipe, III, Agent Operator, Trigger, Delivery, and
   Materialization ports.
+- `packages/adapters/personal-activity-operator`: the independent Function
+  Worker implementation for `Audio View[] -> Activity Timeline View -> Daily
+  Summary View`. It returns untrusted candidates only, emits formation events,
+  rejects cross-day or unchanged inputs explicitly, and uses optional exact
+  base Views to form immutable successor revisions. Execution retains
+  authorization, validation, provenance, atomic commit, Run, trace, and
+  Failure View ownership.
 - `packages/adapters/storage-sqlite`: durable View and Run state plus the
   transactional View-commit outbox, local FTS projection, and the accepted
   pinned `sqlite-vec@0.1.9` semantic projection. It persists a
@@ -161,6 +174,12 @@ remain backend capability; neither product surface is a release blocker.
   protected endpoints; and leaves checkpoint, retry, atomic admission, trace,
   and DLQ to the shared Connector Runtime. Do not vendor, bundle, auto-install,
   or read Screenpipe's internal SQLite.
+- `packages/adapters/screenpipe-derived-views`: owns the deterministic Function
+  Operator implementations and strict Schemas for evidence-level Screenpipe
+  Timeline and Audio Views. It consumes exact admitted Screenpipe Raw Views and
+  emits untrusted candidates through Execution; it never reads Screenpipe's
+  database, invents semantic summaries, commits Views, or substitutes the later
+  `personal.*` product View families.
 - `packages/adapters/clipboard-capture`: the minimum Connector Kit reference.
   It preserves accepted native clipboard fields in one occurrence Raw View,
   emits file values as external-reference Raw Views, and delegates admission,
@@ -479,6 +498,11 @@ Operations.
   Legacy envelopes may be normalized only by an explicit lossless rule;
   otherwise migration fails with table, exact View revision, phase, and
   transaction context.
+- A non-empty legacy Source Connection secret array migrates only when its
+  connector manifest and configuration prove one exact named slot. The sole
+  supported historical rule is a Screenpipe bearer reference whose configured
+  `authentication.secret_ref` exactly matches the sole array member; it becomes
+  `screenpipe_api_key`. Unknown, multiple, or inconsistent arrays fail closed.
 - Search projection rows and SQLite FTS rows commit or roll back with their
   exact View revision. Full reindex runs are durable and idempotent: a crash
   leaves the prior index intact and the same reserved run can resume; failed

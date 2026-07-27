@@ -3415,15 +3415,12 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         if (typeof legacy !== "object" || legacy === null || Array.isArray(legacy)) {
           throw new Error("legacy Source Connection is not an object");
         }
+        const manifest = ConnectorManifestSchema.parse(parseJson(row.manifest_json, "legacy capture manifest"));
         const secretRefs = (legacy as Record<string, unknown>).secret_refs;
         if (Array.isArray(secretRefs)) {
-          if (secretRefs.length > 0) {
-            throw new Error("non-empty legacy secret_refs cannot be mapped to named credential slots without provider-specific evidence");
-          }
-          (legacy as Record<string, unknown>).secret_refs = {};
+          (legacy as Record<string, unknown>).secret_refs = migrateLegacySecretRefs(legacy, manifest, secretRefs);
         }
         const connection = SourceConnectionSchema.parse(legacy);
-        const manifest = ConnectorManifestSchema.parse(parseJson(row.manifest_json, "legacy capture manifest"));
         const status: SourceConnectionLifecycle["status"] = Number(row.paused) === 1
           ? "paused"
           : connection.enabled ? "active" : "draft";
@@ -3852,6 +3849,32 @@ function removeEmptyLegacyMaterializationMetadata(input: unknown): void {
     }
     throw new Error("legacy Materialization metadata is non-empty and has no lossless current representation");
   }
+}
+
+function migrateLegacySecretRefs(
+  legacy: object,
+  manifest: ConnectorManifest,
+  secretRefs: unknown[],
+): Record<string, unknown> {
+  if (secretRefs.length === 0) return {};
+  const connection = legacy as Record<string, unknown>;
+  const configuration = connection.configuration;
+  const configurationRecord = configuration && typeof configuration === "object" && !Array.isArray(configuration)
+    ? configuration as Record<string, unknown>
+    : undefined;
+  const authentication = configurationRecord?.authentication;
+  const authenticationRecord = authentication && typeof authentication === "object" && !Array.isArray(authentication)
+    ? authentication as Record<string, unknown>
+    : undefined;
+  const screenpipeEvidence = manifest.id === "screenpipe"
+    && connection.connector_id === manifest.id
+    && connection.connector_version === manifest.version
+    && secretRefs.length === 1
+    && authenticationRecord?.mode === "bearer"
+    && authenticationRecord.secret_ref !== undefined
+    && canonicalJson(secretRefs[0] as never) === canonicalJson(authenticationRecord.secret_ref as never);
+  if (screenpipeEvidence) return { screenpipe_api_key: secretRefs[0] };
+  throw new Error("non-empty legacy secret_refs cannot be mapped to named credential slots without exact provider configuration evidence");
 }
 
 function commitFingerprint(draft: ViewDraft, expectedRevision: number): string {

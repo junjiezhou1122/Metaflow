@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
-    "./builtins": "./builtins.ts"
+    "./builtins": "./builtins.ts",
+    "./personal-activity": "./personal-activity.ts",
+    "./screenpipe": "./screenpipe.ts"
   },
   "dependencies": {
     "@info/operations": "workspace:*",

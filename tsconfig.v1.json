@@ -13,6 +13,7 @@
     "packages/capture/**/*.ts",
     "packages/search/**/*.ts",
     "packages/operations/**/*.ts",
+    "packages/screenpipe-contracts/**/*.ts",
     "packages/adapters/**/*.ts",
     "view-packages/**/*.ts",
     "apps/ambient-daemon/**/*.ts",

@@ -26,6 +26,10 @@ import {
   notionConnectorPackageImplementation,
   notionSourceConnection,
 } from "@info/notion-capture-adapter";
+import {
+  SCREENPIPE_CONNECTOR_MANIFEST,
+  screenpipeSourceConnection,
+} from "@info/screenpipe-capture-adapter";
 import { SqliteViewRepository } from "@info/storage-sqlite";
 import { ViewRepositoryError } from "@info/view";
 
@@ -471,6 +475,49 @@ test("migration losslessly names empty legacy secrets and rejects non-empty arra
     );
   } finally {
     rmSync(unsafe.directory, { recursive: true, force: true });
+  }
+});
+
+test("migration names one legacy Screenpipe bearer reference only when manifest and configuration prove the slot", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-screenpipe-secret-migration-"));
+  const path = join(directory, "views.sqlite");
+  const secretRef = { provider: "custom" as const, key: "screenpipe-local-api" };
+  const repository = new SqliteViewRepository(path);
+  try {
+    await repository.registerCaptureConnection({
+      connection: screenpipeSourceConnection({
+        id: "screenpipe:legacy-migration",
+        secret_refs: { screenpipe_api_key: secretRef },
+        authentication: "bearer",
+      }),
+      manifest: SCREENPIPE_CONNECTOR_MANIFEST,
+      occurred_at: NOW,
+    });
+  } finally {
+    repository.close();
+  }
+  const db = new DatabaseSync(path);
+  try {
+    const row = db.prepare("select connection_json from capture_connections_v1 where connection_id = ?")
+      .get("screenpipe:legacy-migration") as { connection_json: string };
+    const connection = JSON.parse(row.connection_json) as Record<string, unknown>;
+    connection.secret_refs = [secretRef];
+    db.prepare("update capture_connections_v1 set connection_json = ? where connection_id = ?")
+      .run(JSON.stringify(connection), "screenpipe:legacy-migration");
+    db.prepare("update view_store_schema_versions_v1 set version = 6 where component = 'view-store'").run();
+  } finally {
+    db.close();
+  }
+  let migrated: SqliteViewRepository | undefined;
+  try {
+    migrated = new SqliteViewRepository(path);
+    assert.deepEqual(
+      (await migrated.getCaptureConnectionLifecycle("screenpipe:legacy-migration"))?.connection.secret_refs,
+      { screenpipe_api_key: secretRef },
+    );
+  } finally {
+    migrated?.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

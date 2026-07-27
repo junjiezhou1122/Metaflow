@@ -149,6 +149,7 @@ function resolveExpandedPath(root: JsonValue, pointer: string): Array<{ path: st
 }
 
 function normalizeSearchUnitValue(field: ViewSearchProjectionField, value: JsonValue, view: View): string | undefined {
+  if (value === null) return undefined;
   if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
     throw new TypeError(`Search projection ${field.category}:${field.path} for ${view.id}@${view.revision} resolved to a non-scalar value`);
   }

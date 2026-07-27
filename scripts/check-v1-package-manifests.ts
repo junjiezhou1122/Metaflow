@@ -91,6 +91,7 @@ function adapterBoundaries(root: string): PackageBoundary[] {
         "@info/search",
         "@info/authoring",
         "@info/operations",
+        "@info/screenpipe-contracts",
       ]),
     }));
 }
@@ -154,6 +155,11 @@ function configuredBoundaries(root: string): PackageBoundary[] {
       directory: join(root, "packages", "operations"),
       rule: "v1-operations-manifest-depends-only-on-v1-ports",
       allowedInternalDependencies: new Set(["@info/view", "@info/transformation", "@info/execution", "@info/capture", "@info/search", "@info/authoring"]),
+    },
+    {
+      directory: join(root, "packages", "screenpipe-contracts"),
+      rule: "v1-screenpipe-contracts-manifest-depends-only-on-view",
+      allowedInternalDependencies: new Set(["@info/view"]),
     },
     ...viewPackageBoundaries(root),
     ...adapterBoundaries(root),

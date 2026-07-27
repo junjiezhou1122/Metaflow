@@ -23,6 +23,8 @@
     "@info/operations": "workspace:*",
     "@info/search": "workspace:*",
     "@info/scheduler-automation-adapter": "workspace:*",
+    "@info/screenpipe-capture-adapter": "workspace:*",
+    "@info/screenpipe-derived-views": "workspace:*",
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
     "@info/function-operator-adapter": "workspace:*",

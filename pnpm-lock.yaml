@@ -88,12 +88,21 @@ importers:
       '@info/operations':
         specifier: workspace:*
         version: link:packages/operations
+      '@info/personal-activity-operator-adapter':
+        specifier: workspace:*
+        version: link:packages/adapters/personal-activity-operator
       '@info/scheduler-automation-adapter':
         specifier: workspace:*
         version: link:packages/adapters/scheduler-automation
       '@info/screenpipe-capture-adapter':
         specifier: workspace:*
         version: link:packages/adapters/screenpipe-capture
+      '@info/screenpipe-contracts':
+        specifier: workspace:*
+        version: link:packages/screenpipe-contracts
+      '@info/screenpipe-derived-views':
+        specifier: workspace:*
+        version: link:packages/adapters/screenpipe-derived-views
       '@info/search':
         specifier: workspace:*
         version: link:packages/search
@@ -115,6 +124,9 @@ importers:
       '@info/view-package':
         specifier: workspace:*
         version: link:packages/view-package
+      '@info/view-package-personal-activity':
+        specifier: workspace:*
+        version: link:view-packages/personal-activity
       '@info/web-view-renderers':
         specifier: workspace:*
         version: link:packages/adapters/web-view-renderers
@@ -203,6 +215,12 @@ importers:
       '@info/scheduler-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/scheduler-automation
+      '@info/screenpipe-capture-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/screenpipe-capture
+      '@info/screenpipe-derived-views':
+        specifier: workspace:*
+        version: link:../../packages/adapters/screenpipe-derived-views
       '@info/search':
         specifier: workspace:*
         version: link:../../packages/search
@@ -247,6 +265,12 @@ importers:
       '@info/view':
         specifier: workspace:*
         version: link:../../packages/view
+      '@info/view-package-personal-activity':
+        specifier: workspace:*
+        version: link:../../view-packages/personal-activity
+      '@info/web-view-renderers':
+        specifier: workspace:*
+        version: link:../../packages/adapters/web-view-renderers
       '@vitejs/plugin-react':
         specifier: 6.0.4
         version: 6.0.4(vite@8.1.5(@types/node@22.19.15)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.8.3))
@@ -268,6 +292,12 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
+      react-markdown:
+        specifier: 10.1.0
+        version: 10.1.0(@types/react@19.2.17)(react@19.2.8)
+      remark-gfm:
+        specifier: 4.0.1
+        version: 4.0.1
       sigma:
         specifier: 3.0.3
         version: 3.0.3(graphology-types@0.24.8)
@@ -278,9 +308,6 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
-      '@info/web-view-renderers':
-        specifier: workspace:*
-        version: link:../../packages/adapters/web-view-renderers
       '@playwright/test':
         specifier: 1.62.0
         version: 1.62.0
@@ -598,6 +625,18 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
+  packages/adapters/personal-activity-operator:
+    dependencies:
+      '@info/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../view
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
   packages/adapters/scheduler-automation:
     dependencies:
       '@info/automation':
@@ -615,6 +654,27 @@ importers:
       '@info/capture':
         specifier: workspace:*
         version: link:../../capture
+      '@info/screenpipe-contracts':
+        specifier: workspace:*
+        version: link:../../screenpipe-contracts
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../view
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
+  packages/adapters/screenpipe-derived-views:
+    dependencies:
+      '@info/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@info/screenpipe-contracts':
+        specifier: workspace:*
+        version: link:../../screenpipe-contracts
+      '@info/transformation':
+        specifier: workspace:*
+        version: link:../../transformation
       '@info/view':
         specifier: workspace:*
         version: link:../../view
@@ -782,6 +842,15 @@ importers:
         specifier: ^3.25.2
         version: 3.25.2(zod@3.25.76)
 
+  packages/screenpipe-contracts:
+    dependencies:
+      '@info/view':
+        specifier: workspace:*
+        version: link:../view
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
   packages/search:
     dependencies:
       '@info/view':
@@ -838,6 +907,15 @@ importers:
 
   view-packages/obsidian-document:
     dependencies:
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../../packages/view-package
+
+  view-packages/personal-activity:
+    dependencies:
+      '@info/transformation':
+        specifier: workspace:*
+        version: link:../../packages/transformation
       '@info/view-package':
         specifier: workspace:*
         version: link:../../packages/view-package

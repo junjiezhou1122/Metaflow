@@ -1,0 +1,14 @@
+{
+  "name": "@info/view-package-personal-activity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./browser": "./browser.ts"
+  },
+  "dependencies": {
+    "@info/transformation": "workspace:*",
+    "@info/view-package": "workspace:*"
+  }
+}

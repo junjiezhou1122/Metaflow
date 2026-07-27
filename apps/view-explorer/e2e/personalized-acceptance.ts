@@ -36,6 +36,11 @@ export type PersonalizedViewExplorerAcceptanceInput = {
   principal: OperationPrincipal;
   application_space: ExactViewRef;
   working_state: ExactViewRef;
+  content_assertion?: {
+    renderer: string;
+    texts: readonly string[];
+  };
+  screenshot_path?: string;
   timeout_ms?: number;
 };
 
@@ -262,6 +267,13 @@ async function verifyPersonalizedViewExplorerPage(
       await page.locator(".sigma-container canvas").first().waitFor({ state: "visible", timeout });
       await page.locator(".detail-heading code").waitFor({ state: "visible", timeout });
       await page.waitForFunction(expected => document.querySelector(".detail-heading code")?.textContent === expected, workingStateKey, { timeout });
+      if (input.content_assertion) {
+        const content = page.locator(`[data-renderer="${input.content_assertion.renderer}"]`);
+        await content.waitFor({ state: "visible", timeout });
+        for (const expectedText of input.content_assertion.texts) {
+          await content.getByText(expectedText, { exact: false }).first().waitFor({ state: "visible", timeout });
+        }
+      }
     })(),
     routeFailure,
   ]);
@@ -336,6 +348,9 @@ async function verifyPersonalizedViewExplorerPage(
   }
 
   const renderer = await runRendererAcceptance(page, baseUrl, exactWorkingStateView);
+  if (input.screenshot_path) {
+    await page.screenshot({ path: input.screenshot_path, fullPage: true, animations: "disabled" });
+  }
   await page.waitForTimeout(50);
   if (consoleErrors > 0 || consoleWarnings > 0) {
     throw new PersonalizedViewExplorerAcceptanceError(
@@ -425,16 +440,22 @@ async function runRendererAcceptance(
   baseUrl: string,
   view: View,
 ): Promise<PersonalizedRendererAcceptanceEvidence> {
-  const moduleUrl = new URL("/e2e/personalized-renderer-acceptance.ts", baseUrl).toString();
+  const screenpipe = view.schema.name === "metaflow.screenpipe.timeline" || view.schema.name === "metaflow.screenpipe.audio";
+  const moduleUrl = new URL(screenpipe
+    ? "/e2e/screenpipe-renderer-acceptance.ts"
+    : "/e2e/personalized-renderer-acceptance.ts", baseUrl).toString();
   const authorizedViewJson = JSON.stringify(view);
   return page.evaluate<PersonalizedRendererAcceptanceEvidence, {
     rendererModuleUrl: string;
     authorizedViewJson: string;
   }>(async ({ rendererModuleUrl, authorizedViewJson: serializedView }) => {
     const rendererModule = await import(rendererModuleUrl) as {
-      runPersonalizedRendererAcceptance(value: unknown): Promise<PersonalizedRendererAcceptanceEvidence>;
+      runPersonalizedRendererAcceptance?(value: unknown): Promise<PersonalizedRendererAcceptanceEvidence>;
+      runScreenpipeRendererAcceptance?(value: unknown): Promise<PersonalizedRendererAcceptanceEvidence>;
     };
-    return rendererModule.runPersonalizedRendererAcceptance(JSON.parse(serializedView));
+    const run = rendererModule.runScreenpipeRendererAcceptance ?? rendererModule.runPersonalizedRendererAcceptance;
+    if (!run) throw new Error("Renderer acceptance module did not export a supported runner");
+    return run(JSON.parse(serializedView));
   }, { rendererModuleUrl: moduleUrl, authorizedViewJson });
 }
 

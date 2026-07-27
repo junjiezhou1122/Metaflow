@@ -11,11 +11,14 @@ import {
   type ViewGraphProjectionResult,
 } from "./contracts.js";
 import type { OperationTransport } from "./operation-client.js";
+import { PRODUCT_VIEW_REFS, PRODUCT_VIEWS_FIXTURE_ID } from "./product-view-fixture-contract.js";
+
+export { PRODUCT_VIEW_REFS, PRODUCT_VIEWS_FIXTURE_ID } from "./product-view-fixture-contract.js";
 
 export const FIXTURE_SIZES = [1, 10, 500, 2_000] as const;
 export type FixtureSize = typeof FIXTURE_SIZES[number];
 export const PERSONALIZED_FIXTURE_ID = "personalized" as const;
-export type FixtureId = FixtureSize | typeof PERSONALIZED_FIXTURE_ID;
+export type FixtureId = FixtureSize | typeof PERSONALIZED_FIXTURE_ID | typeof PRODUCT_VIEWS_FIXTURE_ID;
 
 export const PERSONALIZED_VIEW_REFS = {
   application_space: { view_id: "view:fixture:view-explorer:personalized:application-space", revision: 1 },
@@ -40,17 +43,43 @@ export function parseFixtureSize(value: string | null): FixtureSize | undefined 
 
 export function parseFixtureId(value: string | null): FixtureId | undefined {
   if (value === PERSONALIZED_FIXTURE_ID) return PERSONALIZED_FIXTURE_ID;
+  if (value === PRODUCT_VIEWS_FIXTURE_ID) return PRODUCT_VIEWS_FIXTURE_ID;
   return parseFixtureSize(value);
 }
 
 export function fixtureRoot(fixture: FixtureId): ExactViewRef {
-  return fixture === PERSONALIZED_FIXTURE_ID ? PERSONALIZED_VIEW_REFS.application_space : fixtureRef(0);
+  if (fixture === PERSONALIZED_FIXTURE_ID) return PERSONALIZED_VIEW_REFS.application_space;
+  if (fixture === PRODUCT_VIEWS_FIXTURE_ID) return PRODUCT_VIEW_REFS.daily_summary;
+  return fixtureRef(0);
 }
 
 export function createFixtureTransport(fixture: FixtureId): FixtureTransport {
-  const full = fixture === PERSONALIZED_FIXTURE_ID ? makePersonalizedProjection() : makeFixtureProjection(fixture);
-  const views = fixture === PERSONALIZED_FIXTURE_ID ? makePersonalizedViews() : undefined;
   const calls: Array<{ operation: ExplorerOperation; input: unknown }> = [];
+  if (fixture === PRODUCT_VIEWS_FIXTURE_ID) {
+    let resolved: Promise<FixtureTransport> | undefined;
+    return {
+      calls,
+      async call(operation, input, signal) {
+        resolved ??= import("./product-view-fixture.js").then(module =>
+          createResolvedFixtureTransport(module.makeProductViewProjection(), module.makeProductViews(), calls));
+        return (await resolved).call(operation, input, signal);
+      },
+    };
+  }
+  const full = fixture === PERSONALIZED_FIXTURE_ID
+    ? makePersonalizedProjection()
+    : makeFixtureProjection(fixture);
+  const views = fixture === PERSONALIZED_FIXTURE_ID
+    ? makePersonalizedViews()
+    : undefined;
+  return createResolvedFixtureTransport(full, views, calls);
+}
+
+function createResolvedFixtureTransport(
+  full: ViewGraphProjectionResult,
+  views: Map<string, View> | undefined,
+  calls: Array<{ operation: ExplorerOperation; input: unknown }>,
+): FixtureTransport {
   return {
     calls,
     async call(operation, input, signal): Promise<OperationEnvelope> {
@@ -291,10 +320,26 @@ function makePersonalizedViews(): Map<string, View> {
       sources: inputRefs.map(refKey),
     } : refKey(node.ref) === refKey(PERSONALIZED_VIEW_REFS.application_space) ? {
       entries: projection.nodes.slice(1).map(candidate => refKey(candidate.ref)),
-    } : {
-      synthetic: true,
-      source_kind: node.schema.name === "codex.history.session" ? "codex_history" : "obsidian_markdown",
-      title: node.name,
+    } : node.representation.kind === "markdown" ? [
+      `# ${node.name}`,
+      "",
+      "This synthetic note represents captured Markdown evidence in the personalized View workflow.",
+      "",
+      "## Decisions",
+      "",
+      "- Views retain exact revisions and source provenance.",
+      "- Parser Workers create bounded searchable fragments.",
+      "- Search returns exact View references.",
+      "",
+      "> The content dialog renders this Representation while the graph remains the navigation surface.",
+    ].join("\n")
+    : {
+      session: node.name,
+      messages: [
+        { role: "user", text: "How should personalized Views remain traceable?" },
+        { role: "assistant", text: "Freeze exact source refs, Transformation, Operator, Run, and policy." },
+      ],
+      source_kind: "codex_history",
     };
     const view: View = {
       ...makeFixtureView(node),
