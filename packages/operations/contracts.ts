@@ -7,6 +7,7 @@ import {
   JsonValueSchema,
   RelationTraversalQuerySchema,
   ViewGraphProjectionRequestSchema,
+  ViewPolicySchema,
   ReindexViewSearchInputSchema,
   SourceTombstoneParametersSchema,
   TimestampSchema,
@@ -22,7 +23,13 @@ import {
   RecordFeedbackInputSchema,
   StartExecutionParametersSchema,
 } from "@info/execution";
-import { CaptureBatchSchema } from "@info/capture";
+import {
+  CaptureBatchSchema,
+  CaptureDeliveryKindSchema,
+  CaptureIdentifierSchema,
+  ExactConnectorPackageRefSchema,
+  NamedSecretReferencesSchema,
+} from "@info/capture";
 import {
   AuthoringApplyInputSchema,
   AuthoringDecisionInputSchema,
@@ -34,7 +41,19 @@ import {
 
 export const OPERATION_NAMES = [
   "catalog.list",
+  "connector.list",
+  "connector.inspect",
   "capture.ingest",
+  "capture.connection.list",
+  "capture.connection.create",
+  "capture.connection.check",
+  "capture.connection.discover",
+  "capture.connection.activate",
+  "capture.connection.update",
+  "capture.connection.pause",
+  "capture.connection.run",
+  "capture.dlq.list",
+  "capture.dlq.replay",
   "view.get",
   "view.graph.project",
   "view.search",
@@ -65,7 +84,44 @@ export const OperationNameSchema = z.enum(OPERATION_NAMES);
 
 export const OperationInputSchemas = {
   "catalog.list": z.object({}).strict(),
+  "connector.list": z.object({}).strict(),
+  "connector.inspect": z.object({ package: ExactConnectorPackageRefSchema }).strict(),
   "capture.ingest": z.object({ batch: CaptureBatchSchema }).strict(),
+  "capture.connection.list": z.object({}).strict(),
+  "capture.connection.create": z.object({
+    idempotency_key: CaptureIdentifierSchema,
+    package: ExactConnectorPackageRefSchema,
+    connection: z.object({
+      id: CaptureIdentifierSchema,
+      display_name: z.string().trim().min(1).max(500),
+      endpoint: z.string().trim().min(1).optional(),
+      delivery_kinds: z.array(CaptureDeliveryKindSchema).min(1),
+      secret_refs: NamedSecretReferencesSchema,
+      configuration: z.record(JsonValueSchema),
+      privacy: ViewPolicySchema.optional(),
+    }).strict(),
+  }).strict(),
+  "capture.connection.check": lifecycleGenerationInput(),
+  "capture.connection.discover": lifecycleGenerationInput({ parameters: z.record(JsonValueSchema).default({}) }),
+  "capture.connection.activate": lifecycleGenerationInput(),
+  "capture.connection.update": lifecycleGenerationInput({
+    display_name: z.string().trim().min(1).max(500).optional(),
+    endpoint: z.string().trim().min(1).optional(),
+    delivery_kinds: z.array(CaptureDeliveryKindSchema).min(1).optional(),
+    secret_refs: NamedSecretReferencesSchema.optional(),
+    configuration: z.record(JsonValueSchema).optional(),
+    privacy: ViewPolicySchema.optional(),
+  }),
+  "capture.connection.pause": lifecycleGenerationInput(),
+  "capture.connection.run": lifecycleGenerationInput({
+    delivery: z.enum(["pull", "stream", "reference"]),
+    parameters: z.record(JsonValueSchema).default({}),
+  }),
+  "capture.dlq.list": z.object({
+    connection_id: CaptureIdentifierSchema,
+    status: z.enum(["pending", "resolved"]).optional(),
+  }).strict(),
+  "capture.dlq.replay": z.object({ id: CaptureIdentifierSchema }).strict(),
   "view.get": z.object({ ref: ExactViewRefSchema }).strict(),
   "view.graph.project": z.object({ request: ViewGraphProjectionRequestSchema }).strict(),
   "view.search": z.object({ request: SearchRequestV1Schema }).strict(),
@@ -104,7 +160,19 @@ export const OperationInputSchemas = {
 
 export const OPERATION_DESCRIPTIONS: Record<OperationName, string> = {
   "catalog.list": "List the canonical Metaflow v1 operation catalog.",
+  "connector.list": "List exact trusted Connector Package descriptors available for onboarding.",
+  "connector.inspect": "Inspect one exact Connector Package descriptor by id, version, and artifact digest.",
   "capture.ingest": "Atomically admit one provider-neutral Capture Batch as Raw View revisions.",
+  "capture.connection.list": "List durable Source Connections and their exact CAS generations.",
+  "capture.connection.create": "Create one draft Source Connection from an exact trusted Connector Package.",
+  "capture.connection.check": "Check credentials and provider compatibility for one exact Source Connection generation.",
+  "capture.connection.discover": "Preview provider resources without admitting Raw Views or advancing checkpoints.",
+  "capture.connection.activate": "Activate one checked Source Connection generation.",
+  "capture.connection.update": "Create a new draft Source Connection generation through compare-and-swap.",
+  "capture.connection.pause": "Pause one active Source Connection generation.",
+  "capture.connection.run": "Run one active pull, stream, or reference Connector through Capture Runtime.",
+  "capture.dlq.list": "Inspect durable Capture dead letters for one Source Connection.",
+  "capture.dlq.replay": "Explicitly replay one durable Capture dead letter through Capture Runtime.",
   "view.get": "Read one exact immutable View revision.",
   "view.graph.project": "Project one bounded authorized exact-revision View graph without returning full View content.",
   "view.search": "Search one authorized exact View scope with declared keyword, semantic, or relation modes.",
@@ -230,4 +298,13 @@ export function operationData(value: unknown): JsonValue {
 
 export function operationDetails(value: JsonObject): JsonObject {
   return value;
+}
+
+function lifecycleGenerationInput<Shape extends z.ZodRawShape>(shape?: Shape) {
+  return z.object({
+    connection_id: CaptureIdentifierSchema,
+    expected_generation: z.number().int().positive(),
+    idempotency_key: CaptureIdentifierSchema,
+    ...(shape ?? {} as Shape),
+  }).strict();
 }

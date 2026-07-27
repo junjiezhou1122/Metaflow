@@ -93,7 +93,7 @@ export function browserSourceConnection(input: {
     display_name: "Chrome extension",
     enabled: true,
     delivery_kinds: ["push"],
-    secret_refs: [],
+    secret_refs: {},
     configuration: {},
     privacy: input.privacy ?? privatePolicy(),
   });

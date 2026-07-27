@@ -182,7 +182,7 @@ export function clipboardSourceConnection(input: {
     id: input.id ?? "clipboard:local",
     display_name: input.display_name ?? "Local clipboard",
     delivery_kinds: ["push"],
-    secret_refs: input.secret_refs ?? [],
+    secret_refs: input.secret_refs ?? {},
     configuration: { device_id: input.device_id ?? "mac:local" },
     ...(input.privacy ? { privacy: input.privacy } : {}),
   });

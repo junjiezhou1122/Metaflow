@@ -6,6 +6,8 @@ write the View Store directly.
 
 ```text
 provider API / SDK / filesystem / webhook / MCP
+  -> exact trusted Connector Package
+  -> Source Connection onboarding
   -> ConnectorPort
   -> ConnectorRuntime
   -> CaptureIngress
@@ -18,6 +20,8 @@ provider API / SDK / filesystem / webhook / MCP
 Capture Core owns:
 
 - versioned Connector manifests and Source Connections;
+- exact Connector Package catalog, trust loading, Runtime ABI and permissions;
+- named credential slots and Source Connection CAS generations;
 - secret references, delivery kinds, and capability negotiation;
 - Capture Batches, Raw View Candidates, and checkpoint transitions;
 - retry, pause/resume, backpressure, health, dead letters, and replay;
@@ -48,7 +52,11 @@ belongs in Capture Core.
 | Contract | Meaning |
 | --- | --- |
 | `ConnectorManifest` | Versioned capabilities, transports, delivery kinds, and emitted Schema declarations. |
+| `ConnectorPackageDescriptor` | Exact artifact digest, signature, ABI, permissions, credential slots, configuration schema, and conformance v2 evidence. |
+| `ConnectorPackageCatalog` | Deterministic descriptor discovery; ambiguous versions require an exact digest. |
+| `TrustedConnectorPackageLoader` | Fails before returning executable code unless artifact, signature, ABI, and host permissions all match. |
 | `SourceConnection` | One configured provider source with secret references and privacy defaults. |
+| `SourceConnectionOnboardingService` | Idempotent create/check/discover/activate/update/pause/run lifecycle over CAS generations. |
 | `RawViewCandidate` | Source-attributed evidence that has not entered the View Store. |
 | `CaptureBatch` | One atomic delivery and its optional explicit checkpoint transition. |
 | `ConnectorPort` | Health and pull/stream/reference access to a provider. |
@@ -57,6 +65,29 @@ belongs in Capture Core.
 | `CaptureRuntimeRepository` | Atomic persistence for Views, checkpoints, attempts, trace, and dead letters. |
 | `ConnectorKit` | Small deterministic source payload to Raw View Candidate and Capture Batch authoring API. |
 | `runConnectorConformance` | Reusable malformed-input, determinism, Schema, lossless, multi-candidate, and exact-replay harness. |
+| `runConnectorConformanceV2` | Adds required proof for every declared push, pull, stream, reference, and incremental capability. |
+
+## Package and onboarding boundary
+
+```text
+Connector Package descriptor
+  id@version + sha256 + Ed25519 publisher signature
+  Runtime ABI + requested permissions
+  named credential slots + JSON configuration schema
+  conformance@2 evidence
+             ↓ trusted loader
+Connector implementation
+             ↓
+draft@1 -> check@2 -> optional discover preview -> active@3
+                                              -> run through ConnectorRuntime
+active@N -> pause@N+1 -> active@N+2
+active@N -> update draft@N+1 -> check -> activate
+```
+
+Discovery is read-only preview: it does not admit Raw Views or advance a
+checkpoint. Run remains owned by `ConnectorRuntime`. A stale generation fails
+instead of overwriting a concurrent update. Lifecycle actions require an
+idempotency key and return the original durable receipt on exact replay.
 
 `push` and `manual_import` callers submit a batch through
 `ConnectorRuntime.submitBatch`. `pull`, `stream`, and `reference` callers use
@@ -109,10 +140,15 @@ pause/resume, restart recovery, dead-letter, and replay transitions.
 
 ## Secrets and large sources
 
-Connections contain only `SecretReference` values. Candidate metadata,
+Connections contain only named `SecretReference` values such as
+`notion_token` or `screenpipe_api_key`. Candidate metadata,
 Representations, batches, errors, trace payloads, and dead letters reject
 credential-shaped keys. Untrusted provider exception text is normalized before
 it can enter admission events, logs, health, trace, or dead letters.
+
+The storage migration converts an empty legacy positional secret array to an
+empty map. It rejects non-empty legacy arrays because assigning names without
+provider-specific evidence would be lossy.
 
 Large media and documents normally use an `external_reference`
 Representation. Fetching, decoding, OCR, transcription, or summarization later
@@ -128,6 +164,14 @@ View.
   state only after all preceding records were written. Metaflow keeps the
   Connector cursor opaque and commits it with the admitted batch:
   <https://docs.airbyte.com/platform/understanding-airbyte/airbyte-protocol#state--checkpointing>
+- Airbyte's source lifecycle separates `spec`, `check`, `discover`, and `read`.
+  Metaflow reuses that understandable onboarding sequence while retaining its
+  own View admission, exact identity, policy, checkpoint, and trace contracts:
+  <https://docs.airbyte.com/platform/understanding-airbyte/airbyte-protocol>
+- Singer/Meltano catalogs and package variants informed exact package/version
+  discovery; Metaflow additionally requires an artifact digest, signature,
+  ABI, permission allowlist, and named secrets before loading executable code:
+  <https://docs.meltano.com/concepts/plugins>
 - Amazon SQS DLQs isolate exhausted work for inspection and explicit redrive.
   Metaflow stores sanitized terminal batches and exposes explicit replay:
   <https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html>
@@ -137,7 +181,7 @@ These are behavioral patterns, not runtime dependencies.
 ## Verification
 
 ```bash
-node --experimental-sqlite --import tsx --test tests/capture-runtime.test.ts
+pnpm test:connector-onboarding
 ./node_modules/.bin/tsc --noEmit -p tsconfig.v1.json
 node --import tsx scripts/check-v1-package-manifests.ts
 ```

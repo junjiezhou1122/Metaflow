@@ -426,7 +426,7 @@ export function codexHistorySourceConnection(input: {
     id: input.id ?? "codex-history:local",
     display_name: input.display_name ?? "Local Codex history",
     delivery_kinds: ["pull"],
-    secret_refs: [],
+    secret_refs: {},
     configuration: {
       source_root: input.source_root ?? "both",
       content_mode: input.content_mode ?? "messages",

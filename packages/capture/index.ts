@@ -5,3 +5,5 @@ export * from "./runtime-contracts.js";
 export * from "./runtime.js";
 export * from "./connector-kit.js";
 export * from "./connector-conformance.js";
+export * from "./connector-package.js";
+export * from "./onboarding.js";

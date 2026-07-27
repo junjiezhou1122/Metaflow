@@ -23,6 +23,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/committed-view-trigger.test.ts",
   "tests/codex-history-capture.test.ts",
   "tests/connector-kit.test.ts",
+  "tests/connector-onboarding.test.ts",
   "tests/execution-runtime.test.ts",
   "tests/failure-repair.test.ts",
   "tests/feedback-evolution.test.ts",

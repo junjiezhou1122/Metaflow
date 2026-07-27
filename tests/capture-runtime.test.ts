@@ -51,7 +51,7 @@ function connection(id = "connection:fixture"): SourceConnection {
     endpoint: "https://fixture.example/api",
     enabled: true,
     delivery_kinds: manifest.delivery_kinds,
-    secret_refs: [{ provider: "keychain", key: "metaflow.fixture.token" }],
+    secret_refs: { fixture_token: { provider: "keychain", key: "metaflow.fixture.token" } },
     configuration: { project: "metaflow" },
     privacy: policy,
   });
@@ -178,7 +178,7 @@ test("Capture contracts reject inline credentials and retain only secret referen
     ...candidate("secret-candidate"),
     metadata: { access_token: "must-not-enter-view" },
   }).success, false);
-  assert.equal(connection().secret_refs[0]?.key, "metaflow.fixture.token");
+  assert.equal(connection().secret_refs.fixture_token?.key, "metaflow.fixture.token");
   assert.doesNotMatch(JSON.stringify(connection()), /must-not-enter/);
   assert.equal(RawViewCandidateSchema.safeParse(candidate("documentation", {
     value: { text: "The documentation contains an api_key=example placeholder." },

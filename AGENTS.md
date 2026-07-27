@@ -66,8 +66,11 @@ but there is no separate canonical Worker domain layer.
   a direct Runtime result or a durable queued receipt without changing Trigger
   semantics.
 - `packages/capture`: Connector and Source Connection contracts, Connector
-  Runtime, candidate admission, Raw View normalization, checkpointing, and
-  capture traces. Its Connector Kit is the small deterministic authoring layer
+  Package descriptors/catalog/trusted exact-artifact loading, CAS-generation
+  onboarding, Connector Runtime, candidate admission, Raw View normalization,
+  checkpointing, and capture traces. Connector Packages freeze Runtime ABI,
+  publisher signature, permissions, named credential slots, configuration
+  schema, and conformance v2 evidence. Its Connector Kit is the small deterministic authoring layer
   for manifest, configuration, source payload, Adapt, candidate, batch, and
   conformance contracts; it never owns provider API or SDK access.
 - `packages/operations`: the transport-neutral v1 operation catalog,
@@ -166,6 +169,12 @@ but there is no separate canonical Worker domain layer.
   deterministic Markdown/frontmatter/link parsing, and a pre-batch secret gate.
   It never resolves links, fetches attachments, mutates the vault, or copies an
   absolute vault path into Views, checkpoints, traces, or failures.
+- `packages/adapters/notion-capture`: integrates Notion only through the pinned
+  official `@notionhq/client`. Discovery returns bounded previews without
+  admitting Views or advancing checkpoints; pull/reference runs preserve full
+  source objects as Raw Views and retain large media only as provider external
+  references. The named `notion_token` SecretReference is resolved only at the
+  SDK boundary and never enters configuration, Views, traces, or DLQ evidence.
 - `packages/adapters/operation-surfaces`: thin CLI, HTTP, and official MCP SDK
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
@@ -213,7 +222,10 @@ but there is no separate canonical Worker domain layer.
   import `@info/core` or `@info/server`. Shared Operations separately compose
   approval-gated authoring with the resident Agent runtime and the exact
   registered built-in View Package catalog; this does not route Direct Assist
-  through Views or Automation.
+  through Views or Automation. Deployments may inject an explicit
+  signed Connector Package catalog, artifact port, publisher trust store, and
+  host permission allowlist; omitting it is a valid no-package deployment and
+  never enables an implicit marketplace.
 - `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
   shared Operations, validates graph/search/exact-View responses, and keeps a
   disposable Graphology projection plus Sigma camera/layout state in the
@@ -257,6 +269,12 @@ Operations.
 - Credentials exist only as `SourceConnection.secret_refs`. Configuration,
   endpoint userinfo, candidate Representation/metadata, errors, traces, and
   dead letters cannot contain inline secret material.
+- Connector Package loading is exact on `id@version+sha256`. Unsigned,
+  unknown, ambiguous, ABI-incompatible, digest-mismatched, untrusted-publisher,
+  or host-permission-exceeding artifacts fail before executable Connector code
+  is returned. Source Connections bind that exact package and use named secret
+  slots plus compare-and-swap generations; create/check/discover/activate/
+  update/pause/run are explicit idempotent lifecycle actions.
 - A stable source object may accumulate immutable Raw View revisions. Source
   occurrences such as watch sessions or copy events have independent View ids.
 - Cross-Connector semantic duplicates remain separate evidence and are linked
