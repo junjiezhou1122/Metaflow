@@ -308,6 +308,12 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
+      '@info/operations':
+        specifier: workspace:*
+        version: link:../../packages/operations
+      '@info/storage-sqlite':
+        specifier: workspace:*
+        version: link:../../packages/adapters/storage-sqlite
       '@playwright/test':
         specifier: 1.62.0
         version: 1.62.0

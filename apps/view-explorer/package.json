@@ -29,6 +29,8 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@info/operations": "workspace:*",
+    "@info/storage-sqlite": "workspace:*",
     "@playwright/test": "1.62.0",
     "@types/node": "22.19.15",
     "@types/pngjs": "6.0.5",

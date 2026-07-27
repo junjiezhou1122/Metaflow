@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ["graphology", "graphology-layout-forceatlas2", "graphology-layout-noverlap"],
+  },
   build: {
     target: "es2022",
     sourcemap: true,

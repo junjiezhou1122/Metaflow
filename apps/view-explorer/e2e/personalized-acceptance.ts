@@ -103,14 +103,18 @@ export async function runPersonalizedViewExplorerAcceptance(
   let http: HttpServer | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
+    http = createHttpServer();
     vite = await createViteServer({
       root: explorerRoot,
       cacheDir: cacheDirectory,
       logLevel: "silent",
       appType: "spa",
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: { server: http },
+        ws: { server: http },
+      },
     });
-    http = createHttpServer(vite.middlewares);
+    http.on("request", vite.middlewares);
     await listenOnEphemeralPort(http);
     const address = http.address();
     if (!address || typeof address === "string") {
@@ -193,14 +197,30 @@ async function verifyPersonalizedViewExplorerPage(
   let consoleErrors = 0;
   let consoleWarnings = 0;
   let webglDriverWarnings = 0;
+  const browserFailures: string[] = [];
   page.on("console", message => {
-    if (message.type() === "error") consoleErrors += 1;
+    if (message.type() === "error") {
+      consoleErrors += 1;
+      retainFailure(browserFailures, `console:${message.text()}`);
+    }
     if (message.type() === "warning") {
       if (isChromiumReadPixelsWarning(message.text())) webglDriverWarnings += 1;
-      else consoleWarnings += 1;
+      else {
+        consoleWarnings += 1;
+        retainFailure(browserFailures, `warning:${message.text()}`);
+      }
     }
   });
-  page.on("pageerror", () => { consoleErrors += 1; });
+  page.on("pageerror", error => {
+    consoleErrors += 1;
+    retainFailure(browserFailures, `pageerror:${error.message}`);
+  });
+  page.on("requestfailed", request => {
+    retainFailure(browserFailures, `requestfailed:${request.resourceType()}:${request.url()}:${request.failure()?.errorText ?? "unknown"}`);
+  });
+  page.on("response", response => {
+    if (response.status() >= 400) retainFailure(browserFailures, `response:${response.status()}:${response.url()}`);
+  });
 
   let failRoute!: (error: Error) => void;
   const routeFailure = new Promise<never>((_resolve, reject) => { failRoute = reject; });
@@ -259,11 +279,19 @@ async function verifyPersonalizedViewExplorerPage(
     (async () => {
       await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout });
       await page.locator(".explorer-shell").waitFor({ state: "visible", timeout });
-      await page.waitForFunction(() => {
-        const shell = document.querySelector(".explorer-shell");
-        const count = Number(shell?.getAttribute("data-node-count"));
-        return shell?.getAttribute("data-layout-state") === "ready" && Number.isInteger(count) && count > 0;
-      }, undefined, { timeout });
+      try {
+        await page.waitForFunction(() => {
+          const shell = document.querySelector(".explorer-shell");
+          const count = Number(shell?.getAttribute("data-node-count"));
+          const state = shell?.getAttribute("data-layout-state");
+          return state === "failed" || (state === "ready" && Number.isInteger(count) && count > 0);
+        }, undefined, { timeout });
+      } catch (error) {
+        throw await layoutAcceptanceError(page, "Graph layout did not reach a terminal state", browserFailures, error);
+      }
+      if (await page.locator(".explorer-shell").getAttribute("data-layout-state") !== "ready") {
+        throw await layoutAcceptanceError(page, "Graph layout failed before View Explorer became ready", browserFailures);
+      }
       await page.locator(".sigma-container canvas").first().waitFor({ state: "visible", timeout });
       await page.locator(".detail-heading code").waitFor({ state: "visible", timeout });
       await page.waitForFunction(expected => document.querySelector(".detail-heading code")?.textContent === expected, workingStateKey, { timeout });
@@ -380,6 +408,40 @@ async function verifyPersonalizedViewExplorerPage(
     chromium_webgl_driver_warnings: webglDriverWarnings,
     retained_artifacts: false,
   };
+}
+
+async function layoutAcceptanceError(
+  page: Page,
+  message: string,
+  browserFailures: readonly string[],
+  cause?: unknown,
+): Promise<PersonalizedViewExplorerAcceptanceError> {
+  const diagnostics = await page.evaluate(() => {
+    const shell = document.querySelector(".explorer-shell");
+    const failure = document.querySelector<HTMLElement>("[role='alert']");
+    return {
+      state: shell?.getAttribute("data-layout-state") ?? "missing",
+      node_count: shell?.getAttribute("data-node-count") ?? "missing",
+      failure_code: failure?.dataset.errorCode ?? "missing",
+      failure_message: failure?.innerText.trim().slice(0, 500) ?? "missing",
+    };
+  });
+  return new PersonalizedViewExplorerAcceptanceError(
+    message,
+    "explorer_layout_not_ready",
+    {
+      layout_state: diagnostics.state,
+      node_count: diagnostics.node_count,
+      failure_code: diagnostics.failure_code,
+      failure_message: diagnostics.failure_message,
+      browser_failures: browserFailures.join(" | ").slice(0, 2_000) || "none",
+    },
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function retainFailure(failures: string[], value: string): void {
+  if (failures.length < 20) failures.push(value.slice(0, 1_000));
 }
 
 function validateExactOperationInput(

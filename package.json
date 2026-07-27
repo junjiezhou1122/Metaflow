@@ -19,6 +19,7 @@
     "website:build": "pnpm --dir apps/website run build",
     "website:preview": "pnpm --dir apps/website run preview",
     "view-explorer:dev": "pnpm --dir apps/view-explorer run dev",
+    "view-explorer:real": "node --experimental-sqlite --import tsx apps/view-explorer/scripts/real-server.ts",
     "view-explorer:build": "pnpm --dir apps/view-explorer run build",
     "view-explorer:test": "pnpm --dir apps/view-explorer run test",
     "view-explorer:test:e2e": "pnpm --dir apps/view-explorer run test:e2e",
