@@ -155,6 +155,7 @@ export type ViewRepositoryErrorDetails = {
   view_ids?: string[];
   revision?: number;
   table?: string;
+  connection_id?: string;
   migration_version?: number;
   idempotency_key?: string;
   sqlite_code?: string;

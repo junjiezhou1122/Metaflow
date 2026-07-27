@@ -31,8 +31,11 @@ import {
   CaptureRuntimeError,
   CaptureValidationError,
   ConnectorProtocolError,
+  ConnectorPackageError,
+  SourceConnectionOnboardingError,
   type CaptureRuntimeRepository,
   type ConnectorRuntime,
+  type SourceConnectionOnboardingService,
 } from "@info/capture";
 import {
   SearchError,
@@ -74,8 +77,9 @@ export type OperationServiceDependencies = {
   runs: Pick<ExecutionRepository, "getRun" | "getTrace">;
   feedback: Pick<FeedbackEvolutionService, "record">;
   privacy: Pick<PrivacyForgetService, "request" | "execute" | "inspect">;
-  capture: Pick<ConnectorRuntime, "submitBatch">;
-  capture_traces: Pick<CaptureRuntimeRepository, "getCaptureTrace">;
+  capture: Pick<ConnectorRuntime, "submitBatch" | "replayDeadLetter">;
+  connector_onboarding: SourceConnectionOnboardingService;
+  capture_traces: Pick<CaptureRuntimeRepository, "getCaptureTrace" | "listCaptureDeadLetters" | "getCaptureDeadLetter">;
   authorization: OperationAuthorizationPort;
   observer: OperationObserver;
   now?: () => string;
@@ -184,8 +188,67 @@ export class OperationService {
     switch (operation) {
       case "catalog.list":
         return OPERATION_NAMES.map(name => ({ name, description: OPERATION_DESCRIPTIONS[name] }));
+      case "connector.list":
+        return this.dependencies.connector_onboarding.listPackages();
+      case "connector.inspect":
+        return this.dependencies.connector_onboarding.inspectPackage(input.package);
       case "capture.ingest":
         return this.dependencies.capture.submitBatch(input.batch);
+      case "capture.connection.list":
+        return (await this.dependencies.connector_onboarding.listConnections())
+          .filter(item => item.connection.privacy.owner === context.principal.id);
+      case "capture.connection.create":
+        if (input.connection.privacy?.owner !== undefined && input.connection.privacy.owner !== context.principal.id) {
+          throw new OperationServiceError("Principal cannot create a Source Connection for another owner", "connection_owner_mismatch", "forbidden", {
+            owner: input.connection.privacy.owner,
+          });
+        }
+        return this.dependencies.connector_onboarding.create({
+          ...input,
+          connection: {
+            ...input.connection,
+            privacy: input.connection.privacy ?? {
+              owner: context.principal.id,
+              visibility: "private",
+              privacy: "private",
+              retention: "normal",
+              allow_external_model: false,
+              allow_embedding: false,
+              allow_local_search: true,
+              labels: [],
+            },
+          },
+        });
+      case "capture.connection.check":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.check(input);
+      case "capture.connection.discover":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.discover(input);
+      case "capture.connection.activate":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.activate(input);
+      case "capture.connection.update":
+        await this.requireConnectionOwner(context, input.connection_id);
+        if (input.privacy?.owner !== undefined && input.privacy.owner !== context.principal.id) {
+          throw new OperationServiceError("Principal cannot transfer Source Connection ownership", "connection_owner_mismatch", "forbidden");
+        }
+        return this.dependencies.connector_onboarding.update(input);
+      case "capture.connection.pause":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.pause(input);
+      case "capture.connection.run":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.run(input);
+      case "capture.dlq.list":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.capture_traces.listCaptureDeadLetters(input.connection_id, input.status);
+      case "capture.dlq.replay": {
+        const deadLetter = await this.dependencies.capture_traces.getCaptureDeadLetter(input.id);
+        if (!deadLetter) throw new OperationServiceError("Capture dead letter does not exist", "dead_letter_not_found", "not_found", { id: input.id });
+        await this.requireConnectionOwner(context, deadLetter.connection_id);
+        return this.dependencies.capture.replayDeadLetter(input.id);
+      }
       case "view.get": {
         await this.requireViewRead(context, [input.ref], "read");
         const view = await this.dependencies.views.get(input.ref);
@@ -318,6 +381,7 @@ export class OperationService {
           await this.requireRun(input.run_id);
           return this.dependencies.runs.getTrace(input.run_id);
         }
+        await this.requireConnectionOwner(context, input.connection_id);
         return this.dependencies.capture_traces.getCaptureTrace(input.connection_id);
     }
   }
@@ -349,6 +413,15 @@ export class OperationService {
     const run = await this.dependencies.runs.getRun(runId);
     if (!run) throw new OperationServiceError("Run does not exist", "run_not_found", "not_found", { run_id: runId });
     return run;
+  }
+
+  private async requireConnectionOwner(context: OperationContext, connectionId: string): Promise<void> {
+    const lifecycle = await this.dependencies.connector_onboarding.inspectConnection(connectionId);
+    if (lifecycle.connection.privacy.owner !== context.principal.id) {
+      throw new OperationServiceError("Principal does not own the Source Connection", "connection_owner_mismatch", "forbidden", {
+        connection_id: connectionId,
+      });
+    }
   }
 
   private async fail(
@@ -438,6 +511,14 @@ function operationError(cause: unknown): OperationError {
       message: cause.message,
       category: cause.retryable ? "failed_dependency" : genericCategory(cause.code),
       details: { stage: cause.stage, retryable: cause.retryable, ...cause.details },
+    });
+  }
+  if (cause instanceof ConnectorPackageError || cause instanceof SourceConnectionOnboardingError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: genericCategory(cause.code),
+      details: cause.details,
     });
   }
   if (

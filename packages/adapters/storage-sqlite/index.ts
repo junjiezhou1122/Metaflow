@@ -12,6 +12,8 @@ import {
   ConnectorHealthSchema,
   ConnectorManifestSchema,
   SourceConnectionSchema,
+  SourceConnectionLifecycleReceiptSchema,
+  SourceConnectionLifecycleSchema,
   type CaptureCheckpoint,
   type CaptureDeadLetter,
   type CaptureRuntimeRepository,
@@ -20,6 +22,8 @@ import {
   type ConnectorHealth,
   type ConnectorManifest,
   type SourceConnection,
+  type SourceConnectionLifecycle,
+  type SourceConnectionLifecycleReceipt,
   type StoredCaptureTraceEvent,
 } from "@info/capture";
 import {
@@ -168,7 +172,12 @@ type CaptureConnectionRow = {
   health_json: string;
   paused: number;
   in_flight: number;
+  generation: number;
+  lifecycle_status: SourceConnectionLifecycle["status"];
+  created_at: string;
+  updated_at: string;
 };
+type CaptureLifecycleReceiptRow = { receipt_json: string };
 type CaptureBatchRow = { request_fingerprint: string; result_json: string };
 type CaptureTraceRow = { sequence: number; event_json: string };
 type CaptureDeadLetterRow = { dead_letter_json: string };
@@ -199,7 +208,7 @@ type ViewCommitOutboxRow = {
   event_json: string;
 };
 
-const VIEW_STORE_MIGRATION_VERSION = 6;
+const VIEW_STORE_MIGRATION_VERSION = 7;
 const VIEW_SEARCH_INDEX_MIGRATION_VERSION = 2;
 
 type TransactionContext = {
@@ -1409,8 +1418,9 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       this.db.prepare(`
         insert into capture_connections_v1 (
           connection_id, connector_id, connector_version, connection_fingerprint,
-          connection_json, manifest_json, checkpoint_json, health_json, paused, in_flight, updated_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+          connection_json, manifest_json, checkpoint_json, health_json, paused, in_flight,
+          generation, lifecycle_status, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?, ?, ?)
       `).run(
         connection.id,
         connection.connector_id,
@@ -1420,6 +1430,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         JSON.stringify(manifest),
         JSON.stringify(checkpoint),
         JSON.stringify(health),
+        connection.enabled ? "active" : "draft",
+        input.occurred_at,
         input.occurred_at,
       );
       this.insertCaptureTrace({
@@ -1434,6 +1446,125 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
   async getCaptureConnection(connectionId: string): Promise<SourceConnection | undefined> {
     const row = this.readCaptureConnectionRow(connectionId);
     return row ? SourceConnectionSchema.parse(parseJson(row.connection_json, "capture connection")) : undefined;
+  }
+
+  async listCaptureConnectionLifecycles(): Promise<SourceConnectionLifecycle[]> {
+    const rows = this.db.prepare(`
+      select connection_json, manifest_json, connection_fingerprint, checkpoint_json, health_json,
+        paused, in_flight, generation, lifecycle_status, created_at, updated_at
+      from capture_connections_v1 order by connection_id
+    `).all() as CaptureConnectionRow[];
+    return rows.map(row => this.parseCaptureConnectionLifecycle(row));
+  }
+
+  async getCaptureConnectionLifecycle(connectionId: string): Promise<SourceConnectionLifecycle | undefined> {
+    const row = this.readCaptureConnectionRow(connectionId);
+    return row ? this.parseCaptureConnectionLifecycle(row) : undefined;
+  }
+
+  async updateCaptureConnectionLifecycle(input: {
+    connection: SourceConnection;
+    manifest: ConnectorManifest;
+    expected_generation: number;
+    status: SourceConnectionLifecycle["status"];
+    occurred_at: string;
+    event: import("@info/capture").CaptureTraceEvent;
+    receipt?: SourceConnectionLifecycleReceipt;
+  }): Promise<SourceConnectionLifecycle> {
+    const connection = SourceConnectionSchema.parse(input.connection);
+    const manifest = ConnectorManifestSchema.parse(input.manifest);
+    const event = CaptureTraceEventSchema.parse(input.event);
+    if (connection.connector_id !== manifest.id || connection.connector_version !== manifest.version) {
+      throw new CaptureRuntimeError("Capture connection does not match its Connector manifest", "connector_mismatch", "validation", false);
+    }
+    const transaction = this.transactionContext("capture_update_connection", []);
+    return this.withTransaction(transaction, () => {
+      const current = this.requireCaptureConnectionRow(connection.id);
+      if (Number(current.generation) !== input.expected_generation) {
+        throw new CaptureRuntimeError("Source Connection generation is stale", "connection_generation_conflict", "storage", false, {
+          expected_generation: input.expected_generation,
+          actual_generation: Number(current.generation),
+        });
+      }
+      const generation = input.expected_generation + 1;
+      if (input.receipt && (input.receipt.connection_id !== connection.id || input.receipt.generation !== generation)) {
+        throw new CaptureRuntimeError("Lifecycle receipt does not match the Source Connection transition", "connection_receipt_mismatch", "storage", false);
+      }
+      if (input.status === "paused" && Number(current.in_flight) > 0) {
+        throw new CaptureRuntimeError("Cannot pause a connection with an active Capture attempt", "backpressure", "runtime", true);
+      }
+      const currentHealth = this.parseCaptureHealth(current.health_json, connection.id);
+      const health = input.status === "paused" || input.status === "active"
+        ? ConnectorHealthSchema.parse({
+            ...currentHealth,
+            status: input.status === "paused" ? "paused" : "unknown",
+            observed_at: input.occurred_at,
+          })
+        : currentHealth;
+      this.db.prepare(`
+        update capture_connections_v1 set connection_json = ?, manifest_json = ?, connection_fingerprint = ?,
+          generation = ?, lifecycle_status = ?, paused = ?, health_json = ?, updated_at = ? where connection_id = ? and generation = ?
+      `).run(
+        JSON.stringify(connection),
+        JSON.stringify(manifest),
+        captureConnectionFingerprint(connection, manifest),
+        generation,
+        input.status,
+        input.status === "paused" ? 1 : 0,
+        JSON.stringify(health),
+        input.occurred_at,
+        connection.id,
+        input.expected_generation,
+      );
+      this.insertCaptureTrace(event);
+      if (input.receipt) this.insertCaptureLifecycleReceipt(input.receipt);
+      return SourceConnectionLifecycleSchema.parse({
+        connection,
+        generation,
+        status: input.status,
+        created_at: current.created_at,
+        updated_at: input.occurred_at,
+      });
+    });
+  }
+
+  async getCaptureConnectionLifecycleReceipt(idempotencyKey: string): Promise<SourceConnectionLifecycleReceipt | undefined> {
+    const row = this.db.prepare(`select receipt_json from capture_connection_lifecycle_receipts_v1 where idempotency_key = ?`)
+      .get(idempotencyKey) as CaptureLifecycleReceiptRow | undefined;
+    return row ? SourceConnectionLifecycleReceiptSchema.parse(parseJson(row.receipt_json, "capture connection lifecycle receipt")) : undefined;
+  }
+
+  async commitCaptureConnectionLifecycleReceipt(input: {
+    receipt: SourceConnectionLifecycleReceipt;
+    event?: import("@info/capture").CaptureTraceEvent;
+  }): Promise<SourceConnectionLifecycleReceipt> {
+    const receipt = SourceConnectionLifecycleReceiptSchema.parse(input.receipt);
+    const transaction = this.transactionContext("capture_commit_connection_receipt", []);
+    return this.withTransaction(transaction, () => {
+      const existing = this.db.prepare(`select receipt_json from capture_connection_lifecycle_receipts_v1 where idempotency_key = ?`)
+        .get(receipt.idempotency_key) as CaptureLifecycleReceiptRow | undefined;
+      if (existing) {
+        const parsed = SourceConnectionLifecycleReceiptSchema.parse(parseJson(existing.receipt_json, "capture connection lifecycle receipt"));
+        if (parsed.request_digest !== receipt.request_digest
+          || parsed.action !== receipt.action
+          || parsed.connection_id !== receipt.connection_id) {
+          throw new CaptureRuntimeError("Connection lifecycle receipt conflicts with an existing idempotency key", "connection_idempotency_conflict", "storage", false);
+        }
+        return parsed;
+      }
+      this.requireCaptureConnectionRow(receipt.connection_id);
+      if (input.event) this.insertCaptureTrace(CaptureTraceEventSchema.parse(input.event));
+      this.insertCaptureLifecycleReceipt(receipt);
+      return receipt;
+    });
+  }
+
+  private insertCaptureLifecycleReceipt(receipt: SourceConnectionLifecycleReceipt): void {
+    this.db.prepare(`
+      insert into capture_connection_lifecycle_receipts_v1 (
+        idempotency_key, connection_id, action, request_digest, committed_at, receipt_json
+      ) values (?, ?, ?, ?, ?, ?)
+    `).run(receipt.idempotency_key, receipt.connection_id, receipt.action, receipt.request_digest, receipt.committed_at, JSON.stringify(receipt));
   }
 
   async getCaptureCheckpoint(connectionId: string): Promise<CaptureCheckpoint | undefined> {
@@ -1743,9 +1874,20 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
 
   private readCaptureConnectionRow(connectionId: string): CaptureConnectionRow | undefined {
     return this.db.prepare(`
-      select connection_json, manifest_json, connection_fingerprint, checkpoint_json, health_json, paused, in_flight
+      select connection_json, manifest_json, connection_fingerprint, checkpoint_json, health_json, paused, in_flight,
+        generation, lifecycle_status, created_at, updated_at
       from capture_connections_v1 where connection_id = ?
     `).get(connectionId) as CaptureConnectionRow | undefined;
+  }
+
+  private parseCaptureConnectionLifecycle(row: CaptureConnectionRow): SourceConnectionLifecycle {
+    return SourceConnectionLifecycleSchema.parse({
+      connection: SourceConnectionSchema.parse(parseJson(row.connection_json, "capture connection")),
+      generation: Number(row.generation),
+      status: row.lifecycle_status,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
   }
 
   private requireCaptureConnectionRow(connectionId: string): CaptureConnectionRow {
@@ -2820,6 +2962,13 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         transaction.phase = "rebuild_search_projection";
         this.resetSearchProjection(normalizeTimestamp(this.now()));
       }
+      if (version < 7) {
+        transaction.phase = "migrate_connector_onboarding";
+        this.ensureColumn("capture_connections_v1", "generation", "integer not null default 1 check(generation > 0)");
+        this.ensureColumn("capture_connections_v1", "lifecycle_status", "text not null default 'active' check(lifecycle_status in ('draft', 'checked', 'active', 'paused'))");
+        this.ensureColumn("capture_connections_v1", "created_at", "text not null default '1970-01-01T00:00:00.000Z'");
+        this.normalizeLegacyCaptureConnections();
+      }
       if (version < VIEW_STORE_MIGRATION_VERSION) {
         transaction.phase = "create_capture_runtime_schema";
         this.createIndexes();
@@ -3128,7 +3277,19 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         health_json text not null,
         paused integer not null default 0 check(paused in (0, 1)),
         in_flight integer not null default 0 check(in_flight >= 0),
+        generation integer not null default 1 check(generation > 0),
+        lifecycle_status text not null default 'active' check(lifecycle_status in ('draft', 'checked', 'active', 'paused')),
+        created_at text not null,
         updated_at text not null
+      );
+
+      create table if not exists capture_connection_lifecycle_receipts_v1 (
+        idempotency_key text primary key,
+        connection_id text not null references capture_connections_v1(connection_id),
+        action text not null check(action in ('create', 'check', 'discover', 'activate', 'update', 'pause', 'run')),
+        request_digest text not null,
+        committed_at text not null,
+        receipt_json text not null
       );
 
       create table if not exists capture_batches_v1 (
@@ -3188,6 +3349,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       create index if not exists idx_capture_batches_v1_connection on capture_batches_v1(connection_id, created_at);
       create index if not exists idx_capture_trace_v1_connection on capture_trace_v1(connection_id, sequence);
       create index if not exists idx_capture_dead_letters_v1_connection on capture_dead_letters_v1(connection_id, status, created_at);
+      create index if not exists idx_capture_lifecycle_receipts_v1_connection on capture_connection_lifecycle_receipts_v1(connection_id, committed_at);
     `);
   }
 
@@ -3223,6 +3385,65 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
             table: "view_revisions_v1",
             view_ids: [row.id],
             revision: Number(row.revision),
+          },
+          { cause: error },
+        );
+      }
+    }
+  }
+
+  private normalizeLegacyCaptureConnections(): void {
+    const rows = this.db.prepare(`
+      select connection_id, connection_json, manifest_json, paused, updated_at
+      from capture_connections_v1 order by connection_id
+    `).all() as Array<{
+      connection_id: string;
+      connection_json: string;
+      manifest_json: string;
+      paused: number;
+      updated_at: string;
+    }>;
+    const update = this.db.prepare(`
+      update capture_connections_v1
+      set connection_json = ?, connection_fingerprint = ?, generation = 1,
+        lifecycle_status = ?, created_at = ?, updated_at = ?
+      where connection_id = ?
+    `);
+    for (const row of rows) {
+      try {
+        const legacy = parseJson(row.connection_json, "legacy capture connection");
+        if (typeof legacy !== "object" || legacy === null || Array.isArray(legacy)) {
+          throw new Error("legacy Source Connection is not an object");
+        }
+        const secretRefs = (legacy as Record<string, unknown>).secret_refs;
+        if (Array.isArray(secretRefs)) {
+          if (secretRefs.length > 0) {
+            throw new Error("non-empty legacy secret_refs cannot be mapped to named credential slots without provider-specific evidence");
+          }
+          (legacy as Record<string, unknown>).secret_refs = {};
+        }
+        const connection = SourceConnectionSchema.parse(legacy);
+        const manifest = ConnectorManifestSchema.parse(parseJson(row.manifest_json, "legacy capture manifest"));
+        const status: SourceConnectionLifecycle["status"] = Number(row.paused) === 1
+          ? "paused"
+          : connection.enabled ? "active" : "draft";
+        update.run(
+          JSON.stringify(connection),
+          captureConnectionFingerprint(connection, manifest),
+          status,
+          row.updated_at,
+          row.updated_at,
+          row.connection_id,
+        );
+      } catch (error) {
+        throw new ViewRepositoryError(
+          `stored Source Connection ${row.connection_id} cannot be migrated to named secret slots`,
+          "corrupt_data",
+          {
+            operation: "migrate",
+            phase: "migrate_connector_onboarding",
+            table: "capture_connections_v1",
+            connection_id: row.connection_id,
           },
           { cause: error },
         );
@@ -3335,11 +3556,16 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       .find(column => column.name === "request_fingerprint");
     const headForeignKeys = this.db.prepare("pragma foreign_key_list(view_heads_v1)").all() as ForeignKeyRow[];
     const idempotencyForeignKeys = this.db.prepare("pragma foreign_key_list(view_idempotency_v1)").all() as ForeignKeyRow[];
+    const captureConnectionColumns = this.db.prepare("pragma table_info(capture_connections_v1)").all() as TableInfoRow[];
+    const requiredCaptureColumns = ["generation", "lifecycle_status", "created_at"];
+    const captureColumnsValid = requiredCaptureColumns.every(name =>
+      captureConnectionColumns.some(column => column.name === name && column.notnull === 1));
     const requiredTables = [
       "capture_connections_v1",
       "capture_batches_v1",
       "capture_trace_v1",
       "capture_dead_letters_v1",
+      "capture_connection_lifecycle_receipts_v1",
       "privacy_forget_requests_v1",
       "privacy_forgotten_view_ids_v1",
       "view_search_projection_v1",
@@ -3354,7 +3580,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       "view_commit_outbox_refs_v1",
     ];
     const missingRequiredTable = requiredTables.find(table => !(this.db.prepare(`select name from sqlite_master where type = 'table' and name = ?`).get(table)));
-    if (!fingerprint || fingerprint.notnull !== 1 || missingRequiredTable || !headForeignKeys.some(key => key.table === "view_revisions_v1")
+    if (!fingerprint || fingerprint.notnull !== 1 || !captureColumnsValid || missingRequiredTable || !headForeignKeys.some(key => key.table === "view_revisions_v1")
       || !idempotencyForeignKeys.some(key => key.table === "view_revisions_v1")) {
       throw new ViewRepositoryError(
         "SQLite View Store schema invariants are incomplete after migration",

@@ -41,7 +41,7 @@ import {
 } from "./contracts.js";
 
 type FetchLike = typeof fetch;
-type SecretReference = SourceConnection["secret_refs"][number];
+type SecretReference = SourceConnection["secret_refs"][string];
 type SearchModality = "ocr" | "audio" | "input" | "accessibility";
 type ScreenpipeCursor = z.infer<typeof ScreenpipeCursorSchema>;
 type SearchWatermark = NonNullable<NonNullable<ScreenpipeCursor["screenpipe"]["search_watermarks"]>[SearchModality]>;
@@ -557,13 +557,13 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
       "connection configuration",
     );
     if (configuration.authentication.mode === "none") {
-      if (connection.secret_refs.length !== 0) {
+      if (Object.keys(connection.secret_refs).length !== 0) {
         throw authConfigurationError("Screenpipe authentication mode none cannot declare secret references");
       }
       return undefined;
     }
-    if (connection.secret_refs.length !== 1
-      || canonicalJson(connection.secret_refs[0]) !== canonicalJson(configuration.authentication.secret_ref)) {
+    if (Object.keys(connection.secret_refs).length !== 1
+      || canonicalJson(connection.secret_refs.screenpipe_api_key) !== canonicalJson(configuration.authentication.secret_ref)) {
       throw authConfigurationError("Screenpipe bearer authentication requires exactly its declared secret reference");
     }
     if (!this.options.secret_resolver) {
@@ -589,12 +589,13 @@ export function screenpipeSourceConnection(input: {
   secret_refs?: SourceConnection["secret_refs"];
   authentication?: "none" | "bearer";
 } = {}): SourceConnection {
-  const secretRefs = input.secret_refs ?? [];
-  const authentication = input.authentication ?? (secretRefs.length === 1 ? "bearer" : "none");
-  if (authentication === "bearer" && secretRefs.length !== 1) {
+  const secretRefs = input.secret_refs ?? {};
+  const secretCount = Object.keys(secretRefs).length;
+  const authentication = input.authentication ?? (secretCount === 1 ? "bearer" : "none");
+  if (authentication === "bearer" && (secretCount !== 1 || !secretRefs.screenpipe_api_key)) {
     throw authConfigurationError("Screenpipe bearer authentication requires exactly one secret reference");
   }
-  if (authentication === "none" && secretRefs.length !== 0) {
+  if (authentication === "none" && secretCount !== 0) {
     throw authConfigurationError("Screenpipe authentication mode none cannot declare secret references");
   }
   return SourceConnectionSchema.parse({
@@ -616,7 +617,7 @@ export function screenpipeSourceConnection(input: {
         "ui_element",
       ],
       authentication: authentication === "bearer"
-        ? { mode: "bearer", secret_ref: secretRefs[0] }
+        ? { mode: "bearer", secret_ref: secretRefs.screenpipe_api_key }
         : { mode: "none" },
     },
     privacy: input.privacy ?? privatePolicy(),

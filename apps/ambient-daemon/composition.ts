@@ -1,6 +1,17 @@
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { CaptureIngress, ConnectorRuntime, type SourceConnection } from "@info/capture";
+import {
+  CaptureIngress,
+  ConnectorPackageCatalog,
+  SourceConnectionOnboardingService,
+  TrustedConnectorPackageLoader,
+  type ConnectorPackageArtifactPort,
+  type ConnectorPackageDescriptor,
+  type ConnectorPermission,
+  type ConnectorPublisherKeyPort,
+  type SourceConnection,
+} from "@info/capture";
+import { ConnectorRuntime } from "@info/capture";
 import {
   AutomationContextResolver,
   AutomationDeliveryCoordinator,
@@ -106,6 +117,13 @@ export type AmbientDaemonCompositionOptions = {
       connector?: ObsidianCaptureAdapter;
       connections: readonly SourceConnection[];
     };
+  };
+  connector_packages?: {
+    descriptors: readonly ConnectorPackageDescriptor[];
+    artifacts: ConnectorPackageArtifactPort;
+    publisher_keys: ConnectorPublisherKeyPort;
+    allowed_permissions: readonly ConnectorPermission[];
+    supported_abi_version?: number;
   };
   now?: () => Date;
 };
@@ -289,6 +307,24 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       },
       now: () => now().toISOString(),
     });
+    const connectorCatalog = new ConnectorPackageCatalog();
+    for (const descriptor of options.connector_packages?.descriptors ?? []) connectorCatalog.register(descriptor);
+    const connectorOnboarding = new SourceConnectionOnboardingService({
+      catalog: connectorCatalog,
+      loader: new TrustedConnectorPackageLoader({
+        catalog: connectorCatalog,
+        artifacts: options.connector_packages?.artifacts ?? {
+          async inspect() { return undefined; },
+          async instantiate() { throw new Error("No Connector Packages are installed"); },
+        },
+        publisher_keys: options.connector_packages?.publisher_keys ?? { async publicKey() { return undefined; } },
+        allowed_permissions: options.connector_packages?.allowed_permissions ?? [],
+        supported_abi_version: options.connector_packages?.supported_abi_version ?? 1,
+      }),
+      runtime: connectorRuntime,
+      repository: views,
+      now: () => now().toISOString(),
+    });
     const operationService = new OperationService({
       views,
       graph: views.search,
@@ -300,6 +336,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       feedback,
       privacy,
       capture: connectorRuntime,
+      connector_onboarding: connectorOnboarding,
       capture_traces: views,
       authorization: new GrantOperationAuthorizer(),
       observer: new JsonConsoleOperationObserver(),

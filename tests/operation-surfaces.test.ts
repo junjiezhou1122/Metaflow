@@ -8,7 +8,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   CaptureIngress,
+  ConnectorPackageCatalog,
   ConnectorRuntime,
+  SourceConnectionOnboardingService,
+  TrustedConnectorPackageLoader,
   type ConnectorPort,
 } from "@info/capture";
 import {
@@ -125,6 +128,88 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
       assert.deepEqual(new Set(mcp.toolNames), new Set(OPERATION_NAMES.map(operationMcpToolName)));
     } finally {
       await Promise.all([...surfaces, ...forbiddenGraphSurfaces].map(surface => surface.close()));
+    }
+  });
+});
+
+test("Connector catalog and Source Connection lifecycle Operations have CLI, HTTP, and MCP parity", async () => {
+  await withHarness(async harness => {
+    const surfaces = await createSurfaces(harness, () => context("request:connector-parity"));
+    const otherOwnerSurfaces = await createSurfaces(harness, () => ({
+      request_id: "request:connector-other-owner",
+      principal: { id: "user:other", grants: ["*"] },
+    }));
+    try {
+      for (const [operation, input] of [
+        ["connector.list", {}],
+        ["capture.connection.list", {}],
+        ["connector.inspect", { package: { id: "missing", version: "1.0.0", digest: "a".repeat(64) } }],
+      ] as const) {
+        const responses = await Promise.all(surfaces.map(surface => surface.call(operation, input)));
+        for (const response of responses.slice(1)) assert.deepEqual(response, responses[0], operation);
+      }
+      for (const [operation, input] of [
+        ["capture.connection.create", {
+          idempotency_key: "connector-parity:create",
+          package: { id: "missing", version: "1.0.0", digest: "a".repeat(64) },
+          connection: {
+            id: "connection:missing",
+            display_name: "Missing package",
+            delivery_kinds: ["pull"],
+            secret_refs: {},
+            configuration: {},
+          },
+        }],
+        ["capture.connection.check", lifecycleMissingInput("check")],
+        ["capture.connection.discover", lifecycleMissingInput("discover")],
+        ["capture.connection.activate", lifecycleMissingInput("activate")],
+        ["capture.connection.update", lifecycleMissingInput("update")],
+        ["capture.connection.pause", lifecycleMissingInput("pause")],
+        ["capture.connection.run", { ...lifecycleMissingInput("run"), delivery: "pull", parameters: {} }],
+        ["capture.dlq.list", { connection_id: "connection:missing", status: "pending" }],
+        ["capture.dlq.replay", { id: "dead-letter:missing" }],
+      ] as const) {
+        const responses = await Promise.all(surfaces.map(surface => surface.call(operation, input)));
+        assert.equal(responses[0]?.ok, false, operation);
+        for (const response of responses.slice(1)) assert.deepEqual(response, responses[0], operation);
+      }
+      const connections = await surfaces[0]!.call("capture.connection.list", {});
+      assert.equal(connections.ok, true);
+      if (connections.ok) {
+        const lifecycle = (connections.data as Array<{ generation: number; status: string }>)[0];
+        assert.deepEqual(lifecycle, {
+          connection: {
+            id: "connection:operations",
+            connector_id: "connector:operation-manual",
+            connector_version: "1.0.0",
+            display_name: "Operation conformance manual source",
+            enabled: true,
+            delivery_kinds: ["manual_import"],
+            secret_refs: {},
+            configuration: {},
+            privacy: policy,
+          },
+          generation: 1,
+          status: "active",
+          created_at: lifecycle?.created_at,
+          updated_at: lifecycle?.updated_at,
+        });
+      }
+      const hiddenConnections = await Promise.all(otherOwnerSurfaces.map(surface => surface.call("capture.connection.list", {})));
+      for (const response of hiddenConnections) {
+        assert.equal(response.ok, true);
+        if (response.ok) assert.deepEqual(response.data, []);
+      }
+      const deniedTraces = await Promise.all(otherOwnerSurfaces.map(surface => surface.call("trace.read", {
+        scope: "capture",
+        connection_id: "connection:operations",
+      })));
+      for (const response of deniedTraces) {
+        assert.equal(response.ok, false);
+        if (!response.ok) assert.equal(response.error.code, "connection_owner_mismatch");
+      }
+    } finally {
+      await Promise.all([...surfaces, ...otherOwnerSurfaces].map(surface => surface.close()));
     }
   });
 });
@@ -384,6 +469,14 @@ for (const surfaceName of ["in-process", "cli", "http", "mcp"] as const) {
   });
 }
 
+function lifecycleMissingInput(action: string) {
+  return {
+    connection_id: "connection:missing",
+    expected_generation: 1,
+    idempotency_key: `connector-parity:${action}`,
+  };
+}
+
 async function createSurfaces(
   harness: Harness,
   contextProvider: (input: { transport: "cli" | "http" | "mcp"; operation?: string }) => OperationContext,
@@ -467,7 +560,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     display_name: "Operation conformance manual source",
     enabled: true,
     delivery_kinds: ["manual_import"],
-    secret_refs: [],
+    secret_refs: {},
     configuration: {},
     privacy: policy,
   });
@@ -499,6 +592,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     observer: { async record() {} },
     now: clock,
   });
+  const connectorCatalog = new ConnectorPackageCatalog();
   const service = new OperationService({
     views,
     graph: views.search,
@@ -510,6 +604,22 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     feedback,
     privacy,
     capture,
+    connector_onboarding: new SourceConnectionOnboardingService({
+      catalog: connectorCatalog,
+      loader: new TrustedConnectorPackageLoader({
+        catalog: connectorCatalog,
+        artifacts: {
+          async inspect() { return undefined; },
+          async instantiate() { throw new Error("No Connector Packages are installed"); },
+        },
+        publisher_keys: { async publicKey() { return undefined; } },
+        allowed_permissions: [],
+        supported_abi_version: 1,
+      }),
+      runtime: capture,
+      repository: views,
+      now: clock,
+    }),
     capture_traces: views,
     authorization: new GrantOperationAuthorizer(),
     observer,
