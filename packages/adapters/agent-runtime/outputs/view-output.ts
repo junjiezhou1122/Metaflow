@@ -1,4 +1,4 @@
-import type { AgentTaskOutput } from "../types.js";
+import type { AgentSchemaValue, AgentTaskOutput } from "../types.js";
 
 export function parseAgentTaskOutput(stdout: string): AgentTaskOutput {
   const parsed = JSON.parse(stdout) as unknown;
@@ -11,6 +11,26 @@ export function parseAgentTaskOutput(stdout: string): AgentTaskOutput {
     ? JSON.parse(stripJsonCodeFence(envelope.result))
     : parsed;
   return normalizeAgentTaskOutput(candidate);
+}
+
+export function parseAgentSchemaValue(stdout: string): AgentSchemaValue {
+  const parsed = JSON.parse(stdout) as unknown;
+  const envelope = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
+  if (envelope?.is_error || /API Error:/i.test(String(envelope?.result ?? ""))) {
+    throw new Error(String(envelope?.result ?? "agent runtime returned an error"));
+  }
+  const hasResultEnvelope = envelope !== undefined && Object.hasOwn(envelope, "result");
+  const candidate = hasResultEnvelope && typeof envelope.result === "string"
+    ? JSON.parse(stripJsonCodeFence(envelope.result)) as unknown
+    : parsed;
+  return normalizeAgentSchemaValue(candidate);
+}
+
+export function normalizeAgentSchemaValue(value: unknown): AgentSchemaValue {
+  assertJsonCompatible(value, "$", new Set());
+  return value;
 }
 
 export function normalizeAgentTaskOutput(value: unknown): AgentTaskOutput {
@@ -62,6 +82,42 @@ function validateViewType(viewType: string): string | undefined {
   if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/.test(viewType)) return `invalid agent output View type: ${viewType}`;
   if (/^(observation|feedback|episode|derived)\./.test(viewType)) return `agent output View type must not use record-like prefix: ${viewType}`;
   return undefined;
+}
+
+function assertJsonCompatible(value: unknown, path: string, ancestors: Set<object>): asserts value is AgentSchemaValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) return;
+    throw new TypeError(`Agent schema_value at ${path} must be JSON-compatible`);
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`Agent schema_value at ${path} must be JSON-compatible`);
+  }
+  if (ancestors.has(value)) throw new TypeError(`Agent schema_value at ${path} must be JSON-compatible`);
+  if (!Array.isArray(value)) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(`Agent schema_value at ${path} must be JSON-compatible`);
+    }
+    if (Reflect.ownKeys(value).some(key => typeof key === "symbol" || !Object.prototype.propertyIsEnumerable.call(value, key))) {
+      throw new TypeError(`Agent schema_value at ${path} must be JSON-compatible`);
+    }
+  }
+  ancestors.add(value);
+  if (Array.isArray(value)) {
+    const keys = Object.keys(value);
+    if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
+      throw new TypeError(`Agent schema_value at ${path} must be JSON-compatible`);
+    }
+    for (let index = 0; index < value.length; index += 1) {
+      assertJsonCompatible(value[index], `${path}[${index}]`, ancestors);
+    }
+  } else {
+    for (const [key, item] of Object.entries(value)) {
+      assertJsonCompatible(item, `${path}.${key}`, ancestors);
+    }
+  }
+  ancestors.delete(value);
 }
 
 export function stripJsonCodeFence(value: string): string {

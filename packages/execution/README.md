@@ -116,6 +116,14 @@ in an untrusted candidate with a deterministic View id, frozen output Schema,
 strictest input policy, exact Run provenance, and `derived_from` relations.
 Execution still performs validation and commit.
 
+An Agent Operator may declare `configuration.output_mode = "schema_value"` to
+request one arbitrary JSON-compatible value matching the frozen output Schema.
+The legacy Agent task envelope remains the default. A zero-input
+Transformation must provide `output_policy`; the deprecated `failure_policy`
+input is accepted as an equivalent alias, but conflicting values fail before a
+Run is created. The resolved policy is frozen in the Run and shared by Agent
+authorization projection, candidate validation, and Failure evidence.
+
 The bridge also projects bounded invocation evidence into `current_context`:
 role, exact ref, Schema, inline Representation value, or an external reference.
 `current_page` contributes URL, title, and text; `current_selection`, voice, and
