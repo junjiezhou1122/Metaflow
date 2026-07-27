@@ -47,6 +47,17 @@ test("personalized pre-cleanup gate proves the real Vite, Sigma, and accessible 
   assert.ok(evidence.operations.view_graph_project >= 1);
   assert.ok(evidence.operations.view_get >= 1);
   assert.equal(evidence.operations.view_search, 0);
+  assert.deepEqual(evidence.renderer.descriptor, {
+    id: "renderer.web.json",
+    version: 1,
+    abi_version: 1,
+  });
+  assert.equal(evidence.renderer.rendered_content_exists, true);
+  assert.ok(evidence.renderer.rendered_element_count > 0);
+  assert.ok(evidence.renderer.lifecycle_event_count >= 6);
+  assert.equal(evidence.renderer.ready, true);
+  assert.equal(evidence.renderer.dispose_started, true);
+  assert.equal(evidence.renderer.dispose_succeeded, true);
   assert.equal(evidence.browser_console_errors, 0);
   assert.equal(evidence.browser_console_warnings, 0);
   assert.ok(evidence.chromium_webgl_driver_warnings >= 0);
@@ -57,4 +68,28 @@ test("personalized pre-cleanup gate proves the real Vite, Sigma, and accessible 
   assert.ok(operations.every(operation => operation === "view.graph.project" || operation === "view.get"));
   assert.equal(evidence.operations.view_graph_project, operations.filter(operation => operation === "view.graph.project").length);
   assert.equal(evidence.operations.view_get, operations.filter(operation => operation === "view.get").length);
+});
+
+test("personalized gate rejects a successful view.get envelope for a different exact revision", async () => {
+  const transport = createFixtureTransport(PERSONALIZED_FIXTURE_ID);
+  await assert.rejects(runPersonalizedViewExplorerAcceptance({
+    operations: {
+      async execute(requestValue) {
+        const request = requestValue as { operation: ExplorerOperation; input: unknown };
+        const envelope = await transport.call(request.operation, request.input, new AbortController().signal);
+        if (request.operation !== "view.get" || !envelope || typeof envelope !== "object"
+          || !("ok" in envelope) || envelope.ok !== true || !("data" in envelope)
+          || !envelope.data || typeof envelope.data !== "object") return envelope;
+        return {
+          ...envelope,
+          data: { ...envelope.data, revision: PERSONALIZED_VIEW_REFS.working_state.revision + 1 },
+        };
+      },
+    },
+    principal: { id: "user:local", grants: ["*"] },
+    application_space: PERSONALIZED_VIEW_REFS.application_space,
+    working_state: PERSONALIZED_VIEW_REFS.working_state,
+  }), (error: unknown) => error instanceof Error
+    && "code" in error
+    && error.code === "explorer_view_get_response_mismatch");
 });

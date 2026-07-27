@@ -770,6 +770,12 @@ and Privacy Forget.
 personal-source acceptance boundary. With `workflow.enabled`, the same exact
 pre-Forget Views must pass both an independent `codex exec` plus installed
 Metaflow skill gate and the real Vite/React/Graphology/Sigma View Explorer gate.
+The temporary Agent host rejects every undeclared Search request, exact View
+read, or graph root/bound before `OperationService.execute`, and hard-kills a
+non-cooperative Codex process within a bounded termination window. The browser
+gate validates the exact Application Space root and working-state `view.get`
+response before mounting and disposing the trusted Web Renderer Registry for
+that same authorized View revision.
 Neither gate may be replaced by synthetic evidence in the CLI smoke. A missing
 or invalid Codex credential is an external failed gate, not permission to skip
 Agent access or close its acceptance issue.

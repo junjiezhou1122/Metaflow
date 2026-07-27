@@ -50,6 +50,8 @@ const ALLOWED_OPERATIONS = new Set<OperationName>([
 ]);
 const MAX_PROCESS_OUTPUT_BYTES = 1_000_000;
 const MAX_OPERATION_CALLS = 16;
+const PROCESS_TERMINATION_GRACE_MS = 500;
+const PROCESS_SETTLE_GRACE_MS = 1_000;
 
 const AgentResultSchema = z.object({
   working_state_ref: ExactViewRefSchema,
@@ -123,7 +125,7 @@ export async function runPersonalizedAgentAccessGate(
   let server: Server | undefined;
   try {
     const staged = await stageAgentWorkspace(workspace);
-    const host = await startOperationHost(input.operations, input.principal, token, traces);
+    const host = await startOperationHost(input.operations, input.principal, token, traces, parsed);
     server = host.server;
     const codexExecutable = await resolveCodexExecutable(input.codex?.executable);
     const output = await runCodex({
@@ -178,8 +180,11 @@ export async function runPersonalizedAgentAccessGate(
     };
     return PersonalizedAgentAccessEvidenceSchema.parse(evidence);
   } finally {
-    await closeServer(server);
-    await rm(workspace, { recursive: true, force: true });
+    try {
+      await closeServer(server);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   }
 }
 
@@ -241,9 +246,10 @@ async function startOperationHost(
   principal: OperationContext["principal"],
   token: string,
   traces: OperationTrace[],
+  expected: ReturnType<typeof parseInput>,
 ): Promise<{ server: Server; endpoint: URL }> {
   const accessControl = new AmbientOperationAccess(token);
-  const tracedService = readOnlyTracedService(service, traces);
+  const tracedService = readOnlyTracedService(service, traces, expected);
   const http = new HttpOperationAdapter(tracedService, () => ({
     request_id: `request:agent-access:http:${randomUUID()}`,
     principal,
@@ -307,7 +313,11 @@ async function startOperationHost(
   }
 }
 
-function readOnlyTracedService(service: OperationService, traces: OperationTrace[]): OperationService {
+function readOnlyTracedService(
+  service: OperationService,
+  traces: OperationTrace[],
+  expected: ReturnType<typeof parseInput>,
+): OperationService {
   const execute = service.execute.bind(service);
   return new Proxy(service, {
     get(target, property, receiver) {
@@ -322,14 +332,15 @@ function readOnlyTracedService(service: OperationService, traces: OperationTrace
         if (traces.length >= MAX_OPERATION_CALLS) {
           throw new PersonalizedAgentAccessError("operation_limit_exceeded", "Independent Agent exceeded the bounded Operation call limit");
         }
-        if (!ALLOWED_OPERATIONS.has(request.operation)) {
+        if (!ALLOWED_OPERATIONS.has(request.operation)
+          || !operationInputAllowed(request.operation, request.input, expected)) {
           const denied = OperationEnvelopeSchema.parse({
             ok: false,
             request_id: context.request_id,
             operation: request.operation,
             error: {
-              code: "agent_acceptance_read_only",
-              message: "This acceptance host permits only bounded View read Operations",
+              code: "agent_acceptance_scope_denied",
+              message: "This acceptance host permits only the declared bounded View reads",
               category: "forbidden",
               details: {},
             },
@@ -384,8 +395,10 @@ function validateAgentResult(
     throw new PersonalizedAgentAccessError("agent_operation_denied", "Independent Agent attempted or observed a denied Operation");
   }
   const workingSearchIndex = traces.findIndex(trace => trace.operation === "view.search"
+    && searchQueryMatches(trace.input, expected.queries.working_state)
     && trace.output_refs.some(ref => sameRef(ref, expected.working_state)));
   const applicationSearchIndex = traces.findIndex(trace => trace.operation === "view.search"
+    && searchQueryMatches(trace.input, expected.queries.application_space)
     && trace.output_refs.some(ref => sameRef(ref, expected.application_space)));
   const workingGetIndex = traces.findIndex((trace, index) => index > workingSearchIndex
     && trace.operation === "view.get"
@@ -407,10 +420,19 @@ function validateAgentResult(
       { operation_count: traces.length },
     );
   }
-  for (const trace of traces.filter(trace => trace.operation === "view.search")) validateSearchInput(trace.input);
+  for (const trace of traces.filter(trace => trace.operation === "view.search")) {
+    if (!approvedSearchInput(trace.input, expected.queries)) {
+      throw new PersonalizedAgentAccessError("agent_search_bounds_invalid", "Independent Agent broadened the bounded Search contract");
+    }
+  }
   for (const trace of traces.filter(trace => trace.operation === "view.get")) {
     if (!exactGetInput(trace.input, expected.working_state) && !exactGetInput(trace.input, expected.application_space)) {
       throw new PersonalizedAgentAccessError("agent_exact_scope_broadened", "Independent Agent read an undeclared exact View");
+    }
+  }
+  for (const trace of traces.filter(trace => trace.operation === "view.graph.project")) {
+    if (!boundedGraphInput(trace.input, expected.application_space)) {
+      throw new PersonalizedAgentAccessError("agent_graph_scope_broadened", "Independent Agent broadened the bounded graph projection");
     }
   }
   const projectedRefs = uniqueRefs(traces[graphIndex]!.output_refs);
@@ -420,36 +442,104 @@ function validateAgentResult(
   }
 }
 
-function validateSearchInput(value: unknown): void {
-  if (!isRecord(value) || !isRecord(value.request)) failSequence();
+function operationInputAllowed(
+  operation: OperationName,
+  value: unknown,
+  expected: ReturnType<typeof parseInput>,
+): boolean {
+  if (operation === "catalog.list") return isRecord(value) && sameObjectKeys(value, []);
+  if (operation === "view.search") return approvedSearchInput(value, expected.queries);
+  if (operation === "view.get") {
+    return exactGetInput(value, expected.working_state) || exactGetInput(value, expected.application_space);
+  }
+  if (operation === "view.graph.project") return boundedGraphInput(value, expected.application_space);
+  return false;
+}
+
+function approvedSearchInput(
+  value: unknown,
+  queries: ReturnType<typeof parseInput>["queries"],
+): boolean {
+  if (!isRecord(value) || !sameObjectKeys(value, ["request"]) || !isRecord(value.request)) return false;
   const request = value.request;
-  if (!Array.isArray(request.modes) || request.modes.length !== 1 || request.modes[0] !== "keyword") failSequence();
-  if (!isRecord(request.scope) || request.scope.kind !== "all_visible") failSequence();
-  if (!Number.isInteger(request.scope.max_nodes) || (request.scope.max_nodes as number) > 100) failSequence();
-  if (!Number.isInteger(request.scope.max_scan) || (request.scope.max_scan as number) > 1_000) failSequence();
-  if (!isRecord(request.page) || !Number.isInteger(request.page.limit) || (request.page.limit as number) > 10) failSequence();
+  return sameObjectKeys(request, [
+    "contract_version",
+    "query",
+    "scope",
+    "target",
+    "modes",
+    "fusion",
+    "failure_mode",
+    "page",
+  ])
+    && request.contract_version === 1
+    && searchQueryMatches(value, queries.working_state, queries.application_space)
+    && isRecord(request.scope)
+    && sameObjectKeys(request.scope, ["kind", "max_nodes", "max_scan"])
+    && request.scope.kind === "all_visible"
+    && request.scope.max_nodes === 100
+    && request.scope.max_scan === 1_000
+    && isRecord(request.target)
+    && sameObjectKeys(request.target, ["envelope", "internal", "related_views"])
+    && request.target.envelope === true
+    && request.target.internal === true
+    && request.target.related_views === false
+    && Array.isArray(request.modes)
+    && sameStrings(request.modes, ["keyword"])
+    && isRecord(request.fusion)
+    && sameObjectKeys(request.fusion, ["strategy", "k", "weights"])
+    && request.fusion.strategy === "rrf@1"
+    && request.fusion.k === 60
+    && isRecord(request.fusion.weights)
+    && sameObjectKeys(request.fusion.weights, ["keyword"])
+    && request.fusion.weights.keyword === 1
+    && request.failure_mode === "require_all"
+    && isRecord(request.page)
+    && sameObjectKeys(request.page, ["limit"])
+    && request.page.limit === 10;
+}
+
+function searchQueryMatches(value: unknown, ...allowed: string[]): boolean {
+  return isRecord(value)
+    && isRecord(value.request)
+    && isRecord(value.request.query)
+    && sameObjectKeys(value.request.query, ["text"])
+    && typeof value.request.query.text === "string"
+    && allowed.includes(value.request.query.text);
 }
 
 function exactGetInput(value: unknown, expected: ExactViewRef): boolean {
-  return isRecord(value) && isRecord(value.ref)
+  return isRecord(value)
+    && sameObjectKeys(value, ["ref"])
+    && isRecord(value.ref)
+    && sameObjectKeys(value.ref, ["view_id", "revision"])
     && value.ref.view_id === expected.view_id
     && value.ref.revision === expected.revision;
 }
 
 function boundedGraphInput(value: unknown, expectedRoot: ExactViewRef): boolean {
-  if (!isRecord(value) || !isRecord(value.request)) return false;
+  if (!isRecord(value) || !sameObjectKeys(value, ["request"]) || !isRecord(value.request)) return false;
   const request = value.request;
-  return Array.isArray(request.roots)
+  return sameObjectKeys(request, [
+    "roots",
+    "direction",
+    "edge_types",
+    "max_depth",
+    "max_nodes",
+    "max_edges",
+  ])
+    && Array.isArray(request.roots)
     && request.roots.length === 1
     && isRecord(request.roots[0])
+    && sameObjectKeys(request.roots[0], ["view_id", "revision"])
     && request.roots[0].view_id === expectedRoot.view_id
     && request.roots[0].revision === expectedRoot.revision
     && request.direction === "outgoing"
     && Array.isArray(request.edge_types)
     && sameStrings(request.edge_types, [APPLICATION_SPACE_COMPOSITION_RELATION, APPLICATION_SPACE_MEMBERSHIP_RELATION])
-    && Number.isInteger(request.max_depth) && (request.max_depth as number) === 1
-    && Number.isInteger(request.max_nodes) && (request.max_nodes as number) <= 10
-    && Number.isInteger(request.max_edges) && (request.max_edges as number) <= 20;
+    && request.max_depth === 1
+    && request.max_nodes === 10
+    && request.max_edges === 20;
 }
 
 async function runCodex(input: {
@@ -638,43 +728,72 @@ function runProcess(
     const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
-    let exceeded = false;
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
+    let settled = false;
+    let terminationReason: "timeout" | "output_limit" | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
+    let forcedSettleTimer: NodeJS.Timeout | undefined;
+    const timeoutTimer = setTimeout(() => terminate("timeout"), options.timeout_ms);
+
+    const clearTimers = () => {
+      clearTimeout(timeoutTimer);
+      if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (forcedSettleTimer) clearTimeout(forcedSettleTimer);
+    };
+    const settle = (result: { status: number; stdout: string; stderr: string } | PersonalizedAgentAccessError) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      if (result instanceof PersonalizedAgentAccessError) reject(result);
+      else resolve(result);
+    };
+    const terminationError = () => terminationReason === "timeout"
+      ? new PersonalizedAgentAccessError("codex_timeout", "Independent Codex process exceeded its explicit timeout")
+      : new PersonalizedAgentAccessError("codex_output_limit", "Independent Codex process exceeded its diagnostic output limit");
+    function terminate(reason: "timeout" | "output_limit") {
+      if (terminationReason || settled) return;
+      terminationReason = reason;
       child.kill("SIGTERM");
-    }, options.timeout_ms);
+      hardKillTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        forcedSettleTimer = setTimeout(() => {
+          child.stdin.destroy();
+          child.stdout.destroy();
+          child.stderr.destroy();
+          child.unref();
+          settle(terminationError());
+        }, PROCESS_SETTLE_GRACE_MS);
+      }, PROCESS_TERMINATION_GRACE_MS);
+    }
+
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", chunk => {
-      stdout += chunk;
-      if (Buffer.byteLength(stdout) > MAX_PROCESS_OUTPUT_BYTES) {
-        exceeded = true;
-        child.kill("SIGTERM");
+      if (terminationReason) return;
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(chunk) > MAX_PROCESS_OUTPUT_BYTES) {
+        terminate("output_limit");
+        return;
       }
+      stdout += chunk;
     });
     child.stderr.on("data", chunk => {
-      stderr += chunk;
-      if (Buffer.byteLength(stderr) > MAX_PROCESS_OUTPUT_BYTES) {
-        exceeded = true;
-        child.kill("SIGTERM");
+      if (terminationReason) return;
+      if (Buffer.byteLength(stderr) + Buffer.byteLength(chunk) > MAX_PROCESS_OUTPUT_BYTES) {
+        terminate("output_limit");
+        return;
       }
+      stderr += chunk;
     });
     child.once("error", cause => {
-      clearTimeout(timer);
-      reject(new PersonalizedAgentAccessError("codex_spawn_failed", "Independent Codex process could not start", {}, { cause }));
+      settle(new PersonalizedAgentAccessError("codex_spawn_failed", "Independent Codex process could not start", {}, { cause }));
     });
-    child.once("exit", code => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(new PersonalizedAgentAccessError("codex_timeout", "Independent Codex process exceeded its explicit timeout"));
-        return;
+    child.stdin.once("error", cause => {
+      if (!terminationReason) {
+        settle(new PersonalizedAgentAccessError("codex_stdin_failed", "Independent Codex process rejected its prompt", {}, { cause }));
       }
-      if (exceeded) {
-        reject(new PersonalizedAgentAccessError("codex_output_limit", "Independent Codex process exceeded its diagnostic output limit"));
-        return;
-      }
-      resolve({ status: code ?? 1, stdout, stderr });
+    });
+    child.once("close", code => {
+      if (terminationReason) settle(terminationError());
+      else settle({ status: code ?? 1, stdout, stderr });
     });
     child.stdin.end(options.stdin);
   });
@@ -751,6 +870,10 @@ function sameStrings(left: unknown[], right: string[]): boolean {
     && JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 }
 
+function sameObjectKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  return sameStrings(Object.keys(value), expected);
+}
+
 function boundedText(value: string, label: string): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > 500) {
@@ -776,8 +899,4 @@ function digest(value: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function failSequence(): never {
-  throw new PersonalizedAgentAccessError("agent_search_bounds_invalid", "Independent Agent broadened the bounded Search contract");
 }

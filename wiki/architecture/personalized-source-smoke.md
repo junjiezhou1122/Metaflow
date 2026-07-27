@@ -51,9 +51,15 @@ evolution, an independent `codex exec` using the installed Metaflow View-access
 skill, the real Vite/React/Graphology/Sigma View Explorer, restart-safe exact
 replay, and Privacy Forget. Both Agent and browser gates receive the same exact
 working-state and Application Space refs and run before restart or Forget. The
-Agent gate may call only bounded read Operations; the browser gate verifies a
-nonblank Sigma canvas and synchronized accessible DOM without retaining a
-screenshot. Their public evidence contains only counts, booleans, and digests.
+Agent gate admits only the two approved literal Search requests, the two exact
+View reads, and one exact-root bounded graph projection before the underlying
+Operation service can observe a call. Timeout and output-limit termination
+escalate from `SIGTERM` to `SIGKILL` within fixed bounds. The browser gate
+validates the exact graph root, exact `view.get` request and response, a
+nonblank Sigma canvas, and synchronized accessible DOM; it then resolves,
+mounts, and disposes the trusted JSON Renderer through the Web Renderer Host
+against that same working-state revision. No screenshot or rendered content is
+retained. Their public evidence contains only counts, booleans, and digests.
 The explicit
 `external_model_approved` value is frozen into the Raw Views before Capture;
 it is not a runtime override. Embedding remains disabled, so the content-free

@@ -278,6 +278,9 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
+      '@info/web-view-renderers':
+        specifier: workspace:*
+        version: link:../../packages/adapters/web-view-renderers
       '@playwright/test':
         specifier: 1.62.0
         version: 1.62.0

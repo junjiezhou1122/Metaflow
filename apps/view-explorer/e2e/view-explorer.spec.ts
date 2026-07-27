@@ -74,7 +74,7 @@ for (const viewport of [viewports[0], viewports[2]]) {
       await expect(page.locator(".right-panel")).toHaveClass(/mobile-open/);
     }
     await expect(page.locator(".detail-heading h2")).toHaveText("Metaflow Implementation Working State");
-    await expect(page.locator(".details")).toContainText("personalized.working_state@1");
+    await expect(page.locator(".details")).toContainText("personal.working_state@1");
     const provenance = page.locator("section.provenance");
     await expect(provenance).toContainText("operator:personalized-working-state");
     for (const ref of [

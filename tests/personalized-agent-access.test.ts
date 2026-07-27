@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,11 @@ import type {
   AgentTaskRequest,
   AgentTaskResult,
 } from "@info/agent-runtime-adapter";
+import {
+  OperationRequestSchema,
+  type OperationName,
+  type OperationService,
+} from "@info/operations";
 import { exactViewRef, parseViewDraft, type ViewDraft } from "@info/view";
 import {
   APPLICATION_SPACE_REPRESENTATION_KIND,
@@ -147,11 +152,142 @@ test("independent read-only Codex gate uses the staged skill and returns only co
       (error: unknown) => error instanceof PersonalizedAgentAccessError
         && error.code === "codex_executable_invalid",
     );
+
+    const adversarialCodex = join(root, "codex-adversarial");
+    await copyFile(fakeCodex, adversarialCodex);
+    await chmod(adversarialCodex, 0o755);
+    const executed: Array<{ operation: OperationName; input: unknown }> = [];
+    await assert.rejects(
+      runPersonalizedAgentAccessGate({
+        operations: observeExecutedOperations(composition.operationService, executed),
+        principal: { id: "user:local", grants: ["*"] },
+        working_state: exactViewRef(workingState),
+        application_space: exactViewRef(applicationSpace),
+        queries: {
+          working_state: "Synthetic Personalized Evidence Working State",
+          application_space: "Synthetic Agent Application Space",
+        },
+        codex: {
+          executable: adversarialCodex,
+          home: join(root, "unused-codex-home"),
+          timeout_ms: 30_000,
+        },
+        temporary_parent: root,
+      }),
+      (error: unknown) => error instanceof PersonalizedAgentAccessError
+        && error.code === "agent_operation_denied",
+    );
+    const nonCatalog = executed.filter(call => call.operation !== "catalog.list");
+    assert.deepEqual(nonCatalog.map(call => call.operation), [
+      "view.search",
+      "view.get",
+      "view.search",
+      "view.get",
+      "view.graph.project",
+    ]);
+    assert.deepEqual(
+      nonCatalog.filter(call => call.operation === "view.get").map(call => call.input),
+      [{ ref: exactViewRef(workingState) }, { ref: exactViewRef(applicationSpace) }],
+    );
+    assert.deepEqual(
+      nonCatalog.filter(call => call.operation === "view.search").map(searchQuery),
+      ["Synthetic Personalized Evidence Working State", "Synthetic Agent Application Space"],
+    );
+    assert.deepEqual(
+      nonCatalog.filter(call => call.operation === "view.graph.project").map(graphRoot),
+      [exactViewRef(applicationSpace)],
+    );
+
+    const signalIgnoringCodex = join(root, "codex-ignore-sigterm");
+    await copyFile(fakeCodex, signalIgnoringCodex);
+    await chmod(signalIgnoringCodex, 0o755);
+    const timeoutStartedAt = Date.now();
+    await assert.rejects(
+      runPersonalizedAgentAccessGate({
+        operations: composition.operationService,
+        principal: { id: "user:local", grants: ["*"] },
+        working_state: exactViewRef(workingState),
+        application_space: exactViewRef(applicationSpace),
+        queries: {
+          working_state: "Synthetic Personalized Evidence Working State",
+          application_space: "Synthetic Agent Application Space",
+        },
+        codex: {
+          executable: signalIgnoringCodex,
+          home: join(root, "unused-codex-home"),
+          timeout_ms: 10_000,
+        },
+        temporary_parent: root,
+      }),
+      (error: unknown) => error instanceof PersonalizedAgentAccessError
+        && error.code === "codex_timeout",
+    );
+    assert.ok(Date.now() - timeoutStartedAt < 15_000, "signal-ignoring Codex must be hard-killed within the bounded grace period");
+
+    const outputOverflowCodex = join(root, "codex-output-overflow");
+    await copyFile(fakeCodex, outputOverflowCodex);
+    await chmod(outputOverflowCodex, 0o755);
+    const overflowStartedAt = Date.now();
+    await assert.rejects(
+      runPersonalizedAgentAccessGate({
+        operations: composition.operationService,
+        principal: { id: "user:local", grants: ["*"] },
+        working_state: exactViewRef(workingState),
+        application_space: exactViewRef(applicationSpace),
+        queries: {
+          working_state: "Synthetic Personalized Evidence Working State",
+          application_space: "Synthetic Agent Application Space",
+        },
+        codex: {
+          executable: outputOverflowCodex,
+          home: join(root, "unused-codex-home"),
+          timeout_ms: 30_000,
+        },
+        temporary_parent: root,
+      }),
+      (error: unknown) => error instanceof PersonalizedAgentAccessError
+        && error.code === "codex_output_limit",
+    );
+    assert.ok(Date.now() - overflowStartedAt < 5_000, "output-overflow Codex must be hard-killed within the bounded grace period");
+    assert.deepEqual(
+      (await readdir(root)).filter(name => name.startsWith("metaflow-personalized-agent-access-")),
+      [],
+    );
   } finally {
     await composition.close();
     await rm(root, { recursive: true, force: true });
   }
 });
+
+function observeExecutedOperations(
+  service: OperationService,
+  executed: Array<{ operation: OperationName; input: unknown }>,
+): OperationService {
+  const execute = service.execute.bind(service);
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      if (property !== "execute") {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (requestInput: unknown, contextInput: unknown) => {
+        const request = OperationRequestSchema.parse(requestInput);
+        executed.push({ operation: request.operation, input: request.input });
+        return execute(requestInput, contextInput);
+      };
+    },
+  });
+}
+
+function searchQuery(call: { input: unknown }): unknown {
+  const input = call.input as { request?: { query?: { text?: unknown } } };
+  return input.request?.query?.text;
+}
+
+function graphRoot(call: { input: unknown }): unknown {
+  const input = call.input as { request?: { roots?: unknown[] } };
+  return input.request?.roots?.[0];
+}
 
 function workingStateDraft(): ViewDraft {
   return parseViewDraft({

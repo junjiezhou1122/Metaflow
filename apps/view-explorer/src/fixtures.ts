@@ -115,7 +115,7 @@ export function makePersonalizedProjection(): ViewGraphProjectionResult {
   ] as const;
   const nodes: ViewGraphProjectionNode[] = [
     personalizedNode(refs.application_space, "Personal Knowledge Workspace", "Keep useful exact Views in one immutable Application Space", "metaflow.application_space", "derived", "graph", 0, []),
-    personalizedNode(refs.working_state, "Metaflow Implementation Working State", "Reconcile code-reflected decisions, wiki-only decisions, and contradictions", "personalized.working_state", "derived", "json", 1, [relations.working]),
+    personalizedNode(refs.working_state, "Metaflow Implementation Working State", "Reconcile code-reflected decisions, wiki-only decisions, and contradictions", "personal.working_state", "derived", "agent_output", 1, [relations.working]),
     ...inputs.map(([edgeId, ref, name, schema, representation]) => personalizedNode(ref, name, "Synthetic source evidence for personalized workflow acceptance", schema, "raw", representation, 1, [edgeId])),
   ];
   const edges: ViewGraphProjectionEdge[] = [

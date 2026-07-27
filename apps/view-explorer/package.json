@@ -25,6 +25,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@info/web-view-renderers": "workspace:*",
     "@playwright/test": "1.62.0",
     "@types/node": "22.19.15",
     "@types/pngjs": "6.0.5",

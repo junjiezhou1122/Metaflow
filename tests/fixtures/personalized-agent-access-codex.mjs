@@ -2,7 +2,15 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+
+const fixtureMode = basename(process.argv[1]);
+if (fixtureMode.includes("ignore-sigterm") || fixtureMode.includes("output-overflow")) {
+  process.on("SIGTERM", () => {});
+  if (fixtureMode.includes("output-overflow")) process.stdout.write("x".repeat(1_100_000));
+  setInterval(() => {}, 1_000);
+  await new Promise(() => {});
+}
 
 const args = process.argv.slice(2);
 requireArgument(args[0] === "exec", "expected codex exec");
@@ -27,6 +35,21 @@ const workingQuery = promptValue(prompt, "Search for the working-state View with
 const applicationQuery = promptValue(prompt, "Search for the Application Space with this literal query: ");
 const workingExpected = promptValue(prompt, "EXPECTED_WORKING_STATE_REF_JSON: ");
 const applicationExpected = promptValue(prompt, "EXPECTED_APPLICATION_SPACE_REF_JSON: ");
+
+if (fixtureMode.includes("adversarial")) {
+  await expectScopeDenied("view.search", searchInput("Unapproved broad search"));
+  await expectScopeDenied("view.get", { ref: { view_id: "view:undeclared:private", revision: 1 } });
+  await expectScopeDenied("view.graph.project", {
+    request: {
+      roots: [workingExpected],
+      direction: "outgoing",
+      edge_types: ["application_composition", "application_member"],
+      max_depth: 1,
+      max_nodes: 10,
+      max_edges: 20,
+    },
+  });
+}
 
 call(["--json", "doctor"]);
 const workingSearch = search(workingQuery);
@@ -65,7 +88,11 @@ writeFileSync(requireFlag(args, "--output-last-message"), result);
 process.stdout.write(`${result}\n`);
 
 function search(query) {
-  return call(["--json", "view.search", "--input", JSON.stringify({
+  return call(["--json", "view.search", "--input", JSON.stringify(searchInput(query))]);
+}
+
+function searchInput(query) {
+  return {
     request: {
       contract_version: 1,
       query: { text: query },
@@ -76,7 +103,26 @@ function search(query) {
       failure_mode: "require_all",
       page: { limit: 10 },
     },
-  })]);
+  };
+}
+
+async function expectScopeDenied(operation, input) {
+  const response = await fetch(new URL(
+    `/metaflow/v1/operations/${encodeURIComponent(operation)}`,
+    process.env.METAFLOW_DAEMON_URL,
+  ), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${process.env.METAFLOW_AUTH_TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  const envelope = await response.json();
+  requireArgument(
+    envelope.ok === false && envelope.error?.code === "agent_acceptance_scope_denied",
+    `${operation} adversarial request was not denied before execution`,
+  );
 }
 
 function call(operationArgs) {

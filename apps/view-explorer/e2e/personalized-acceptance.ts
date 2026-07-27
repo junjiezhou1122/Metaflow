@@ -1,11 +1,20 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "@playwright/test";
 import { PNG } from "pngjs";
-import { createServer } from "vite";
-import { refKey, type ExactViewRef, type ExplorerOperation } from "../src/contracts.js";
+import { createServer as createViteServer } from "vite";
+import {
+  OperationEnvelopeSchema,
+  ViewRevisionSchema,
+  refKey,
+  type ExactViewRef,
+  type ExplorerOperation,
+  type View,
+} from "../src/contracts.js";
+import type { PersonalizedRendererAcceptanceEvidence } from "./personalized-renderer-acceptance.js";
 
 const EXPLORER_OPERATIONS = new Set<ExplorerOperation>([
   "view.graph.project",
@@ -44,6 +53,7 @@ export type PersonalizedViewExplorerAcceptanceEvidence = {
     view_get: number;
     view_search: number;
   };
+  renderer: PersonalizedRendererAcceptanceEvidence;
   browser_console_errors: 0;
   browser_console_warnings: 0;
   chromium_webgl_driver_warnings: number;
@@ -55,8 +65,9 @@ export class PersonalizedViewExplorerAcceptanceError extends Error {
     message: string,
     readonly code: string,
     readonly details: Readonly<Record<string, number | string | boolean>> = {},
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "PersonalizedViewExplorerAcceptanceError";
   }
 }
@@ -83,17 +94,20 @@ export async function runPersonalizedViewExplorerAcceptance(
 
   const cacheDirectory = await mkdtemp(join(tmpdir(), "metaflow-view-explorer-acceptance-"));
   const explorerRoot = fileURLToPath(new URL("../", import.meta.url));
-  let vite: Awaited<ReturnType<typeof createServer>> | undefined;
+  let vite: Awaited<ReturnType<typeof createViteServer>> | undefined;
+  let http: HttpServer | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
-    vite = await createServer({
+    vite = await createViteServer({
       root: explorerRoot,
       cacheDir: cacheDirectory,
       logLevel: "silent",
-      server: { host: "127.0.0.1", port: 0, strictPort: true },
+      appType: "spa",
+      server: { middlewareMode: true },
     });
-    await vite.listen();
-    const address = vite.httpServer?.address();
+    http = createHttpServer(vite.middlewares);
+    await listenOnEphemeralPort(http);
+    const address = http.address();
     if (!address || typeof address === "string") {
       throw new PersonalizedViewExplorerAcceptanceError(
         "Vite did not expose an isolated TCP listener",
@@ -122,10 +136,42 @@ export async function runPersonalizedViewExplorerAcceptance(
       await context.close();
     }
   } finally {
-    await browser?.close();
-    await vite?.close();
-    await rm(cacheDirectory, { recursive: true, force: true });
+    try {
+      await browser?.close();
+    } finally {
+      try {
+        await closeHttpServer(http);
+      } finally {
+        try {
+          await vite?.close();
+        } finally {
+          await rm(cacheDirectory, { recursive: true, force: true });
+        }
+      }
+    }
   }
+}
+
+async function listenOnEphemeralPort(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(0, "127.0.0.1");
+  });
+}
+
+async function closeHttpServer(server?: HttpServer): Promise<void> {
+  if (!server?.listening) return;
+  server.closeAllConnections?.();
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
 
 async function verifyPersonalizedViewExplorerPage(
@@ -154,6 +200,7 @@ async function verifyPersonalizedViewExplorerPage(
   let failRoute!: (error: Error) => void;
   const routeFailure = new Promise<never>((_resolve, reject) => { failRoute = reject; });
   let requestSequence = 0;
+  let exactWorkingStateView: View | undefined;
   await page.route("**/metaflow/v1/operations/*", async route => {
     const request = route.request();
     const operationValue = decodeURIComponent(new URL(request.url()).pathname.split("/").at(-1) ?? "");
@@ -168,24 +215,31 @@ async function verifyPersonalizedViewExplorerPage(
     const operation = operationValue as ExplorerOperation;
     calls.set(operation, calls.get(operation)! + 1);
     try {
+      const operationInput: unknown = request.postDataJSON();
+      validateExactOperationInput(operation, operationInput, input);
       const envelope = await input.operations.execute(
-        { operation, input: request.postDataJSON() },
+        { operation, input: operationInput },
         {
           request_id: `request:personalized-view-explorer:${++requestSequence}`,
           principal: input.principal,
         },
       );
+      if (operation === "view.get") {
+        exactWorkingStateView = validateExactViewGetResponse(envelope, input.working_state);
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json; charset=utf-8",
         body: JSON.stringify(envelope),
       });
-    } catch {
-      failRoute(new PersonalizedViewExplorerAcceptanceError(
-        "The injected OperationService failed while serving View Explorer",
-        "explorer_operation_failed",
-        { operation },
-      ));
+    } catch (error) {
+      failRoute(error instanceof PersonalizedViewExplorerAcceptanceError ? error
+        : new PersonalizedViewExplorerAcceptanceError(
+          "The injected OperationService failed while serving View Explorer",
+          "explorer_operation_failed",
+          { operation },
+          { cause: error },
+        ));
       await route.abort("failed").catch(() => undefined);
     }
   });
@@ -251,14 +305,6 @@ async function verifyPersonalizedViewExplorerPage(
   }
 
   const pixels = await canvasPixels(page);
-  await page.waitForTimeout(50);
-  if (consoleErrors > 0 || consoleWarnings > 0) {
-    throw new PersonalizedViewExplorerAcceptanceError(
-      "View Explorer emitted browser console diagnostics",
-      "explorer_browser_diagnostic",
-      { errors: consoleErrors, warnings: consoleWarnings },
-    );
-  }
   if (pixels.nonBackgroundSamples <= 20 || pixels.uniqueColors <= 4) {
     throw new PersonalizedViewExplorerAcceptanceError(
       "Sigma canvas did not contain enough rendered graph pixels",
@@ -282,6 +328,22 @@ async function verifyPersonalizedViewExplorerPage(
       { calls: calls.get("view.search") ?? 0 },
     );
   }
+  if (!exactWorkingStateView) {
+    throw new PersonalizedViewExplorerAcceptanceError(
+      "View Explorer did not return the authorized exact working-state View",
+      "explorer_exact_view_response_missing",
+    );
+  }
+
+  const renderer = await runRendererAcceptance(page, baseUrl, exactWorkingStateView);
+  await page.waitForTimeout(50);
+  if (consoleErrors > 0 || consoleWarnings > 0) {
+    throw new PersonalizedViewExplorerAcceptanceError(
+      "View Explorer or Web Renderer emitted browser console diagnostics",
+      "explorer_browser_diagnostic",
+      { errors: consoleErrors, warnings: consoleWarnings },
+    );
+  }
 
   return {
     contract_version: 1,
@@ -297,11 +359,83 @@ async function verifyPersonalizedViewExplorerPage(
       view_get: calls.get("view.get") ?? 0,
       view_search: calls.get("view.search") ?? 0,
     },
+    renderer,
     browser_console_errors: 0,
     browser_console_warnings: 0,
     chromium_webgl_driver_warnings: webglDriverWarnings,
     retained_artifacts: false,
   };
+}
+
+function validateExactOperationInput(
+  operation: ExplorerOperation,
+  value: unknown,
+  expected: Pick<PersonalizedViewExplorerAcceptanceInput, "application_space" | "working_state">,
+): void {
+  if (operation === "view.graph.project") {
+    const roots = asRecord(asRecord(value)?.request)?.roots;
+    if (!Array.isArray(roots) || roots.length !== 1 || !sameExactRef(roots[0], expected.application_space)) {
+      throw new PersonalizedViewExplorerAcceptanceError(
+        "View Explorer graph projection must use the supplied exact Application Space as its sole root",
+        "explorer_graph_root_mismatch",
+        { expected_root: refKey(expected.application_space) },
+      );
+    }
+  }
+  if (operation === "view.get") {
+    const ref = asRecord(value)?.ref;
+    if (!sameExactRef(ref, expected.working_state)) {
+      throw new PersonalizedViewExplorerAcceptanceError(
+        "View Explorer exact read did not request the supplied working-state revision",
+        "explorer_view_get_ref_mismatch",
+        { expected_ref: refKey(expected.working_state) },
+      );
+    }
+  }
+}
+
+function validateExactViewGetResponse(value: unknown, expected: ExactViewRef): View {
+  const envelope = OperationEnvelopeSchema.safeParse(value);
+  if (!envelope.success || !envelope.data.ok || envelope.data.operation !== "view.get") {
+    throw new PersonalizedViewExplorerAcceptanceError(
+      "View Explorer exact read did not return a successful view.get envelope",
+      "explorer_view_get_response_invalid",
+    );
+  }
+  const view = ViewRevisionSchema.safeParse(envelope.data.data);
+  if (!view.success) {
+    throw new PersonalizedViewExplorerAcceptanceError(
+      "View Explorer exact read returned an invalid View revision",
+      "explorer_view_get_response_invalid",
+      { issue_count: view.error.issues.length },
+    );
+  }
+  if (view.data.id !== expected.view_id || view.data.revision !== expected.revision) {
+    throw new PersonalizedViewExplorerAcceptanceError(
+      "View Explorer exact read returned a different View revision",
+      "explorer_view_get_response_mismatch",
+      { expected_ref: refKey(expected), actual_ref: `${view.data.id}@${view.data.revision}` },
+    );
+  }
+  return view.data;
+}
+
+async function runRendererAcceptance(
+  page: Page,
+  baseUrl: string,
+  view: View,
+): Promise<PersonalizedRendererAcceptanceEvidence> {
+  const moduleUrl = new URL("/e2e/personalized-renderer-acceptance.ts", baseUrl).toString();
+  const authorizedViewJson = JSON.stringify(view);
+  return page.evaluate<PersonalizedRendererAcceptanceEvidence, {
+    rendererModuleUrl: string;
+    authorizedViewJson: string;
+  }>(async ({ rendererModuleUrl, authorizedViewJson: serializedView }) => {
+    const rendererModule = await import(rendererModuleUrl) as {
+      runPersonalizedRendererAcceptance(value: unknown): Promise<PersonalizedRendererAcceptanceEvidence>;
+    };
+    return rendererModule.runPersonalizedRendererAcceptance(JSON.parse(serializedView));
+  }, { rendererModuleUrl: moduleUrl, authorizedViewJson });
 }
 
 async function canvasPixels(page: Page): Promise<{ uniqueColors: number; nonBackgroundSamples: number }> {
@@ -334,6 +468,18 @@ function requireExactRef(ref: ExactViewRef, field: string): void {
       { field },
     );
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function sameExactRef(value: unknown, expected: ExactViewRef): boolean {
+  const ref = asRecord(value);
+  return ref?.view_id === expected.view_id && ref.revision === expected.revision
+    && Object.keys(ref).length === 2;
 }
 
 function isChromiumReadPixelsWarning(message: string): boolean {
