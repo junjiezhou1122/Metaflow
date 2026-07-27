@@ -3,7 +3,7 @@ name: architecture
 title: Architecture
 desc: Provisional Metaflow v1 domain boundaries, data flows, interfaces, and decisions derived from the founder dream.
 created: 2026-07-24T13:22:00Z
-updated: 2026-07-27T11:56:03+08:00
+updated: 2026-07-27T12:49:27+08:00
 ---
 
 # Architecture
@@ -24,7 +24,7 @@ updated: 2026-07-27T11:56:03+08:00
 
 [[architecture/view-core-transformation-runtime|[canonical-decision] view-core-transformation-runtime]]: The confirmed v1 View, Transformation, Operator, Execution Runtime, feedback, failure, policy, package, and first-slice contracts.
 
-[[architecture/reactive-view-evolution|[canonical-working-decision] reactive-view-evolution]]: The View-centered model for explicit commit triggers, Worker-hosted Operators, recursive graph evolution, Search, Agent access, and human rendering, including the remaining incremental-update decisions.
+[[architecture/reactive-view-evolution|[canonical-working-decision] reactive-view-evolution]]: The accepted III-native model in which Processor Workers perform semantic View[] -> View, Parser Workers project heterogeneous Representations, and one Search Worker retrieves normalized fragments and graph evidence.
 
 [[architecture/ambient-automation-runtime|[canonical-decision] ambient-automation-runtime]]: Editable Automation Views, deterministic Triggers, exact context bindings, shared Execution and Agent adapters, Delivery, Feedback, and durable correlation traces.
 
