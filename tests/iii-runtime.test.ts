@@ -3,11 +3,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  FunctionRef,
-  RegisterFunctionOptions,
-  TriggerRequest,
-} from "iii-sdk";
 import {
   type AutomationInvocationAdmissionResult,
   type AutomationInvocationInput,
@@ -51,12 +46,24 @@ import {
   IiiRuntimeError,
   IiiRuntimeWorker,
   METAFLOW_AUTOMATION_QUEUE,
+  defaultIiiClientFactory,
   iiiOperatorFunctionId,
   type IiiClientPort,
+  type IiiFunctionRef,
+  type IiiRegisterFunctionOptions,
   type IiiRuntimeEvent,
+  type IiiTriggerRequest,
 } from "../packages/adapters/iii-runtime/index.ts";
 
 const NOW = "2026-07-26T18:00:00.000Z";
+
+test("production III client initializes the fixed OpenTelemetry graph", async () => {
+  const client = defaultIiiClientFactory({
+    engine_url: "ws://127.0.0.1:9",
+    worker_name: "metaflow-telemetry-smoke",
+  });
+  await client.shutdown();
+});
 
 test("III Worker registers strict versioned Functions and fails startup on incompatible engine, SDK, or queue config", async () => {
   const engine = new FakeIiiEngine();
@@ -130,7 +137,7 @@ test("III Worker registers strict versioned Functions and fails startup on incom
   await assert.rejects(
     IiiRuntimeWorker.start({
       engine_url: "ws://fake",
-      sdk_version: "0.22.0",
+      sdk_version: "0.21.0",
       views: viewReader([automation.view]),
       automations: { invoke: async () => ignored() },
       events: { emit() {} },
@@ -688,7 +695,7 @@ test("Execution cancellation crosses the III cancel Function and remains a canon
 
 type FunctionRegistration = {
   handler: (input: unknown) => Promise<unknown>;
-  options?: RegisterFunctionOptions;
+  options?: IiiRegisterFunctionOptions;
 };
 
 type QueueJob = {
@@ -729,9 +736,9 @@ class FakeIiiEngine {
             this.functions.delete(functionId);
             owned.delete(functionId);
           },
-        } satisfies FunctionRef;
+        } satisfies IiiFunctionRef;
       },
-      trigger: async <TInput, TOutput>(request: TriggerRequest<TInput>) => {
+      trigger: async <TInput, TOutput>(request: IiiTriggerRequest) => {
         if (request.function_id === "engine::workers::list") {
           return { workers: [{ id: "iii-engine", name: "iii-engine", version: this.version, runtime: "engine", status: "available" }] } as TOutput;
         }

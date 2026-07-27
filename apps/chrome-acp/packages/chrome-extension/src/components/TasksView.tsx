@@ -8,6 +8,7 @@ import {
   Globe,
   Loader2,
   RefreshCw,
+  Settings,
   Sparkles,
   X,
 } from "lucide-react";
@@ -19,10 +20,19 @@ import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Label,
   ScrollArea,
   Separator,
 } from "@chrome-acp/shared/components";
 import "@chrome-acp/shared/components";
+import { isValidOperationAuthToken } from "@/lib/operation-auth";
+import { readOperationAuthToken } from "@/lib/operation-auth-storage";
 
 type AmbientView = {
   id: string;
@@ -252,6 +262,10 @@ export function TasksView() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [lastTaskMessage, setLastTaskMessage] = useState<string | null>(null);
   const [lastTaskError, setLastTaskError] = useState<string | null>(null);
+  const [operationAuthOpen, setOperationAuthOpen] = useState(false);
+  const [operationAuthToken, setOperationAuthToken] = useState("");
+  const [operationAuthSaving, setOperationAuthSaving] = useState(false);
+  const [operationAuthError, setOperationAuthError] = useState<string | null>(null);
   const refreshTimer = useRef<number | null>(null);
 
   const filteredPrefixes = useMemo(() => {
@@ -452,6 +466,42 @@ export function TasksView() {
     }
   }, [load]);
 
+  const openOperationAuth = useCallback(async () => {
+    try {
+      setOperationAuthToken(await readOperationAuthToken());
+      setOperationAuthError(null);
+    } catch (error) {
+      setOperationAuthToken("");
+      setOperationAuthError(error instanceof Error ? error.message : String(error));
+    }
+    setOperationAuthOpen(true);
+  }, []);
+
+  const saveOperationAuth = useCallback(async () => {
+    if (!isValidOperationAuthToken(operationAuthToken)) {
+      setOperationAuthError("Enter a valid token with at least 32 bearer characters.");
+      return;
+    }
+    setOperationAuthSaving(true);
+    setOperationAuthError(null);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "update-info-capture-settings",
+        settings: { operationAuthToken },
+      });
+      if (!response?.ok) {
+        setOperationAuthError(response?.error ?? "Could not save the Operation token.");
+        return;
+      }
+      setOperationAuthOpen(false);
+      await loadDeliveries();
+    } catch (error) {
+      setOperationAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOperationAuthSaving(false);
+    }
+  }, [loadDeliveries, operationAuthToken]);
+
   return (
     <div className="flex flex-col h-full">
       <header className="px-3 pt-3 pb-2 flex items-center justify-between gap-2 border-b">
@@ -463,6 +513,14 @@ export function TasksView() {
           </Badge>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void openOperationAuth()}
+            title="Local daemon access"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -507,6 +565,34 @@ export function TasksView() {
           </Button>
         </div>
       </header>
+
+      <Dialog open={operationAuthOpen} onOpenChange={setOperationAuthOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Local daemon access</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="operation-auth-token">Operations token</Label>
+            <Input
+              id="operation-auth-token"
+              type="password"
+              autoComplete="off"
+              value={operationAuthToken}
+              onChange={event => setOperationAuthToken(event.target.value)}
+            />
+            {operationAuthError && <p className="text-xs text-destructive">{operationAuthError}</p>}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => void saveOperationAuth()}
+              disabled={operationAuthSaving}
+            >
+              {operationAuthSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="px-3 py-2 flex items-center gap-1 text-xs border-b bg-muted/30 flex-wrap">
           {[

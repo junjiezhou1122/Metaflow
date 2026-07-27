@@ -30,6 +30,7 @@ test("Browser trigger reaches ACP Execution, committed View, delivery, feedback,
   const now = () => new Date("2026-07-26T10:00:31.000Z");
   const composition = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: agent,
     now,
   });
@@ -131,6 +132,7 @@ test("Ambient composition persists exact Transformation owners and projects cano
   const now = () => new Date("2026-07-26T10:10:00.000Z");
   const first = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: new DeterministicAcpRuntime(),
     now,
   });
@@ -159,6 +161,7 @@ test("Ambient composition persists exact Transformation owners and projects cano
 
   const restarted = await createAmbientDaemonComposition({
     data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: new DeterministicAcpRuntime(),
     now,
   });
@@ -209,6 +212,7 @@ test("Ambient composition registers and pulls explicit Codex and Obsidian Source
   });
   const composition = await createAmbientDaemonComposition({
     data_directory: join(directory, "data"),
+    operation_auth_token: "test-operation-auth-token-32-bytes",
     agent_runtime: new DeterministicAcpRuntime(),
     capture_sources: {
       codex_history: {
@@ -355,7 +359,11 @@ async function request(
   const req = Readable.from(body === undefined ? [] : [JSON.stringify(body)]) as any;
   req.method = method;
   req.url = url;
-  req.headers = { host: "localhost", "content-type": "application/json" };
+  req.headers = {
+    host: "localhost",
+    "content-type": "application/json",
+    authorization: "Bearer test-operation-auth-token-32-bytes",
+  };
   let status = 0;
   let raw = "";
   const res = {

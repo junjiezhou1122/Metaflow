@@ -24,6 +24,16 @@ import {
   resolveBrowserVisitState,
   type PersistedBrowserTabState,
 } from "./browser-capture-state";
+import {
+  BrowserOperationAccessError,
+  authorizedBrowserDaemonFetch,
+  isValidOperationAuthToken,
+} from "./operation-auth";
+import { ensureTrustedOperationStorageAccess } from "./operation-auth-storage";
+import {
+  authorizeRuntimeMessageSender,
+  projectRuntimeMessageResult,
+} from "./runtime-sender-policy";
 
 const LEGACY_DEFAULT_ENDPOINTS = new Set([
   "http://localhost:3111/context/ingest",
@@ -31,6 +41,7 @@ const LEGACY_DEFAULT_ENDPOINTS = new Set([
 ]);
 const DEFAULT_SETTINGS = {
   endpoint: "http://localhost:3111",
+  operationAuthToken: "",
   captureStream: true,
   heartbeatSeconds: 15,
   snapshotOnVisit: true,
@@ -84,6 +95,7 @@ let tabStateReady: Promise<void> | undefined;
 let macBrowserContextPollRunning = false;
 
 export async function installInfoCaptureDefaults() {
+  await ensureTrustedOperationStorageAccess();
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   const existing = await chrome.storage.local.get(keys);
   const migrated = typeof existing.endpoint === "string" && LEGACY_DEFAULT_ENDPOINTS.has(existing.endpoint)
@@ -175,7 +187,10 @@ function runMacBrowserContextPoll() {
 
 async function pollMacBrowserContextRequests() {
   const settings = await getSettings();
-  const response = await fetch(macBrowserContextRequestsEndpoint(settings.endpoint));
+  const response = await authenticatedBrowserDaemonFetch(
+    settings,
+    macBrowserContextRequestsEndpoint(settings.endpoint),
+  );
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.ok === false) {
     throw new Error(`Browser DOM request poll failed: HTTP ${response.status} ${JSON.stringify(body)}`);
@@ -188,7 +203,7 @@ async function pollMacBrowserContextRequests() {
       if (!tab?.id || tab.windowId === undefined || !tab.url) throw new Error("no active Browser tab");
       const page = await collectFromTab(tab.id);
       if (!page.text?.trim() || !page.url || !page.title) throw new Error("active tab did not expose complete DOM context");
-      await postMacBrowserContextResponse(settings.endpoint, {
+      await postMacBrowserContextResponse(settings, {
         request_id: requestId,
         status: "captured",
         captured_at: new Date().toISOString(),
@@ -202,7 +217,7 @@ async function pollMacBrowserContextRequests() {
         metadata: page.metadata ?? {},
       });
     } catch (error) {
-      await postMacBrowserContextResponse(settings.endpoint, {
+      await postMacBrowserContextResponse(settings, {
         request_id: requestId,
         status: "failed",
         code: "browser_dom_capture_failed",
@@ -212,8 +227,8 @@ async function pollMacBrowserContextRequests() {
   }
 }
 
-async function postMacBrowserContextResponse(endpoint: string, body: Record<string, unknown>) {
-  const response = await fetch(macBrowserContextResponsesEndpoint(endpoint), {
+async function postMacBrowserContextResponse(settings: InfoSettings, body: Record<string, unknown>) {
+  const response = await authenticatedBrowserDaemonFetch(settings, macBrowserContextResponsesEndpoint(settings.endpoint), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -239,10 +254,12 @@ function macBrowserContextResponsesEndpoint(endpoint: string): string {
 }
 
 export async function handleInfoCaptureMessage(message: any, sender: chrome.runtime.MessageSender) {
+  const authorization = authorizeRuntimeMessageSender(message, sender);
+  if (!authorization.ok) return authorization;
   await ensureTabStateLoaded();
   if (message?.type === "context.capture.browser_attention") {
     const tab = sender.tab ?? await getActiveTab();
-    return sendBrowserAttention(message.payload, message.kind, tab);
+    return projectRuntimeMessageResult(authorization, await sendBrowserAttention(message.payload, message.kind, tab));
   }
   if (message?.type === "context.explain.selection") {
     const tab = sender.tab ?? await getActiveTab();
@@ -250,7 +267,12 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   }
   if (message?.type === "context.capture.writing_input") {
     const tab = sender.tab ?? await getActiveTab();
-    return sendWritingInput(message.payload, tab);
+    return projectRuntimeMessageResult(
+      authorization,
+      await sendWritingInput(message.payload, tab, {
+        allow_privileged_assist: authorization.principal !== "content-script",
+      }),
+    );
   }
   if (message?.type === "save-current-page") {
     const tab = await getActiveTab();
@@ -261,7 +283,7 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
     return submitBrowserAutomation({ ...message, reason_kind: "manual" }, tab);
   }
   if (message?.type === "feedback-view") {
-    return postViewFeedback(message);
+    return projectRuntimeMessageResult(authorization, await postViewFeedback(message));
   }
   if (message?.type === "poll-ambient-deliveries") {
     return pollBrowserDeliveries(message);
@@ -298,10 +320,11 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   }
   if (message?.type === "trigger-ambient" || message?.type === "automation.browser.signal") {
     const tab = sender.tab ?? await getActiveTab();
-    return submitBrowserAutomation(
+    const result = await submitBrowserAutomation(
       message?.type === "trigger-ambient" ? { ...message, reason_kind: "manual" } : message,
       tab,
     );
+    return projectRuntimeMessageResult(authorization, result);
   }
   if (message?.type === "youtube-comprehension-gap") {
     // Ingest a single comprehension gap record produced by the YouTube
@@ -333,21 +356,40 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
         visit_id: state.visitId,
       },
     });
-    return postLegacyRecord(record, { process: true, cascadeViews: true });
+    return projectRuntimeMessageResult(
+      authorization,
+      await postLegacyRecord(record, { process: true, cascadeViews: true }),
+    );
   }
   if (message?.type === "youtube-observation") {
     const tab = sender.tab ?? await getActiveTab();
-    return sendYouTubeObservation(message, tab);
+    return projectRuntimeMessageResult(authorization, await sendYouTubeObservation(message, tab));
   }
   if (message?.type === "get-current-status") {
     const tab = await getActiveTab();
     if (tab?.id && tab.url) await ensureVisit(tab, "status_check");
-    return { ok: true, tab, state: tab?.id ? summarizeState(tabState.get(tab.id)) : undefined, settings: await getSettings() };
+    return {
+      ok: true,
+      tab,
+      state: tab?.id ? summarizeState(tabState.get(tab.id)) : undefined,
+      settings: publicInfoSettings(await getSettings()),
+    };
   }
   if (message?.type === "update-info-capture-settings") {
+    if (message.settings?.operationAuthToken !== undefined
+      && !isValidOperationAuthToken(message.settings.operationAuthToken)) {
+      return {
+        ok: false,
+        code: "operation_auth_token_invalid",
+        error: "The resident daemon Operation token is invalid",
+      };
+    }
+    if (message.settings?.operationAuthToken !== undefined) {
+      await ensureTrustedOperationStorageAccess();
+    }
     await chrome.storage.local.set(message.settings ?? {});
     await configureInfoCaptureAlarms();
-    return { ok: true, settings: await getSettings() };
+    return { ok: true, settings: publicInfoSettings(await getSettings()) };
   }
   if (message?.type === "retry-browser-capture") {
     return retryBrowserCaptureFailure(requiredMessageText(message.failure_id, "failure_id"));
@@ -463,7 +505,7 @@ async function submitBrowserAutomation(message: any, tab: chrome.tabs.Tab | unde
   }
   const endpoint = browserAutomationEndpoint(settings.endpoint);
   try {
-    const response = await fetch(endpoint, {
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(event),
@@ -493,7 +535,7 @@ async function pollBrowserDeliveries(message: any) {
     return { ok: false, status: 0, code: "browser_delivery_query_invalid", error: error instanceof Error ? error.message : String(error) };
   }
   try {
-    const response = await fetch(endpoint);
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint);
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.ok === false) {
       await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
@@ -526,7 +568,7 @@ async function postBrowserDeliveryInteraction(message: any) {
     return { ok: false, status: 0, code: "browser_interaction_invalid", error: error instanceof Error ? error.message : String(error) };
   }
   try {
-    const response = await fetch(endpoint, {
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(interaction),
@@ -546,17 +588,28 @@ async function postBrowserDeliveryInteraction(message: any) {
 
 async function getAmbientExactView(message: any) {
   const settings = await getSettings();
-  let endpoint: string;
+  const operationAuthToken = settings.operationAuthToken;
+  if (!isValidOperationAuthToken(operationAuthToken)) {
+    return {
+      ok: false,
+      status: 0,
+      code: "operation_auth_configuration_required",
+      error: "A valid resident daemon Operation token is required for exact View reads",
+    };
+  }
+  let ref: { view_id: string; revision: number };
   try {
-    endpoint = browserExactViewEndpoint(settings.endpoint, {
+    ref = {
       view_id: requiredMessageText(message.view_id, "view_id"),
       revision: Number(message.revision),
-    });
+    };
+    browserExactViewEndpoint("http://127.0.0.1", ref);
   } catch (error) {
     return { ok: false, status: 0, code: "exact_view_ref_invalid", error: error instanceof Error ? error.message : String(error) };
   }
+  const endpoint = browserExactViewEndpoint(settings.endpoint, ref);
   try {
-    const response = await fetch(endpoint);
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint);
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.ok === false) {
       await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
@@ -741,7 +794,11 @@ async function explainSelection(payload: any, tab?: chrome.tabs.Tab) {
   }
 }
 
-async function sendWritingInput(payload: any, tab?: chrome.tabs.Tab) {
+async function sendWritingInput(
+  payload: any,
+  tab: chrome.tabs.Tab | undefined,
+  options: { allow_privileged_assist: boolean },
+) {
   const text = String(payload?.text ?? "").trim();
   if (text.length < 12) return { ok: false, error: "writing text too short" };
   const settings = await getSettings();
@@ -768,7 +825,18 @@ async function sendWritingInput(payload: any, tab?: chrome.tabs.Tab) {
       writing_surface: "browser_inline",
     },
   };
-  const posted = await postWritingAssistRecord(record);
+  const posted = options.allow_privileged_assist
+    ? await postWritingAssistRecord(record)
+    : await postLegacyRecord(record);
+  if (!options.allow_privileged_assist) {
+    const captureResult = posted as Record<string, unknown>;
+    return {
+      ok: captureResult.ok === true,
+      ...(typeof captureResult.status === "number" ? { status: captureResult.status } : {}),
+      ...(typeof captureResult.stored === "boolean" ? { stored: captureResult.stored } : {}),
+      ...(typeof captureResult.reason === "string" ? { reason: captureResult.reason } : {}),
+    };
+  }
   const writtenViews = viewIdsFromProcessedIngestResponse(posted.body);
   const views = Array.isArray(posted.body?.views)
     ? posted.body.views.map((view: any) => ({ ok: true, status: posted.status, body: { view }, view, endpoint: posted.endpoint }))
@@ -1035,7 +1103,12 @@ async function submitBrowserCaptureEvent(input: unknown) {
   const settings = await getSettings();
   const event = buildBrowserCaptureEvent(input);
   const endpoint = browserCaptureEndpoint(settings.endpoint);
-  const result = await deliverBrowserCaptureEvent({ event, endpoint, outbox: chromeBrowserCaptureOutbox });
+  const result = await deliverBrowserCaptureEvent({
+    event,
+    endpoint,
+    outbox: chromeBrowserCaptureOutbox,
+    fetch: (url, init) => authenticatedBrowserDaemonFetch(settings, url, init),
+  });
   if (!result.ok) {
     console.error(JSON.stringify({
       component: "browser-capture-extension",
@@ -1117,6 +1190,7 @@ const chromeBrowserCaptureOutbox: BrowserCaptureOutbox & { list(): Promise<Brows
 });
 
 async function retryBrowserCaptureFailure(id: string) {
+  const settings = await getSettings();
   const failure = (await listBrowserCaptureFailures()).find(item => item.id === id && item.status === "pending");
   if (!failure) throw new Error(`Pending Browser Capture transport failure is missing: ${id}`);
   const result = await deliverBrowserCaptureEvent({
@@ -1124,12 +1198,32 @@ async function retryBrowserCaptureFailure(id: string) {
     endpoint: failure.endpoint,
     outbox: chromeBrowserCaptureOutbox,
     previous: failure,
+    fetch: (url, init) => authenticatedBrowserDaemonFetch(settings, url, init),
   });
   return { ...result, event_id: failure.event.event_id, failure_id: failure.id };
 }
 
 async function listBrowserCaptureFailures(): Promise<BrowserCaptureTransportFailure[]> {
   return chromeBrowserCaptureOutbox.list();
+}
+
+async function authenticatedBrowserDaemonFetch(
+  settings: InfoSettings,
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  if (!isValidOperationAuthToken(settings.operationAuthToken)) {
+    throw new BrowserOperationAccessError(
+      "operation_auth_configuration_required",
+      "A valid resident daemon Operation token is required",
+    );
+  }
+  return authorizedBrowserDaemonFetch({
+    endpoint: new URL(settings.endpoint).origin,
+    token: settings.operationAuthToken,
+    request: input,
+    init,
+  });
 }
 
 function reportCaptureTaskFailure(stage: string, error: unknown, details: Record<string, unknown>) {
@@ -1436,8 +1530,17 @@ function tabCaptureScore(tab: chrome.tabs.Tab): number {
 }
 
 async function getSettings(): Promise<InfoSettings> {
+  await ensureTrustedOperationStorageAccess();
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   return { ...DEFAULT_SETTINGS, ...(await chrome.storage.local.get(keys)) };
+}
+
+export function publicInfoSettings(settings: InfoSettings) {
+  const { operationAuthToken, ...publicSettings } = settings;
+  return {
+    ...publicSettings,
+    operationAuthConfigured: isValidOperationAuthToken(operationAuthToken),
+  };
 }
 
 function getTabState(

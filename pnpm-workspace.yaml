@@ -14,4 +14,5 @@ packages:
   - "view-packages/*"
   - "apps/ambient-daemon"
   - "apps/view-explorer"
+  - "apps/mf-cli"
   - "apps/website"

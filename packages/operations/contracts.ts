@@ -24,7 +24,6 @@ import {
   StartExecutionParametersSchema,
 } from "@info/execution";
 import {
-  CaptureBatchSchema,
   CaptureDeliveryKindSchema,
   CaptureIdentifierSchema,
   ExactConnectorPackageRefSchema,
@@ -38,47 +37,10 @@ import {
   AuthoringRejectInputSchema,
   AuthoringRequestInputSchema,
 } from "@info/authoring";
+import { CaptureBatchSchema } from "@info/capture";
+import { OPERATION_NAMES, type OperationName } from "./names.js";
 
-export const OPERATION_NAMES = [
-  "catalog.list",
-  "connector.list",
-  "connector.inspect",
-  "capture.ingest",
-  "capture.connection.list",
-  "capture.connection.create",
-  "capture.connection.check",
-  "capture.connection.discover",
-  "capture.connection.activate",
-  "capture.connection.update",
-  "capture.connection.pause",
-  "capture.connection.run",
-  "capture.dlq.list",
-  "capture.dlq.replay",
-  "view.get",
-  "view.graph.project",
-  "view.search",
-  "view.search.reindex",
-  "view.traverse",
-  "view.tombstone",
-  "view.authoring.request",
-  "view.authoring.propose",
-  "view.authoring.inspect",
-  "view.authoring.approve",
-  "view.authoring.reject",
-  "view.authoring.apply",
-  "transformation.submit",
-  "transformation.get",
-  "run.execute",
-  "run.inspect",
-  "run.cancel",
-  "feedback.submit",
-  "failure.inspect",
-  "policy.decision.get",
-  "privacy.forget.request",
-  "privacy.forget.execute",
-  "privacy.forget.inspect",
-  "trace.read",
-] as const;
+export { OPERATION_NAMES } from "./names.js";
 
 export const OperationNameSchema = z.enum(OPERATION_NAMES);
 
@@ -248,7 +210,7 @@ export const OperationFailureSchema = z.object({
   error: OperationErrorSchema,
 }).strict();
 
-export const OperationEnvelopeSchema = z.union([OperationSuccessSchema, OperationFailureSchema]);
+export const OperationEnvelopeSchema = z.discriminatedUnion("ok", [OperationSuccessSchema, OperationFailureSchema]);
 
 export const OperationTraceEventSchema = z.object({
   request_id: IdentifierSchema,
@@ -260,7 +222,7 @@ export const OperationTraceEventSchema = z.object({
   error: OperationErrorSchema.optional(),
 }).strict();
 
-export type OperationName = z.infer<typeof OperationNameSchema>;
+export type { OperationName } from "./names.js";
 export type OperationRequest = z.infer<typeof OperationRequestSchema>;
 export type OperationPrincipal = z.infer<typeof OperationPrincipalSchema>;
 export type OperationContext = z.infer<typeof OperationContextSchema>;

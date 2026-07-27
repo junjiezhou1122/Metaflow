@@ -1,0 +1,39 @@
+diff --git a/dist/telemetry-system-BH119njX.cjs b/dist/telemetry-system-BH119njX.cjs
+index 74c9877c13bf508f16e645ee0f257914c748fb42..7a4bb1cb9a0775bda636299fe5b2d3f045d1d0fc 100644
+--- a/dist/telemetry-system-BH119njX.cjs
++++ b/dist/telemetry-system-BH119njX.cjs
+@@ -1004 +1004 @@ function initOtel(config = {}) {
+-	const resource = new _opentelemetry_resources.Resource(resourceAttributes);
++	const resource = (0, _opentelemetry_resources.resourceFromAttributes)(resourceAttributes);
+@@ -1046,5 +1046,5 @@ function initOtel(config = {}) {
+-	loggerProvider = new _opentelemetry_sdk_logs.LoggerProvider({ resource });
+-	loggerProvider.addLogRecordProcessor(new _opentelemetry_sdk_logs.BatchLogRecordProcessor(logExporter, {
+-		scheduledDelayMillis: logsScheduledDelayMillis,
+-		maxExportBatchSize: logsMaxExportBatchSize
+-	}));
++	const logRecordProcessor = new _opentelemetry_sdk_logs.BatchLogRecordProcessor(logExporter, {
++		scheduledDelayMillis: logsScheduledDelayMillis,
++		maxExportBatchSize: logsMaxExportBatchSize
++	});
++	loggerProvider = new _opentelemetry_sdk_logs.LoggerProvider({ resource, processors: [logRecordProcessor] });
+diff --git a/dist/telemetry-system-Pyz9irBj.mjs b/dist/telemetry-system-Pyz9irBj.mjs
+index 487d638d2f98e6de81322f807d08f7ef96484ba8..a8d04bb425c97cd8f075ce34586d7921bc3748b7 100644
+--- a/dist/telemetry-system-Pyz9irBj.mjs
++++ b/dist/telemetry-system-Pyz9irBj.mjs
+@@ -2 +2 @@
+-import { Resource } from "@opentelemetry/resources";
++import { resourceFromAttributes } from "@opentelemetry/resources";
+@@ -1004 +1004 @@ function initOtel(config = {}) {
+-	const resource = new Resource(resourceAttributes);
++	const resource = resourceFromAttributes(resourceAttributes);
+@@ -1046,5 +1046,5 @@ function initOtel(config = {}) {
+-	loggerProvider = new LoggerProvider({ resource });
+-	loggerProvider.addLogRecordProcessor(new BatchLogRecordProcessor(logExporter, {
+-		scheduledDelayMillis: logsScheduledDelayMillis,
+-		maxExportBatchSize: logsMaxExportBatchSize
+-	}));
++	const logRecordProcessor = new BatchLogRecordProcessor(logExporter, {
++		scheduledDelayMillis: logsScheduledDelayMillis,
++		maxExportBatchSize: logsMaxExportBatchSize
++	});
++	loggerProvider = new LoggerProvider({ resource, processors: [logRecordProcessor] });

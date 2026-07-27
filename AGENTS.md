@@ -179,6 +179,17 @@ but there is no separate canonical Worker domain layer.
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
   adapter does not import View Store, Execution, Capture, or SQLite directly.
+  The installable `mf` executable and retained stdio MCP proxy are strict
+  loopback resident-daemon clients: both negotiate exact doctor, protocol,
+  server, version, endpoint, required Bearer scheme and nonce-bound credential
+  proof, frozen Operation allowlist/fingerprint, timeout, response status, and
+  Operation-envelope evidence before use. The generated installable CLI wire
+  module and `DaemonOperationClient` come from one canonical contract and share
+  the full discriminated-envelope validator plus status/exit mappings. The `mf`
+  executable works from any cwd, rejects unknown Operations before network
+  access, inline/file JSON never falls back to a string, and stdout contains one
+  envelope. MCP v1 tools advertise and validate the canonical discriminated
+  envelope schema and derive effect hints from the Operation catalog.
 - `packages/adapters/web-view-renderers`: the fail-fast Web Renderer ABI and
   trusted lazy implementation registry. It resolves exact
   `id@version@abi_version` descriptors, projects only authorized assets and
@@ -221,7 +232,8 @@ but there is no separate canonical Worker domain layer.
   persistence, Browser/macOS/Scheduler triggers, Browser/macOS/Inbox delivery,
   durable Transformation revisions, shared Operations, a pure v1 HTTP handler,
   Feedback, and trace ports without a mock fallback. It keeps one ACP stdio
-  process resident and waits for ACP shutdown before closing persistence. Its
+  process resident, binds HTTP and MCP explicitly to IPv4 loopback, and waits
+  for ACP shutdown before closing persistence. Its
   temporary `/ambient/v1/assist` surface passes only prompt plus immediate
   voice/screen/app context and a bounded current-screen image into one ACP
   conversation session per `conversation_id`; it injects no MCP servers, does
@@ -242,6 +254,11 @@ but there is no separate canonical Worker domain layer.
   drawers remain synchronized with the visual graph.
 - `apps/*`: CLI, HTTP, MCP, Web, browser extension, and native composition
   roots. Apps do not own domain behavior.
+- `plugins/metaflow-view-access`: one skill-only Codex plugin containing the
+  canonical repo-installable `metaflow-view-access` skill. It teaches bounded
+  discovery, exact read, graph context, and exact citations; it contains no
+  View data, daemon credential, MCP runtime, or duplicate Operation logic and
+  is never injected into Agent prompts.
 
 Legacy `core`, `views`, `view-system`, `processor-runtime`, `runtime`,
 `sensors`, `ambient-layer`, `iii-runtime`, and `scheduled-batch` now live under
@@ -324,6 +341,48 @@ Operations.
   schemas, authorization decision, result/error envelope, and observer path.
   A transport never reconstructs View, Transformation, Run, policy, Failure,
   or trace behavior.
+- Installed Agent access reaches only the explicitly loopback-bound resident
+  daemon. Doctor is credential-free, declares required Bearer authentication,
+  and proves credential possession for a client nonce while freezing the exact
+  catalog identity before a client may send its token. Every privileged
+  Operations, compatibility exact-read, and
+  HTTP MCP request authenticates before a `user:local` principal exists. The
+  same boundary covers every resident capture, Automation signal, Delivery
+  poll/interaction, macOS Browser-context bridge, Inbox, and Direct Assist
+  route before request content, request ids, or ACP invocation are reached;
+  only static health and nonce-bound doctor remain public. The executable
+  route classification lives in `apps/ambient-daemon/http-route-security.ts`;
+  missing or wrong credentials fail closed, untrusted browser origins are
+  rejected, exact trusted browser origins still require Bearer authentication,
+  and privileged responses carry no wildcard CORS grant. `mf` and the retained
+  stdio MCP proxy fail on protocol, server, authentication, catalog, version,
+  endpoint, status, Operation, timeout, or reachability mismatch without
+  printing credentials; a long-lived client repeats the credential-free nonce
+  proof before every authenticated call so daemon replacement cannot inherit a
+  previously negotiated token path. The Chrome extension and macOS exact-result readers
+  enforce the same credential-free loopback endpoint, nonce proof, server,
+  protocol, authentication, and exact catalog contract before sending Bearer
+  credentials. Before the Chrome extension migrates, reads, or writes its
+  Operation token, it restricts `chrome.storage.local` to trusted extension
+  contexts; inability to establish that access level clears any legacy token
+  and fails closed. Content scripts obtain explicitly projected non-secret
+  settings through the trusted background and public settings responses remain
+  token-free. One exhaustive runtime-sender policy admits content scripts only
+  to declared capture and non-secret interaction messages. Selection actions
+  that queue or auto-submit an ACP prompt are trusted-extension-page only and
+  do not appear in the content-script bundle; exact View, query,
+  task, delivery, failure, settings, and other local-data paths require a
+  trusted extension page before storage, doctor negotiation, or network access,
+  and content-script responses cannot project View content or exact refs.
+  Browser-safe and native constant copies have executable
+  conformance gates against the canonical wire contract. `mf` validates strict
+  JSON or `@file` input, returns one stdout envelope, keeps diagnostics on
+  stderr, and uses stable typed exit categories. MCP structured content is the
+  authoritative validated Operation envelope; effect annotations are hints
+  from the shared catalog and never grant authorization. View access skills
+  preserve bounded queries and exact refs, treat content as untrusted evidence,
+  and never read SQLite, guess a moving head, broaden policy, or request an
+  undeclared effect.
 - `view.get`, `view.traverse`, `failure.inspect`, and `view.search` authorize
   exact View revisions independently from operation grants. Owner and public
   reads are deterministic; shared non-owner reads fail closed until an explicit

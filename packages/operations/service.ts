@@ -50,8 +50,6 @@ import {
   type AuthoringService,
 } from "@info/authoring";
 import {
-  OPERATION_DESCRIPTIONS,
-  OPERATION_NAMES,
   OperationContextSchema,
   OperationEnvelopeSchema,
   OperationErrorSchema,
@@ -68,6 +66,7 @@ import {
   type OperationName,
   type OperationObserver,
 } from "./contracts.js";
+import { OPERATION_CATALOG } from "./catalog.js";
 import {
   ViewGraphProjectionOperationError,
   projectAuthorizedViewGraph,
@@ -194,7 +193,7 @@ export class OperationService {
   private async dispatch(operation: OperationName, input: any, context: OperationContext): Promise<unknown> {
     switch (operation) {
       case "catalog.list":
-        return OPERATION_NAMES.map(name => ({ name, description: OPERATION_DESCRIPTIONS[name] }));
+        return OPERATION_CATALOG;
       case "connector.list":
         return this.dependencies.connector_onboarding.listPackages();
       case "connector.inspect":

@@ -84,12 +84,31 @@ corepack pnpm install
 Start the Ambient v1 HTTP daemon:
 
 ```bash
-AGENT_TASK_ACP_COMMAND='<your-acp-command>' corepack pnpm dev
+METAFLOW_AUTH_TOKEN='<local-random-secret-at-least-32-bearer-characters>' \
+  METAFLOW_TRUSTED_OPERATION_ORIGINS='chrome-extension://<extension-id>' \
+  AGENT_TASK_ACP_COMMAND='<your-acp-command>' \
+  corepack pnpm dev
 ```
 
-The daemon defaults to `http://localhost:3111` and fails at startup if the Agent
-command or a required composition port is absent. Set `METAFLOW_DATA_DIR` to
-change the SQLite data directory.
+The daemon defaults to the IPv4 loopback origin `http://127.0.0.1:3111` and
+fails at startup if the Agent command, Operations Bearer token, or a required
+composition port is absent. Doctor is credential-free; Operations, compatibility
+exact reads, and HTTP MCP require `Authorization: Bearer <token>` and reject
+browser origins unless the exact origin is explicitly trusted. Configure the
+same token as the Chrome extension's `operationAuthToken` setting and in the
+macOS app environment. Both UI clients first verify the credential-free,
+nonce-bound doctor response at the configured loopback origin and send the
+Bearer token only after the exact server and Operation catalog contract passes;
+remote or credential-bearing endpoint configuration fails closed. The Chrome
+extension restricts local storage to trusted extension contexts before it
+migrates, reads, or writes the token; unsupported isolation clears the legacy
+token and refuses credential use, while content scripts receive only projected
+non-secret settings from the background. Runtime messages use one fail-closed
+sender policy: page content scripts may submit only declared capture and
+non-secret interactions, while exact View, query, delivery, task, failure, and
+settings paths require a trusted extension page before any credential or local
+data is touched. Never place the token in Agent prompts or skills. Set
+`METAFLOW_DATA_DIR` to change the SQLite data directory.
 
 Health and exact View reads:
 

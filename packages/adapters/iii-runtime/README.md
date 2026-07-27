@@ -38,7 +38,15 @@ parse it. It uses the file-backed builtin queue for local crash/restart
 durability. Multi-instance deployments should supply a RabbitMQ queue adapter
 with the same named queue contract.
 
-III 0.19.2 reports named-queue concurrency but does not expose retry/backoff
+The adapter uses `iii-sdk@0.22.0` against the pinned III 0.19.2 engine. The
+production graph overrides the complete OpenTelemetry family coherently to
+core 2.9.0 and its matching 0.220.0 packages; the checked-in helpers patch
+replaces the removed `Resource` constructor with `resourceFromAttributes` and
+passes log processors through the current `LoggerProvider` constructor. III
+runtime tests initialize the production client telemetry and exercise
+registration, queueing, DLQ, execution, and cancellation against that exact
+install. III 0.19.2
+reports named-queue concurrency but does not expose retry/backoff
 configuration through its inspection API. Those values remain pinned by this
 package's queue contract and checked-in engine config; startup rejects a
 different local contract and verifies the live queue name and concurrency.

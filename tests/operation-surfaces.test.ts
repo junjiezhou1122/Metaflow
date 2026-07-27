@@ -1,11 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import {
   CaptureIngress,
   ConnectorPackageCatalog,
@@ -24,6 +28,7 @@ import {
 } from "@info/execution";
 import {
   GrantOperationAuthorizer,
+  OPERATION_CATALOG,
   OPERATION_NAMES,
   OperationEnvelopeSchema,
   OperationService,
@@ -35,10 +40,12 @@ import {
   type OperationTraceEvent,
 } from "@info/operations";
 import { SearchService } from "@info/search";
-import { PrivacyForgetService, exactViewRef, parseViewDraft } from "@info/view";
+import { PrivacyForgetService, canonicalJson, exactViewRef, parseViewDraft } from "@info/view";
 import {
   CliOperationAdapter,
   HttpOperationAdapter,
+  OperationMcpOutputJsonSchema,
+  METAFLOW_OPERATION_CATALOG_FINGERPRINT,
   createOperationMcpServer,
   operationMcpToolName,
 } from "@info/operation-surfaces";
@@ -65,6 +72,58 @@ const policy = {
   allow_embedding: true,
   labels: ["operation-conformance"],
 };
+
+test("catalog schemas cover every Operation while examples remain limited to bounded Agent access", () => {
+  const validator = new AjvJsonSchemaValidator();
+  assert.equal(OPERATION_CATALOG.length, OPERATION_NAMES.length);
+  assert.ok(OPERATION_CATALOG.every(entry => entry.input_schema.type === "object"));
+  for (const entry of OPERATION_CATALOG) {
+    const validate = validator.getValidator(entry.input_schema as any);
+    if (entry.input_example !== undefined) assert.equal(validate(entry.input_example).valid, true, entry.name);
+  }
+  assert.deepEqual(
+    OPERATION_CATALOG.filter(entry => entry.input_example !== undefined).map(entry => entry.name),
+    ["catalog.list", "view.get", "view.graph.project", "view.search"],
+  );
+  assert.equal(
+    `sha256:${createHash("sha256").update(canonicalJson(OPERATION_CATALOG)).digest("hex")}`,
+    METAFLOW_OPERATION_CATALOG_FINGERPRINT,
+  );
+});
+
+test("official MCP client rejects structured content outside the advertised discriminated envelope", async () => {
+  const server = new Server({ name: "invalid-output-fixture", version: "0.1.0" }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [{
+      name: "invalid_envelope",
+      inputSchema: { type: "object" },
+      outputSchema: OperationMcpOutputJsonSchema as any,
+    }],
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async () => ({
+    content: [{ type: "text" as const, text: "invalid" }],
+    structuredContent: { ok: true, request_id: "request:missing-data", operation: "catalog.list" },
+  }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "output-schema-regression", version: "0.1.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const listed = await client.listTools();
+    const schema = listed.tools[0]!.outputSchema as { type: string; oneOf?: unknown[] };
+    assert.equal(schema.type, "object");
+    assert.equal(schema.oneOf?.length, 2);
+    const failure = schema.oneOf?.[1] as { required?: string[] };
+    assert.deepEqual(failure.required, ["ok", "request_id", "operation", "error"]);
+    await assert.rejects(
+      client.callTool({ name: "invalid_envelope", arguments: {} }),
+      /Structured content does not match the tool's output schema/u,
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 test("in-process, CLI, HTTP, and real MCP return the same structured success and failure", async () => {
   await withHarness(async harness => {

@@ -110,12 +110,16 @@ import {
 } from "./definitions.js";
 import { createAmbientV1HttpHandler } from "./http-handler.js";
 import { createAmbientMcpHttpHandler } from "./mcp-handler.js";
+import { AmbientOperationAccess } from "./operation-access.js";
 
 export type AmbientDaemonCompositionOptions = {
   data_directory: string;
+  operation_auth_token: string;
+  trusted_operation_origins?: readonly string[];
   agent_runtime: AgentRuntimeAdapter;
   agent_aliases?: Record<string, string>;
   agent_mcp_servers?: import("@info/agent-runtime-adapter").AgentMcpServerConfig[];
+  direct_assist?: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => Promise<void>;
   mac_delivery_mailbox?: MacDeliveryMailbox;
   capture_sources?: {
     codex_history?: {
@@ -153,6 +157,10 @@ export const AMBIENT_REACTIVE_CASCADE_POLICY: ReactiveCascadePolicySnapshot = {
 
 export async function createAmbientDaemonComposition(options: AmbientDaemonCompositionOptions) {
   const now = options.now ?? (() => new Date());
+  const operationAccess = new AmbientOperationAccess(
+    options.operation_auth_token,
+    options.trusted_operation_origins,
+  );
   const databasePath = join(options.data_directory, "metaflow.sqlite");
   const automationPath = join(options.data_directory, "automation.sqlite");
   const views = new SqliteViewRepository(databasePath);
@@ -390,8 +398,10 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       mac_automation: macAutomation,
       inbox_automation: inboxAutomation,
       operations: operationHttp,
+      operation_access: operationAccess,
+      direct_assist: options.direct_assist,
     });
-    const mcpHandler = createAmbientMcpHttpHandler(operationService);
+    const mcpHandler = createAmbientMcpHttpHandler(operationService, operationAccess);
 
     return {
       handler,

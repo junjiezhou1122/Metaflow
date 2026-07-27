@@ -1,4 +1,3 @@
-import type { FunctionRef, RegisterFunctionOptions } from "iii-sdk";
 import {
   parseAutomationView,
   type AutomationInvocationAdmissionResult,
@@ -34,6 +33,8 @@ import {
   installedIiiSdkVersion,
   type IiiClientFactory,
   type IiiClientPort,
+  type IiiFunctionRef,
+  type IiiRegisterFunctionOptions,
 } from "./client.js";
 import { IiiEventWriter } from "./events.js";
 import {
@@ -71,12 +72,12 @@ export class IiiRuntimeWorker {
   operatorClient: IiiOperatorExecutionClient;
   operatorRoutes: readonly IiiOperatorRoute[];
 
-  private automationRef?: FunctionRef;
+  private automationRef?: IiiFunctionRef;
   private closed = false;
   private dlqMonitor?: ReturnType<typeof setInterval>;
   private dlqMonitorFailure?: Error;
   private readonly observedDeadLetters = new Set<string>();
-  private readonly expectedFunctions = new Map<string, RegisterFunctionOptions>();
+  private readonly expectedFunctions = new Map<string, IiiRegisterFunctionOptions>();
 
   private constructor(
     private readonly options: Required<Pick<IiiRuntimeWorkerOptions, "worker_name" | "sdk_version" | "expected_engine_version">>
@@ -396,7 +397,7 @@ export class IiiRuntimeWorker {
     }
   }
 
-  private async verifyFunctionContract(functionId: string, expected: RegisterFunctionOptions): Promise<void> {
+  private async verifyFunctionContract(functionId: string, expected: IiiRegisterFunctionOptions): Promise<void> {
     const raw = await this.client.trigger<unknown, unknown>({
       function_id: "engine::functions::info",
       payload: { function_id: functionId },
@@ -549,7 +550,7 @@ function handlerResponse(result: AutomationInvocationAdmissionResult) {
   });
 }
 
-function automationRegistrationOptions(queue: IiiQueueConfiguration): RegisterFunctionOptions {
+function automationRegistrationOptions(queue: IiiQueueConfiguration): IiiRegisterFunctionOptions {
   const requestFormat = {
     type: "object" as const,
     required: ["schema_version", "contract", "message_id", "correlation_id", "queue", "automation", "signal"],

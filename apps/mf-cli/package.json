@@ -1,0 +1,19 @@
+{
+  "name": "@metaflow/mf-cli",
+  "version": "0.1.0",
+  "description": "Thin daemon-backed Metaflow Operation client",
+  "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "mf": "./bin/mf.mjs"
+  },
+  "scripts": {
+    "prepack": "node ../../scripts/v1/build-mf-wire.mjs"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
