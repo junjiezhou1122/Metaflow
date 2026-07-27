@@ -1,4 +1,3 @@
-import type { FunctionRef, RegisterFunctionOptions } from "iii-sdk";
 import {
   parseAutomationView,
   type AutomationInvocationAdmissionResult,
@@ -31,6 +30,8 @@ import {
   installedIiiSdkVersion,
   type IiiClientFactory,
   type IiiClientPort,
+  type IiiFunctionRef,
+  type IiiRegisterFunctionOptions,
 } from "./client.js";
 import { IiiEventWriter } from "./events.js";
 import {
@@ -68,7 +69,7 @@ export class IiiRuntimeWorker {
   operatorClient: IiiOperatorExecutionClient;
   operatorRoutes: readonly IiiOperatorRoute[];
 
-  private automationRef?: FunctionRef;
+  private automationRef?: IiiFunctionRef;
   private closed = false;
   private dlqMonitor?: ReturnType<typeof setInterval>;
   private dlqMonitorFailure?: Error;
@@ -515,7 +516,7 @@ function handlerResponse(result: AutomationInvocationAdmissionResult) {
   });
 }
 
-function automationRegistrationOptions(queue: IiiQueueConfiguration): RegisterFunctionOptions {
+function automationRegistrationOptions(queue: IiiQueueConfiguration): IiiRegisterFunctionOptions {
   return {
     description: "Resolve an exact Automation View and invoke the canonical Metaflow Automation Runtime",
     request_format: {

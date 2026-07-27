@@ -568,6 +568,17 @@ overlapping panels.
 
 ## Agent access contract
 
+The resident daemon has one executable HTTP security matrix in
+`apps/ambient-daemon/http-route-security.ts`. Only `/health` and the
+credential-free nonce-bound `/metaflow/v1/doctor` route are public. Capture,
+Automation signals, Delivery polling and interaction, exact View compatibility
+reads, the macOS Browser-context bridge, Inbox, Operations, MCP, and Direct
+Assist all reuse the same Bearer boundary before parsing private request data
+or invoking a runtime; browser access is limited to exact configured origins
+and no route emits wildcard CORS. Canonical Browser and macOS clients obtain a
+fresh doctor proof immediately before each private request, so a replaced local
+listener cannot inherit a token-bearing path.
+
 ### CLI and MCP changes
 
 Preserve one Operation contract across transports. Add usability at the

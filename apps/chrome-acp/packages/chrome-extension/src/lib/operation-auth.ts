@@ -122,6 +122,42 @@ export async function negotiateBrowserOperationAccess(input: {
   return { origin: endpoint.origin };
 }
 
+export async function authorizedBrowserDaemonFetch(input: {
+  endpoint: string;
+  token: string;
+  request: string | URL;
+  init?: RequestInit;
+  fetch?: typeof fetch;
+  timeout_ms?: number;
+}): Promise<Response> {
+  const fetcher = input.fetch ?? fetch;
+  const access = await negotiateBrowserOperationAccess({
+    endpoint: input.endpoint,
+    token: input.token,
+    fetch: fetcher,
+    timeout_ms: input.timeout_ms,
+  });
+  const target = new URL(String(input.request));
+  if (target.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(target.hostname)) {
+    throw new BrowserOperationAccessError("daemon_url_invalid", "Authenticated daemon requests require loopback HTTP");
+  }
+  if (target.hostname === "localhost") target.hostname = "127.0.0.1";
+  if (target.origin !== access.origin || target.username || target.password) {
+    throw new BrowserOperationAccessError(
+      "daemon_origin_mismatch",
+      "Authenticated daemon request origin does not match the fresh doctor proof",
+    );
+  }
+  const headers = new Headers(input.init?.headers);
+  headers.set("Authorization", `Bearer ${input.token}`);
+  return fetcher(target, {
+    ...input.init,
+    headers,
+    credentials: "omit",
+    cache: "no-store",
+  });
+}
+
 async function validateBrowserDoctor(
   input: unknown,
   expected: { endpoint_origin: string; challenge: string; token: string },

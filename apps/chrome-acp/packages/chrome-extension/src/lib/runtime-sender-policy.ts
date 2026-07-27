@@ -4,10 +4,7 @@ export const CONTENT_SCRIPT_RUNTIME_MESSAGE_TYPES = Object.freeze([
   "automation.browser.signal",
   "youtube-comprehension-gap",
   "youtube-observation",
-  "selection-actions.get",
   "language.caption_gap.recent",
-  "sidepanel.explain.selection",
-  "sidepanel.run.selection_action",
 ] as const);
 
 export const PRIVILEGED_RUNTIME_MESSAGE_TYPES = Object.freeze([
@@ -27,8 +24,16 @@ export const PRIVILEGED_RUNTIME_MESSAGE_TYPES = Object.freeze([
   "update-info-capture-settings",
   "retry-browser-capture",
   "list-browser-capture-failures",
+  "selection-actions.get",
   "language.caption_gap.sync",
+  "sidepanel.explain.selection",
+  "sidepanel.run.selection_action",
   "sidepanel.consume-pending-prompt",
+] as const);
+
+export const ALL_RUNTIME_MESSAGE_TYPES = Object.freeze([
+  ...CONTENT_SCRIPT_RUNTIME_MESSAGE_TYPES,
+  ...PRIVILEGED_RUNTIME_MESSAGE_TYPES,
 ] as const);
 
 type RuntimeSenderPolicyEnvironment = {

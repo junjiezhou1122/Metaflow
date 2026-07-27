@@ -21,6 +21,10 @@ import {
 import { OPERATION_NAMES } from "@info/operations";
 import { AmbientOperationAccess } from "../apps/ambient-daemon/operation-access.ts";
 import { createAmbientV1HttpHandler } from "../apps/ambient-daemon/http-handler.ts";
+import {
+  AMBIENT_HTTP_ROUTE_SECURITY_MATRIX,
+  ambientRouteAccess,
+} from "../apps/ambient-daemon/http-route-security.ts";
 import { validateOperationEnvelopeWire } from "../packages/adapters/operation-surfaces/wire-contract.ts";
 
 const protocolHeaders = { "x-metaflow-protocol-version": "1" };
@@ -214,6 +218,131 @@ test("production Operations routes reject browser origins and missing or wrong B
     "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
   assert.notEqual(trustedFailure.headers["access-control-allow-origin"], "*");
+});
+
+test("the explicit daemon route matrix denies every private route before data access or Direct Assist", async () => {
+  const calls = new Map<string, number>();
+  const called = (id: string, result: unknown = {}) => {
+    calls.set(id, (calls.get(id) ?? 0) + 1);
+    return result;
+  };
+  const handler = createAmbientV1HttpHandler({
+    browser_capture: { submit: async () => called("browser_capture") },
+    browser_automation: {
+      submit: async () => called("browser_signal"),
+      listDeliveries: () => called("browser_deliveries", []),
+      interact: async () => called("browser_interaction"),
+    },
+    mac_automation: {
+      submit: async () => called("macos_signal"),
+      listDeliveries: () => called("macos_deliveries", []),
+      interact: async () => called("macos_interaction"),
+      listBrowserContextRequests: () => called("macos_browser_context_poll", []),
+      respondBrowserContext: () => called("macos_browser_context_response"),
+    },
+    inbox_automation: {
+      listDeliveries: () => called("inbox_deliveries", []),
+      interact: async () => called("inbox_interaction"),
+    },
+    operations: {
+      async handle(request) {
+        const id = request.path.endsWith("/view.get") ? "exact_view" : "operation";
+        called(id);
+        const operation = request.path.slice(request.path.lastIndexOf("/") + 1) as (typeof OPERATION_NAMES)[number];
+        return {
+          status: 200,
+          headers: protocolHeaders,
+          body: { ok: true, request_id: `request:${id}`, operation, data: {} },
+        };
+      },
+    },
+    operation_access: new AmbientOperationAccess(operationAuthToken, [
+      "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]),
+    async direct_assist(_request, response) {
+      called("direct_assist");
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.end('{"type":"assistant_message_done"}\n');
+    },
+    observe: () => {},
+  });
+
+  assert.deepEqual(
+    AMBIENT_HTTP_ROUTE_SECURITY_MATRIX.filter(route => route.access === "public").map(route => route.id),
+    ["health", "doctor"],
+  );
+  for (const route of AMBIENT_HTTP_ROUTE_SECURITY_MATRIX) {
+    assert.equal(ambientRouteAccess(route.path.replace(":view_id", "view%3Aprivate").replace(":operation", "catalog.list")), route.access);
+  }
+
+  const authenticatedRoutes = AMBIENT_HTTP_ROUTE_SECURITY_MATRIX.filter(route =>
+    route.access === "authenticated" && route.id !== "mcp"
+  );
+  for (const route of authenticatedRoutes) {
+    const path = route.id === "exact_view"
+      ? "/context/v1/views/view%3Aprivate?revision=1"
+      : route.id === "operation"
+        ? "/metaflow/v1/operations/catalog.list"
+        : route.path;
+    const method = route.methods[0];
+    for (const authorization of [undefined, "arbitrary", "Bearer wrong-token-at-least-32-bytes"]) {
+      const denied = await invokeHandler(handler, path, { authorization }, method);
+      assert.equal(denied.status, 401, `${route.id} accepted ${authorization ?? "missing auth"}`);
+      assert.equal(denied.headers["access-control-allow-origin"], undefined);
+    }
+    const hostile = await invokeHandler(handler, path, {
+      authorization: `Bearer ${operationAuthToken}`,
+      origin: "https://hostile.example",
+    }, method);
+    assert.equal(hostile.status, 403, `${route.id} accepted a hostile browser origin`);
+    assert.equal(calls.get(route.id) ?? 0, 0, `${route.id} reached private code before authorization`);
+
+    const preflight = await invokeHandler(handler, path, {
+      origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "access-control-request-method": method,
+      "access-control-request-headers": "authorization, content-type",
+    }, "OPTIONS");
+    assert.equal(preflight.status, 204, `${route.id} rejected its exact trusted preflight`);
+    assert.equal(
+      preflight.headers["access-control-allow-origin"],
+      "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert.notEqual(preflight.headers["access-control-allow-origin"], "*");
+
+    const authorized = await invokeHandler(handler, path, {
+      authorization: `Bearer ${operationAuthToken}`,
+      origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }, method);
+    assert.equal(authorized.status, 200, `${route.id} rejected the native authorized client`);
+    assert.equal(
+      authorized.headers["access-control-allow-origin"],
+      "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      `${route.id} omitted its exact trusted origin`,
+    );
+    assert.notEqual(authorized.headers["access-control-allow-origin"], "*");
+    assert.equal(calls.get(route.id), 1);
+  }
+
+  const health = await invokeHandler(handler, "/health", {}, "GET");
+  assert.deepEqual(health.body, { ok: true, architecture: "metaflow-v1" });
+  assert.equal(health.headers["access-control-allow-origin"], undefined);
+  const doctorResponse = await invokeHandler(handler, `/metaflow/v1/doctor?challenge=${fixtureChallenge}`, {}, "GET");
+  assert.equal(doctorResponse.status, 200);
+  assert.equal(doctorResponse.headers["access-control-allow-origin"], undefined);
+  const trustedDoctor = await invokeHandler(handler, `/metaflow/v1/doctor?challenge=${fixtureChallenge}`, {
+    origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  }, "GET");
+  assert.equal(trustedDoctor.status, 200);
+  assert.equal(
+    trustedDoctor.headers["access-control-allow-origin"],
+    "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
+  assert.notEqual(trustedDoctor.headers["access-control-allow-origin"], "*");
+  const hostileDoctor = await invokeHandler(handler, `/metaflow/v1/doctor?challenge=${fixtureChallenge}`, {
+    origin: "https://hostile.example",
+  }, "GET");
+  assert.equal(hostileDoctor.status, 403);
+  assert.equal(hostileDoctor.headers["access-control-allow-origin"], undefined);
 });
 
 test("DaemonOperationClient rejects non-loopback endpoints and impostors before an Operation request", async () => {
@@ -579,9 +708,17 @@ async function invokeHandler(
   let responseHeaders: Record<string, string> = {};
   let raw = "";
   const response = {
+    statusCode: 200,
+    setHeader(name: string, value: string) {
+      responseHeaders[name.toLowerCase()] = value;
+    },
     writeHead(nextStatus: number, nextHeaders: Record<string, string>) {
       status = nextStatus;
-      responseHeaders = nextHeaders;
+      this.statusCode = nextStatus;
+      responseHeaders = {
+        ...responseHeaders,
+        ...Object.fromEntries(Object.entries(nextHeaders).map(([name, value]) => [name.toLowerCase(), value])),
+      };
     },
     end(value: string) { raw = value; },
   };

@@ -286,7 +286,12 @@ Operations.
   and proves credential possession for a client nonce while freezing the exact
   catalog identity before a client may send its token. Every privileged
   Operations, compatibility exact-read, and
-  HTTP MCP request authenticates before a `user:local` principal exists;
+  HTTP MCP request authenticates before a `user:local` principal exists. The
+  same boundary covers every resident capture, Automation signal, Delivery
+  poll/interaction, macOS Browser-context bridge, Inbox, and Direct Assist
+  route before request content, request ids, or ACP invocation are reached;
+  only static health and nonce-bound doctor remain public. The executable
+  route classification lives in `apps/ambient-daemon/http-route-security.ts`;
   missing or wrong credentials fail closed, untrusted browser origins are
   rejected, exact trusted browser origins still require Bearer authentication,
   and privileged responses carry no wildcard CORS grant. `mf` and the retained
@@ -303,7 +308,9 @@ Operations.
   and fails closed. Content scripts obtain explicitly projected non-secret
   settings through the trusted background and public settings responses remain
   token-free. One exhaustive runtime-sender policy admits content scripts only
-  to declared capture and non-secret interaction messages; exact View, query,
+  to declared capture and non-secret interaction messages. Selection actions
+  that queue or auto-submit an ACP prompt are trusted-extension-page only and
+  do not appear in the content-script bundle; exact View, query,
   task, delivery, failure, settings, and other local-data paths require a
   trusted extension page before storage, doctor negotiation, or network access,
   and content-script responses cannot project View content or exact refs.

@@ -26,8 +26,8 @@ import {
 } from "./browser-capture-state";
 import {
   BrowserOperationAccessError,
+  authorizedBrowserDaemonFetch,
   isValidOperationAuthToken,
-  negotiateBrowserOperationAccess,
 } from "./operation-auth";
 import { ensureTrustedOperationStorageAccess } from "./operation-auth-storage";
 import {
@@ -187,7 +187,10 @@ function runMacBrowserContextPoll() {
 
 async function pollMacBrowserContextRequests() {
   const settings = await getSettings();
-  const response = await fetch(macBrowserContextRequestsEndpoint(settings.endpoint));
+  const response = await authenticatedBrowserDaemonFetch(
+    settings,
+    macBrowserContextRequestsEndpoint(settings.endpoint),
+  );
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.ok === false) {
     throw new Error(`Browser DOM request poll failed: HTTP ${response.status} ${JSON.stringify(body)}`);
@@ -200,7 +203,7 @@ async function pollMacBrowserContextRequests() {
       if (!tab?.id || tab.windowId === undefined || !tab.url) throw new Error("no active Browser tab");
       const page = await collectFromTab(tab.id);
       if (!page.text?.trim() || !page.url || !page.title) throw new Error("active tab did not expose complete DOM context");
-      await postMacBrowserContextResponse(settings.endpoint, {
+      await postMacBrowserContextResponse(settings, {
         request_id: requestId,
         status: "captured",
         captured_at: new Date().toISOString(),
@@ -214,7 +217,7 @@ async function pollMacBrowserContextRequests() {
         metadata: page.metadata ?? {},
       });
     } catch (error) {
-      await postMacBrowserContextResponse(settings.endpoint, {
+      await postMacBrowserContextResponse(settings, {
         request_id: requestId,
         status: "failed",
         code: "browser_dom_capture_failed",
@@ -224,8 +227,8 @@ async function pollMacBrowserContextRequests() {
   }
 }
 
-async function postMacBrowserContextResponse(endpoint: string, body: Record<string, unknown>) {
-  const response = await fetch(macBrowserContextResponsesEndpoint(endpoint), {
+async function postMacBrowserContextResponse(settings: InfoSettings, body: Record<string, unknown>) {
+  const response = await authenticatedBrowserDaemonFetch(settings, macBrowserContextResponsesEndpoint(settings.endpoint), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -502,7 +505,7 @@ async function submitBrowserAutomation(message: any, tab: chrome.tabs.Tab | unde
   }
   const endpoint = browserAutomationEndpoint(settings.endpoint);
   try {
-    const response = await fetch(endpoint, {
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(event),
@@ -532,7 +535,7 @@ async function pollBrowserDeliveries(message: any) {
     return { ok: false, status: 0, code: "browser_delivery_query_invalid", error: error instanceof Error ? error.message : String(error) };
   }
   try {
-    const response = await fetch(endpoint);
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint);
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.ok === false) {
       await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
@@ -565,7 +568,7 @@ async function postBrowserDeliveryInteraction(message: any) {
     return { ok: false, status: 0, code: "browser_interaction_invalid", error: error instanceof Error ? error.message : String(error) };
   }
   try {
-    const response = await fetch(endpoint, {
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(interaction),
@@ -604,25 +607,9 @@ async function getAmbientExactView(message: any) {
   } catch (error) {
     return { ok: false, status: 0, code: "exact_view_ref_invalid", error: error instanceof Error ? error.message : String(error) };
   }
-  let access: { origin: string };
+  const endpoint = browserExactViewEndpoint(settings.endpoint, ref);
   try {
-    access = await negotiateBrowserOperationAccess({
-      endpoint: settings.endpoint,
-      token: operationAuthToken,
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      code: error instanceof BrowserOperationAccessError ? error.code : "daemon_negotiation_failed",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-  const endpoint = browserExactViewEndpoint(access.origin, ref);
-  try {
-    const response = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${operationAuthToken}` },
-    });
+    const response = await authenticatedBrowserDaemonFetch(settings, endpoint);
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.ok === false) {
       await recordAutomationFailure({}, endpoint, `HTTP ${response.status}`, body);
@@ -1116,7 +1103,12 @@ async function submitBrowserCaptureEvent(input: unknown) {
   const settings = await getSettings();
   const event = buildBrowserCaptureEvent(input);
   const endpoint = browserCaptureEndpoint(settings.endpoint);
-  const result = await deliverBrowserCaptureEvent({ event, endpoint, outbox: chromeBrowserCaptureOutbox });
+  const result = await deliverBrowserCaptureEvent({
+    event,
+    endpoint,
+    outbox: chromeBrowserCaptureOutbox,
+    fetch: (url, init) => authenticatedBrowserDaemonFetch(settings, url, init),
+  });
   if (!result.ok) {
     console.error(JSON.stringify({
       component: "browser-capture-extension",
@@ -1198,6 +1190,7 @@ const chromeBrowserCaptureOutbox: BrowserCaptureOutbox & { list(): Promise<Brows
 });
 
 async function retryBrowserCaptureFailure(id: string) {
+  const settings = await getSettings();
   const failure = (await listBrowserCaptureFailures()).find(item => item.id === id && item.status === "pending");
   if (!failure) throw new Error(`Pending Browser Capture transport failure is missing: ${id}`);
   const result = await deliverBrowserCaptureEvent({
@@ -1205,12 +1198,32 @@ async function retryBrowserCaptureFailure(id: string) {
     endpoint: failure.endpoint,
     outbox: chromeBrowserCaptureOutbox,
     previous: failure,
+    fetch: (url, init) => authenticatedBrowserDaemonFetch(settings, url, init),
   });
   return { ...result, event_id: failure.event.event_id, failure_id: failure.id };
 }
 
 async function listBrowserCaptureFailures(): Promise<BrowserCaptureTransportFailure[]> {
   return chromeBrowserCaptureOutbox.list();
+}
+
+async function authenticatedBrowserDaemonFetch(
+  settings: InfoSettings,
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  if (!isValidOperationAuthToken(settings.operationAuthToken)) {
+    throw new BrowserOperationAccessError(
+      "operation_auth_configuration_required",
+      "A valid resident daemon Operation token is required",
+    );
+  }
+  return authorizedBrowserDaemonFetch({
+    endpoint: new URL(settings.endpoint).origin,
+    token: settings.operationAuthToken,
+    request: input,
+    init,
+  });
 }
 
 function reportCaptureTaskFailure(stage: string, error: unknown, details: Record<string, unknown>) {

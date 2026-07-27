@@ -62,6 +62,21 @@ test("Ambient daemon exposes the shared Metaflow Operations catalog over Streama
     assert.notEqual(trustedPreflight.headers.get("access-control-allow-origin"), "*");
     assert.match(trustedPreflight.headers.get("access-control-allow-headers") ?? "", /MCP-Protocol-Version/u);
 
+    const trustedDeletePreflight = await fetch(endpoint, {
+      method: "OPTIONS",
+      headers: {
+        origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "access-control-request-method": "DELETE",
+        "access-control-request-headers": "authorization, mcp-protocol-version",
+      },
+    });
+    assert.equal(trustedDeletePreflight.status, 204);
+    assert.equal(
+      trustedDeletePreflight.headers.get("access-control-allow-origin"),
+      "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert.match(trustedDeletePreflight.headers.get("access-control-allow-methods") ?? "", /DELETE/u);
+
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
       requestInit: { headers: { authorization: "Bearer test-operation-auth-token-32-bytes" } },
     }));

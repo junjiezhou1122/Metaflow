@@ -4,8 +4,9 @@ import {
   TRUSTED_BACKGROUND_RUNTIME_SENDER,
   authorizeRuntimeMessageSender,
 } from "./lib/runtime-sender-policy";
+import { SidepanelPromptQueue } from "./lib/sidepanel-prompt-queue";
 
-let pendingSidepanelPrompt: any = null;
+const sidepanelPromptQueue = new SidepanelPromptQueue();
 const RECENT_CAPTION_GAPS_KEY = "language.recent_caption_gaps";
 const SAVED_CAPTION_GAPS_BY_VIDEO_KEY = "language.caption_gaps.by_video";
 const MAX_RECENT_CAPTION_GAPS = 12;
@@ -338,28 +339,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    if (message?.type === "sidepanel.explain.selection" || message?.type === "sidepanel.run.selection_action") {
-      const tab = sender.tab;
-      pendingSidepanelPrompt = {
-        type: "selection-action",
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-        action: message.action ?? {
-          id: "explain",
-          label: "Explain",
-          prompt: "Explain this selected text in plain language. Keep it concise, and mention the page context if it matters.",
-        },
-        payload: message.payload,
-      };
-      if (tab?.id) await chrome.sidePanel.open({ tabId: tab.id }).catch(() => undefined);
-      sendResponse({ ok: true, pending: pendingSidepanelPrompt });
-      return;
-    }
-
-    if (message?.type === "sidepanel.consume-pending-prompt") {
-      const pending = pendingSidepanelPrompt;
-      pendingSidepanelPrompt = null;
-      sendResponse({ ok: true, pending });
+    const sidepanelPromptResult = await sidepanelPromptQueue.handle(
+      message,
+      authorization,
+      sender,
+      async tabId => chrome.sidePanel.open({ tabId }).catch(() => undefined),
+    );
+    if (sidepanelPromptResult !== undefined) {
+      sendResponse(sidepanelPromptResult);
       return;
     }
 

@@ -92,7 +92,23 @@ export class AmbientOperationAccess {
     return { allowed: true, ...(origin ? { headers: corsHeaders(origin) } : {}) };
   }
 
-  authorizePreflight(headers: IncomingHttpHeaders): AmbientOperationAccessDecision {
+  authorizePublic(headers: IncomingHttpHeaders): AmbientOperationAccessDecision {
+    const origin = trustedRequestOrigin(headers.origin, this.trustedOrigins);
+    if (origin === false) {
+      return {
+        allowed: false,
+        status: 403,
+        code: "browser_origin_forbidden",
+        message: "Browser-origin requests are not permitted on the local Operations transport",
+      };
+    }
+    return { allowed: true, ...(origin ? { headers: corsHeaders(origin) } : {}) };
+  }
+
+  authorizePreflight(
+    headers: IncomingHttpHeaders,
+    allowedMethods: readonly ("GET" | "POST" | "DELETE")[] = ["GET", "POST"],
+  ): AmbientOperationAccessDecision {
     const origin = trustedRequestOrigin(headers.origin, this.trustedOrigins);
     if (!origin) {
       return {
@@ -102,7 +118,7 @@ export class AmbientOperationAccess {
         message: "Browser-origin requests are not permitted on the local Operations transport",
       };
     }
-    if (!isAllowedPreflightMethod(headers["access-control-request-method"])
+    if (!isAllowedPreflightMethod(headers["access-control-request-method"], allowedMethods)
       || !hasOnlyAllowedPreflightHeaders(headers["access-control-request-headers"])) {
       return {
         allowed: false,
@@ -111,12 +127,15 @@ export class AmbientOperationAccess {
         message: "Browser preflight exceeds the local Operations transport policy",
       };
     }
-    return { allowed: true, headers: corsHeaders(origin) };
+    return { allowed: true, headers: corsHeaders(origin, allowedMethods) };
   }
 }
 
-function isAllowedPreflightMethod(value: string | string[] | undefined): boolean {
-  return typeof value === "string" && ["GET", "POST"].includes(value.toUpperCase());
+function isAllowedPreflightMethod(
+  value: string | string[] | undefined,
+  allowedMethods: readonly string[],
+): boolean {
+  return typeof value === "string" && allowedMethods.includes(value.toUpperCase());
 }
 
 function hasOnlyAllowedPreflightHeaders(value: string | string[] | undefined): boolean {
@@ -137,11 +156,11 @@ function trustedRequestOrigin(
   return value;
 }
 
-function corsHeaders(origin: string): Record<string, string> {
+function corsHeaders(origin: string, allowedMethods: readonly string[] = ["GET", "POST"]): Record<string, string> {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-headers": "Authorization, Content-Type, MCP-Protocol-Version",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": [...allowedMethods, "OPTIONS"].join(","),
     vary: "Origin",
   };
 }

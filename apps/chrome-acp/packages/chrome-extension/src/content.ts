@@ -11,7 +11,6 @@ let lastSelectedText = "";
 let selectionTimer: number | undefined;
 let selectionToolbar: HTMLDivElement | null = null;
 let activeSelectionPayload: any = null;
-let selectionRequestSeq = 0;
 let writingTimer: number | undefined;
 let lastWritingText = "";
 let assistBubble: HTMLDivElement | null = null;
@@ -32,30 +31,6 @@ const startedAt = Date.now();
 const WRITING_VIEW_TYPES = ["draft.writing_continuation", "advice.writing_assist"];
 const WRITING_ASSIST_POLL_ATTEMPTS = 45;
 const WRITING_ASSIST_POLL_INTERVAL_MS = 2000;
-
-const DEFAULT_SELECTION_ACTIONS: Array<{ id: string; label: string; prompt: string }> = [
-  {
-    id: "explain",
-    label: "Explain",
-    prompt: "Explain this selected text in plain language. Keep it concise, and mention the page context if it matters.",
-  },
-  {
-    id: "translate_zh",
-    label: "Translate",
-    prompt: "Translate this selected text into natural Simplified Chinese. Preserve names, technical terms, and the original meaning.",
-  },
-];
-
-function selectionActionFromConfig(action: unknown): { id: string; label: string; prompt: string } | null {
-  if (!action || typeof action !== "object") return null;
-  const a = action as Record<string, unknown>;
-  if (a.enabled === false) return null;
-  const id = String(a.id || "").trim();
-  const label = String(a.label || "").trim();
-  const prompt = String(a.prompt || "").trim();
-  if (!id || !label || !prompt) return null;
-  return { id, label, prompt };
-}
 
 function visibleText() {
   const clone = document.body?.cloneNode(true) as HTMLElement | undefined;
@@ -671,20 +646,6 @@ function editablePositionRect(element: Element) {
   return element.getBoundingClientRect();
 }
 
-async function selectionActions() {
-  try {
-    const stored = await chrome.runtime.sendMessage({ type: "selection-actions.get" });
-    const custom = stored?.ok && Array.isArray(stored.selectionActions) ? stored.selectionActions : [];
-    const normalized = custom
-      .map(selectionActionFromConfig)
-      .filter((action): action is { id: string; label: string; prompt: string } => action !== null)
-      .map((action) => ({ ...action, label: action.label.slice(0, 24) }));
-    return normalized.length ? normalized : DEFAULT_SELECTION_ACTIONS;
-  } catch {
-    return DEFAULT_SELECTION_ACTIONS;
-  }
-}
-
 function showSelectionToolbar(payload: any) {
   removeSelectionToolbar();
   activeSelectionPayload = payload;
@@ -696,25 +657,13 @@ function showSelectionToolbar(payload: any) {
   selectionToolbar.setAttribute("role", "toolbar");
   selectionToolbar.setAttribute("aria-label", "Info selection toolbar");
   document.documentElement.append(selectionToolbar);
-  renderSelectionButtons(payload, DEFAULT_SELECTION_ACTIONS);
+  renderSelectionSaveButton(payload);
   positionSelectionToolbar(rect);
-  selectionActions().then((actions) => {
-    renderSelectionButtons(payload, actions);
-  });
 }
 
-function renderSelectionButtons(payload: any, actions: Array<{ id: string; label: string; prompt: string }>) {
+function renderSelectionSaveButton(payload: any) {
   if (!selectionToolbar || activeSelectionPayload !== payload) return;
   selectionToolbar.textContent = "";
-  for (const action of actions) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = action.label;
-    button.setAttribute("role", "button");
-    button.setAttribute("aria-label", `${action.label} selected text`);
-    button.addEventListener("click", () => runSelectionAction(action, payload));
-    selectionToolbar.append(button);
-  }
   const save = document.createElement("button");
   save.type = "button";
   save.textContent = "Save";
@@ -739,29 +688,6 @@ function saveSelection(payload = activeSelectionPayload) {
   }).then((result) => {
     showSelectionStatus(result?.ok === false ? "Save failed" : "Saved");
   }).catch(() => showSelectionStatus("Save failed"));
-}
-
-function runSelectionAction(action: any, payload = activeSelectionPayload) {
-  if (!payload?.selected_text) return;
-  const requestSeq = ++selectionRequestSeq;
-  showSelectionStatus("Opening Chat...");
-  chrome.runtime.sendMessage({
-    type: "sidepanel.run.selection_action",
-    action,
-    payload,
-  }).then((result) => {
-    if (requestSeq !== selectionRequestSeq) return;
-    if (!result?.ok) {
-      showSelectionStatus(result?.error || "Explain failed");
-      return;
-    }
-    showSelectionStatus("Sent to Chat");
-    window.setTimeout(() => {
-      if (requestSeq === selectionRequestSeq) removeSelectionToolbar();
-    }, 1200);
-  }).catch(() => {
-    if (requestSeq === selectionRequestSeq) showSelectionStatus("Explain failed");
-  });
 }
 
 function showSelectionStatus(text: string) {

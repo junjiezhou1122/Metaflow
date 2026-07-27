@@ -1,21 +1,21 @@
 import {
   registerWorker,
-  type FunctionRef,
-  type ISdk,
-  type RegisterFunctionOptions,
-  type TriggerRequest,
+  type IIIClient,
 } from "iii-sdk";
 import { readFileSync } from "node:fs";
 
 export type IiiFunctionHandler = (input: unknown) => Promise<unknown>;
+export type IiiFunctionRef = ReturnType<IIIClient["registerFunction"]>;
+export type IiiRegisterFunctionOptions = NonNullable<Parameters<IIIClient["registerFunction"]>[2]>;
+export type IiiTriggerRequest = Parameters<IIIClient["trigger"]>[0];
 
 export interface IiiClientPort {
   registerFunction(
     functionId: string,
     handler: IiiFunctionHandler,
-    options?: RegisterFunctionOptions,
-  ): FunctionRef;
-  trigger<TInput, TOutput>(request: TriggerRequest<TInput>): Promise<TOutput>;
+    options?: IiiRegisterFunctionOptions,
+  ): IiiFunctionRef;
+  trigger<TInput, TOutput>(request: IiiTriggerRequest): Promise<TOutput>;
   shutdown(): Promise<void>;
 }
 
@@ -29,7 +29,7 @@ export const defaultIiiClientFactory: IiiClientFactory = ({ engine_url, worker_n
     workerName: worker_name,
     workerDescription: "Metaflow v1 Operator Worker and durable Automation queue adapter",
     reconnectionConfig: { maxRetries: -1 },
-  }) as Pick<ISdk, "registerFunction" | "trigger" | "shutdown">
+  })
 );
 
 export function enforceIiiTracePayloadProtection(): void {

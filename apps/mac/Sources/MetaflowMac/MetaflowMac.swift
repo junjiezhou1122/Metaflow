@@ -10,7 +10,7 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
     private let endpoint = URL(string: ProcessInfo.processInfo.environment["INFO_CONTEXT_INGEST_ENDPOINT"] ?? "http://localhost:3111/context/ingest")!
     private let ambientEndpoint = URL(string: ProcessInfo.processInfo.environment["METAFLOW_AMBIENT_ENDPOINT"] ?? "http://localhost:3112")!
     private let operationAuthToken = LocalEnvironment.value("METAFLOW_AUTH_TOKEN")
-    private lazy var assistClient = AmbientAssistClient(endpoint: ambientEndpoint)
+    private lazy var assistClient = AmbientAssistClient(endpoint: ambientEndpoint, token: operationAuthToken)
     private let pollSeconds = TimeInterval(ProcessInfo.processInfo.environment["METAFLOW_MAC_POLL_SECONDS"].flatMap(Double.init) ?? 1.2)
     private let minWritingCharacters = Int(ProcessInfo.processInfo.environment["METAFLOW_MAC_MIN_WRITING_CHARS"].flatMap(Int.init) ?? 24)
     private let maxWritingCharacters = Int(ProcessInfo.processInfo.environment["METAFLOW_MAC_MAX_WRITING_CHARS"].flatMap(Int.init) ?? 4_000)
@@ -643,61 +643,53 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
             notchModel.fail(error.localizedDescription)
             return
         }
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            Task { @MainActor in
-                if let error {
-                    self?.updateStatus("Ambient daemon offline", detail: error.localizedDescription)
-                    self?.notchModel.fail("Ambient daemon offline: \(error.localizedDescription)")
-                    return
-                }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let authorized = try await authorizedAmbientRequest(request)
+                let (data, response) = try await URLSession.shared.data(for: authorized)
                 guard let http = response as? HTTPURLResponse else {
-                    self?.updateStatus("Ambient response missing", detail: "No HTTP response was returned.")
-                    self?.notchModel.fail("Ambient daemon returned no HTTP response.")
-                    return
+                    throw ResidentOperationAccessError.invalidResponse("Ambient daemon returned no HTTP response")
                 }
                 guard (200..<300).contains(http.statusCode) else {
-                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    self?.updateStatus("Voice request rejected", detail: "HTTP \(http.statusCode): \(body)")
-                    self?.notchModel.fail("Ambient request rejected (HTTP \(http.statusCode)): \(body)")
-                    return
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    throw ResidentOperationAccessError.invalidResponse("Voice request rejected (HTTP \(http.statusCode)): \(body)")
                 }
-                self?.notchModel.beginWorking("ACP accepted the exact voice and foreground Views")
-                self?.updateStatus("Agent working", detail: "The exact voice and foreground Views were accepted.")
+                notchModel.beginWorking("ACP accepted the exact voice and foreground Views")
+                updateStatus("Agent working", detail: "The exact voice and foreground Views were accepted.")
+            } catch {
+                updateStatus("Ambient daemon request failed", detail: error.localizedDescription)
+                notchModel.fail("Ambient daemon request failed: \(error.localizedDescription)")
             }
-        }.resume()
+        }
     }
 
     private func pollAmbientDeliveries() {
         guard !ambientPollInFlight else { return }
         guard let url = ambientURL(path: "/automation/v1/macos/deliveries") else { return }
         ambientPollInFlight = true
-        URLSession.shared.dataTask(with: URLRequest(url: url)) { [weak self] data, response, error in
-            Task { @MainActor in
-                guard let self else { return }
-                self.ambientPollInFlight = false
-                if let error {
-                    self.recordAmbientPollFailure(code: "transport", detail: error.localizedDescription)
-                    return
-                }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { ambientPollInFlight = false }
+            do {
+                let authorized = try await authorizedAmbientRequest(URLRequest(url: url))
+                let (data, response) = try await URLSession.shared.data(for: authorized)
                 guard let http = response as? HTTPURLResponse else {
-                    self.recordAmbientPollFailure(code: "missing_response", detail: "No HTTP response was returned.")
-                    return
+                    throw ResidentOperationAccessError.invalidResponse("No HTTP response was returned")
                 }
-                guard http.statusCode == 200, let data else {
-                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    self.recordAmbientPollFailure(code: "http_\(http.statusCode)", detail: body)
-                    return
+                guard http.statusCode == 200 else {
+                    throw ResidentOperationAccessError.invalidResponse(
+                        String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+                    )
                 }
-                do {
-                    let cards = try AmbientDeliveryCard.list(from: data)
-                    self.lastAmbientPollFailure = ""
-                    guard let card = cards.last else { return }
-                    self.showAmbientCard(card)
-                } catch {
-                    self.recordAmbientPollFailure(code: "invalid_delivery", detail: error.localizedDescription)
-                }
+                let cards = try AmbientDeliveryCard.list(from: data)
+                lastAmbientPollFailure = ""
+                guard let card = cards.last else { return }
+                showAmbientCard(card)
+            } catch {
+                recordAmbientPollFailure(code: "authorized_transport", detail: error.localizedDescription)
             }
-        }.resume()
+        }
     }
 
     private func recordAmbientPollFailure(code: String, detail: String) {
@@ -812,27 +804,28 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
             notchModel.fail("Could not encode the Delivery interaction: \(error.localizedDescription)")
             return
         }
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            Task { @MainActor in
-                if let error {
-                    self?.updateStatus("Interaction failed", detail: error.localizedDescription)
-                    self?.notchModel.fail("Interaction failed: \(error.localizedDescription)")
-                    return
-                }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let authorized = try await authorizedAmbientRequest(request)
+                let (data, response) = try await URLSession.shared.data(for: authorized)
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    self?.updateStatus("Interaction rejected", detail: body)
-                    self?.notchModel.fail("Interaction rejected: \(body)")
-                    return
+                    throw ResidentOperationAccessError.invalidResponse(
+                        String(data: data, encoding: .utf8) ?? "Delivery interaction was rejected"
+                    )
                 }
-                self?.latestAmbientCard = nil
-                self?.notchModel.availableActions = []
-                if action == "dismiss" || action == "cancel" {
-                    self?.notchModel.reset()
-                }
-                self?.updateStatus(action == "cancel" ? "Cancellation requested" : "Feedback recorded", detail: "The interaction is linked to the exact Automation Run.")
+                latestAmbientCard = nil
+                notchModel.availableActions = []
+                if action == "dismiss" || action == "cancel" { notchModel.reset() }
+                updateStatus(
+                    action == "cancel" ? "Cancellation requested" : "Feedback recorded",
+                    detail: "The interaction is linked to the exact Automation Run."
+                )
+            } catch {
+                updateStatus("Interaction failed", detail: error.localizedDescription)
+                notchModel.fail("Interaction failed: \(error.localizedDescription)")
             }
-        }.resume()
+        }
     }
 
     private func ambientURL(path: String) -> URL? {
@@ -840,6 +833,12 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
         components.path = path
         components.queryItems = nil
         return components.url
+    }
+
+    private func authorizedAmbientRequest(_ request: URLRequest) async throws -> URLRequest {
+        guard let operationAuthToken else { throw ResidentOperationAccessError.invalidToken }
+        let access = try ResidentOperationAccessClient(endpoint: ambientEndpoint, token: operationAuthToken)
+        return try await access.authorize(request)
     }
 
     private func ambientExactViewURL(viewID: String, revision: Int) -> URL? {

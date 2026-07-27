@@ -93,6 +93,7 @@ export type AmbientDaemonCompositionOptions = {
   agent_runtime: AgentRuntimeAdapter;
   agent_aliases?: Record<string, string>;
   agent_mcp_servers?: import("@info/agent-runtime-adapter").AgentMcpServerConfig[];
+  direct_assist?: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => Promise<void>;
   mac_delivery_mailbox?: MacDeliveryMailbox;
   capture_sources?: {
     codex_history?: {
@@ -309,6 +310,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       inbox_automation: inboxAutomation,
       operations: operationHttp,
       operation_access: operationAccess,
+      direct_assist: options.direct_assist,
     });
     const mcpHandler = createAmbientMcpHttpHandler(operationService, operationAccess);
 

@@ -22,7 +22,7 @@ export function createAmbientMcpHttpHandler(
 ) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (request.method?.toUpperCase() === "OPTIONS") {
-      const preflight = operationAccess.authorizePreflight(request.headers);
+      const preflight = operationAccess.authorizePreflight(request.headers, ["GET", "POST", "DELETE"]);
       if (!preflight.allowed) {
         await observeAccess({
           event: "mcp.authentication_rejected",

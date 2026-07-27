@@ -15,13 +15,21 @@ runtime implementation or host. Automation decides when that contract is
 invoked and freezes exact View evidence; it does not execute or commit the
 result.
 
-The adapter pins `iii-sdk` and the expected engine to `0.19.2`, registers strict
+The adapter pins `iii-sdk@0.22.0` and the expected engine to `0.19.2`, registers strict
 versioned Automation, Operator, and cancellation Functions, and uses the named
 `metaflow-automation-v1` queue. The checked-in builtin file-backed queue config
 sets concurrency 4, three retries, 1 second backoff, 100 millisecond polling,
 and DLQ inspection. Startup introspects the live engine version, queue
 concurrency, and registered Function metadata and fails on incompatibility. No
 in-process fallback exists.
+
+The production dependency graph pins the coherent OpenTelemetry 2.9.0 family
+(and matching 0.220.0 logging/instrumentation packages) to resolve
+GHSA-8988-4f7v-96qf. A narrow checked-in `@iii-dev/helpers` patch migrates its
+removed `Resource` constructor call to `resourceFromAttributes` and supplies
+log processors through the current `LoggerProvider` constructor; the III suite
+initializes that production telemetry path as the executable compatibility gate
+for this package-level bridge.
 
 Durable Automation messages contain the exact Automation revision, exact
 trigger evidence, and bounded match descriptors. Raw text, transcript, HTML,

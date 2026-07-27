@@ -311,7 +311,11 @@ async function request(
   const req = Readable.from(body === undefined ? [] : [JSON.stringify(body)]) as any;
   req.method = method;
   req.url = url;
-  req.headers = { host: "localhost", "content-type": "application/json" };
+  req.headers = {
+    host: "localhost",
+    "content-type": "application/json",
+    authorization: "Bearer test-operation-auth-token-32-bytes",
+  };
   let status = 0;
   let raw = "";
   const res = { writeHead(code: number) { status = code; }, end(value: string) { raw = value; } };

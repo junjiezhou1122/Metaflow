@@ -23,7 +23,7 @@ import {
   type JsonObject,
 } from "@info/view";
 
-export const III_SDK_VERSION = "0.19.2";
+export const III_SDK_VERSION = "0.22.0";
 export const III_ENGINE_VERSION = "0.19.2";
 export const III_AUTOMATION_FUNCTION_ID = "metaflow::automation::invoke::v1";
 export const III_AUTOMATION_CONTRACT = "metaflow.automation.invoke.v1";

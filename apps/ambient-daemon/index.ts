@@ -31,14 +31,6 @@ export async function startAmbientDaemon() {
     process_id: agentWarmup.process_id,
     process_reused: agentWarmup.process_reused,
   }));
-  const composition = await createAmbientDaemonComposition({
-    data_directory: process.env.METAFLOW_DATA_DIR ?? "data/ambient-v1",
-    operation_auth_token: operationAuthToken,
-    trusted_operation_origins: trustedOperationOrigins,
-    agent_runtime: agentRuntime,
-    agent_aliases: parseAgentAliases(process.env.METAFLOW_AGENT_ALIASES),
-    agent_mcp_servers: [],
-  });
   const directConversation = new DirectAssistRuntimeRouter({
     acp: agentRuntime,
     acpPermissions: createNativeAgentPermissionBroker(),
@@ -54,12 +46,23 @@ export async function startAmbientDaemon() {
     },
   });
   const directAssist = createDirectAssistHttpHandler(new DirectAssistService(directConversation));
+  let composition: Awaited<ReturnType<typeof createAmbientDaemonComposition>>;
+  try {
+    composition = await createAmbientDaemonComposition({
+      data_directory: process.env.METAFLOW_DATA_DIR ?? "data/ambient-v1",
+      operation_auth_token: operationAuthToken,
+      trusted_operation_origins: trustedOperationOrigins,
+      agent_runtime: agentRuntime,
+      agent_aliases: parseAgentAliases(process.env.METAFLOW_AGENT_ALIASES),
+      agent_mcp_servers: [],
+      direct_assist: directAssist,
+    });
+  } catch (error) {
+    await directConversation.close();
+    throw error;
+  }
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`).pathname;
-    if (request.method === "POST" && path === "/ambient/v1/assist") {
-      void directAssist(request, response);
-      return;
-    }
     if (path === "/mcp") {
       void composition.mcpHandler(request, response);
       return;

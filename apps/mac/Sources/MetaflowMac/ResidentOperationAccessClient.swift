@@ -85,26 +85,13 @@ struct ResidentOperationAccessClient: Sendable {
         guard !viewID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, revision > 0 else {
             throw ResidentOperationAccessError.invalidResponse("exact View reference is invalid")
         }
-        let challenge = Self.randomChallenge()
-        let doctorRequest = try makeDoctorRequest(challenge: challenge)
-        let doctorData: Data
-        let doctorResponse: URLResponse
-        do {
-            (doctorData, doctorResponse) = try await session.data(for: doctorRequest)
-        } catch {
-            throw ResidentOperationAccessError.unreachable(error.localizedDescription)
-        }
-        try validateDoctor(data: doctorData, response: doctorResponse, challenge: challenge)
-
         guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw ResidentOperationAccessError.invalidEndpoint
         }
         components.path = "/context/v1/views/\(viewID)"
         components.queryItems = [URLQueryItem(name: "revision", value: String(revision))]
         guard let url = components.url else { throw ResidentOperationAccessError.invalidEndpoint }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.httpShouldHandleCookies = false
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let request = try await authorize(URLRequest(url: url, timeoutInterval: 10))
         let data: Data
         let response: URLResponse
         do {
@@ -116,6 +103,38 @@ struct ResidentOperationAccessClient: Sendable {
             throw ResidentOperationAccessError.invalidResponse("exact View request failed")
         }
         return data
+    }
+
+    func authorize(_ input: URLRequest) async throws -> URLRequest {
+        guard let inputURL = input.url,
+              var components = URLComponents(url: inputURL, resolvingAgainstBaseURL: false),
+              components.scheme == "http",
+              let host = components.host?.lowercased(),
+              host == "127.0.0.1" || host == "localhost",
+              components.user == nil,
+              components.password == nil else {
+            throw ResidentOperationAccessError.invalidEndpoint
+        }
+        components.host = "127.0.0.1"
+        guard let requestURL = components.url, requestURL.originString == endpointOrigin else {
+            throw ResidentOperationAccessError.invalidEndpoint
+        }
+        let challenge = Self.randomChallenge()
+        let doctorRequest = try makeDoctorRequest(challenge: challenge)
+        let doctorData: Data
+        let doctorResponse: URLResponse
+        do {
+            (doctorData, doctorResponse) = try await session.data(for: doctorRequest)
+        } catch {
+            throw ResidentOperationAccessError.unreachable(error.localizedDescription)
+        }
+        try validateDoctor(data: doctorData, response: doctorResponse, challenge: challenge)
+
+        var request = input
+        request.url = requestURL
+        request.httpShouldHandleCookies = false
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     func makeDoctorRequest(challenge: String) throws -> URLRequest {
@@ -229,6 +248,16 @@ struct ResidentOperationAccessClient: Sendable {
         let right = Array(second.utf8)
         guard left.count == right.count else { return false }
         return zip(left, right).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
+    }
+}
+
+private extension URL {
+    var originString: String {
+        guard let components = URLComponents(url: self, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme,
+              let host = components.host else { return "" }
+        let port = components.port.map { ":\($0)" } ?? ""
+        return "\(scheme)://\(host)\(port)"
     }
 }
 

@@ -3,15 +3,18 @@ import Foundation
 struct AmbientAssistClient {
     let endpoint: URL
     let conversationID: String
+    let token: String?
     var session: URLSession
 
     init(
         endpoint: URL,
         conversationID: String = "metaflow-notch",
+        token: String? = nil,
         session: URLSession = .shared
     ) {
         self.endpoint = endpoint
         self.conversationID = conversationID
+        self.token = token
         self.session = session
     }
 
@@ -27,7 +30,7 @@ struct AmbientAssistClient {
         onDelta: @escaping @MainActor (String) -> Void = { _ in },
         onToolActivity: @escaping @MainActor (AmbientToolActivityEvent) -> Void = { _ in }
     ) async throws -> AmbientAssistResult {
-        let request = try makeRequest(
+        let unsignedRequest = try makeRequest(
             requestID: requestID,
             conversationID: conversationID,
             prompt: prompt,
@@ -37,6 +40,9 @@ struct AmbientAssistClient {
             screenImage: screenImage,
             agent: agent
         )
+        guard let token else { throw ResidentOperationAccessError.invalidToken }
+        let access = try ResidentOperationAccessClient(endpoint: endpoint, token: token, session: session)
+        let request = try await access.authorize(unsignedRequest)
         let started = Date()
         NSLog("[metaflow] ambient.assist.started request_id=%@ source=%@", requestID, source.rawValue)
         do {

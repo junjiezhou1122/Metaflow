@@ -1,4 +1,3 @@
-import type { FunctionRef, RegisterFunctionOptions } from "iii-sdk";
 import {
   type OperatorExecutionInvocation,
   type OperatorExecutionPort,
@@ -6,7 +5,11 @@ import {
 } from "@info/execution";
 import type { OperatorSnapshot } from "@info/transformation";
 import { canonicalJson, type JsonObject } from "@info/view";
-import type { IiiClientPort } from "./client.js";
+import type {
+  IiiClientPort,
+  IiiFunctionRef,
+  IiiRegisterFunctionOptions,
+} from "./client.js";
 import {
   IiiOperatorCancelRequestSchema,
   IiiOperatorCancelResponseSchema,
@@ -39,7 +42,7 @@ type ActiveOperator = {
 
 export class IiiOperatorFunctionHost {
   private readonly active = new Map<string, ActiveOperator>();
-  private readonly refs: FunctionRef[] = [];
+  private readonly refs: IiiFunctionRef[] = [];
 
   constructor(
     private readonly client: IiiClientPort,
@@ -258,7 +261,7 @@ function assertOperatorMatch(
   }
 }
 
-function operatorRegistrationOptions(operator: OperatorSnapshot, metadata: JsonObject): RegisterFunctionOptions {
+function operatorRegistrationOptions(operator: OperatorSnapshot, metadata: JsonObject): IiiRegisterFunctionOptions {
   return {
     description: `Execute frozen Metaflow Operator ${operatorKey(operator)} without committing canonical state`,
     request_format: OPERATOR_REQUEST_FORMAT,
@@ -267,7 +270,7 @@ function operatorRegistrationOptions(operator: OperatorSnapshot, metadata: JsonO
   };
 }
 
-function cancelRegistrationOptions(operator: OperatorSnapshot, metadata: JsonObject): RegisterFunctionOptions {
+function cancelRegistrationOptions(operator: OperatorSnapshot, metadata: JsonObject): IiiRegisterFunctionOptions {
   return {
     description: `Cancel active Metaflow Operator ${operatorKey(operator)}`,
     request_format: OPERATOR_CANCEL_REQUEST_FORMAT,
