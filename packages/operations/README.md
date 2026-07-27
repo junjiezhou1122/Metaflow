@@ -1,8 +1,8 @@
 # Metaflow Operations
 
 This package owns the transport-neutral Metaflow v1 operation catalog. It
-coordinates only public View, Transformation, Execution, Feedback, and Capture
-ports. It has no SQLite, HTTP, CLI, or MCP dependency.
+coordinates only public View, Transformation, Execution, Authoring, Feedback,
+and Capture ports. It has no SQLite, HTTP, CLI, or MCP dependency.
 
 Every invocation carries an authenticated principal supplied by the composition
 root, passes one operation authorization port, and emits started plus terminal
@@ -18,3 +18,10 @@ still records the terminal cancelled Run, attempt, Failure View, and trace.
 
 Transport adapters live in `packages/adapters/operation-surfaces` and may only
 parse or serialize requests around `OperationService.execute`.
+
+Natural-language authoring is projected as six ordinary operations:
+`view.authoring.request`, `propose`, `inspect`, `approve`, `reject`, and
+`apply`. Lifecycle references are exact. Operations authorizes every supplied
+Request, Proposal, Decision, Receipt, or source View independently; operation
+grants never grant View content access. The same operation schemas and
+structured errors are registered by the CLI, HTTP, and official MCP surfaces.

@@ -89,6 +89,7 @@ function adapterBoundaries(root: string): PackageBoundary[] {
         "@info/automation",
         "@info/capture",
         "@info/search",
+        "@info/authoring",
         "@info/operations",
       ]),
     }));
@@ -145,9 +146,14 @@ function configuredBoundaries(root: string): PackageBoundary[] {
       allowedInternalDependencies: new Set(["@info/view"]),
     },
     {
+      directory: join(root, "packages", "authoring"),
+      rule: "v1-authoring-manifest-depends-only-on-v1-contracts",
+      allowedInternalDependencies: new Set(["@info/view", "@info/transformation", "@info/execution", "@info/view-package"]),
+    },
+    {
       directory: join(root, "packages", "operations"),
       rule: "v1-operations-manifest-depends-only-on-v1-ports",
-      allowedInternalDependencies: new Set(["@info/view", "@info/transformation", "@info/execution", "@info/capture", "@info/search"]),
+      allowedInternalDependencies: new Set(["@info/view", "@info/transformation", "@info/execution", "@info/capture", "@info/search", "@info/authoring"]),
     },
     ...viewPackageBoundaries(root),
     ...adapterBoundaries(root),

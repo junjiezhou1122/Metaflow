@@ -14,6 +14,9 @@ importers:
       '@info/agent-runtime-adapter':
         specifier: workspace:*
         version: link:packages/adapters/agent-runtime
+      '@info/authoring':
+        specifier: workspace:*
+        version: link:packages/authoring
       '@info/automation':
         specifier: workspace:*
         version: link:packages/automation
@@ -120,6 +123,9 @@ importers:
       '@info/agent-runtime-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/agent-runtime
+      '@info/authoring':
+        specifier: workspace:*
+        version: link:../../packages/authoring
       '@info/automation':
         specifier: workspace:*
         version: link:../../packages/automation
@@ -183,6 +189,18 @@ importers:
       '@info/view':
         specifier: workspace:*
         version: link:../../packages/view
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../../packages/view-package
+      '@info/view-package-application-space':
+        specifier: workspace:*
+        version: link:../../view-packages/application-space
+      '@info/view-package-github-repository-summary':
+        specifier: workspace:*
+        version: link:../../view-packages/github-repository-summary
+      '@info/view-package-obsidian-document':
+        specifier: workspace:*
+        version: link:../../view-packages/obsidian-document
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -287,6 +305,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: ^0.22.1
         version: 0.22.1(zod@4.4.3)
+      '@info/authoring':
+        specifier: workspace:*
+        version: link:../../authoring
       '@info/execution':
         specifier: workspace:*
         version: link:../../execution
@@ -613,6 +634,24 @@ importers:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
 
+  packages/authoring:
+    dependencies:
+      '@info/execution':
+        specifier: workspace:*
+        version: link:../execution
+      '@info/transformation':
+        specifier: workspace:*
+        version: link:../transformation
+      '@info/view':
+        specifier: workspace:*
+        version: link:../view
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../view-package
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
   packages/automation:
     dependencies:
       '@info/transformation':
@@ -651,6 +690,9 @@ importers:
 
   packages/operations:
     dependencies:
+      '@info/authoring':
+        specifier: workspace:*
+        version: link:../authoring
       '@info/capture':
         specifier: workspace:*
         version: link:../capture

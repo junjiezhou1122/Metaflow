@@ -36,6 +36,14 @@ but there is no separate canonical Worker domain layer.
   narrower one-source committed search-projection profile. They contain no
   executable code or runtime connection. The package never executes a Renderer
   or Operator, reads a database, or creates another transport/runtime.
+- `packages/authoring`: the transport-neutral approval-gated natural-language
+  authoring coordinator. It owns strict Request, Proposal, Decision, and
+  Receipt View contracts, exact proposal digests, idempotent lifecycle
+  transitions, an untrusted schema-value Agent port, and observable authoring
+  events. It delegates concrete View, Transformation CAS/Execution, and exact
+  registered View Package application to their existing owners and never owns
+  storage, model SDKs, transports, executable code, or implementation
+  registration.
 - `view-packages/*`: declarative installable View Package bundles. A bundle may
   depend only on `view`, `transformation`, and `view-package`; concrete hosts
   resolve its Renderer descriptors and existing Operation/Transformation
@@ -202,7 +210,10 @@ but there is no separate canonical Worker domain layer.
   voice/screen/app context and a bounded current-screen image into one ACP
   conversation session per `conversation_id`; it injects no MCP servers, does
   not use AgentTask/AgentTaskOutput, and does not create Views. It must never
-  import `@info/core` or `@info/server`.
+  import `@info/core` or `@info/server`. Shared Operations separately compose
+  approval-gated authoring with the resident Agent runtime and the exact
+  registered built-in View Package catalog; this does not route Direct Assist
+  through Views or Automation.
 - `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
   shared Operations, validates graph/search/exact-View responses, and keeps a
   disposable Graphology projection plus Sigma camera/layout state in the
@@ -410,6 +421,22 @@ Operations.
   Transformation Repository CAS; prior Transformation and View revisions are
   never mutated. Every requested instruction, Operator configuration, output
   Schema, or selection change must be explicitly resolved.
+- Natural-language authoring is Request View -> Proposal View -> exact
+  Approval/Reject View -> Apply -> terminal Receipt View. The Agent returns
+  untrusted strict `schema_value` JSON and never commits a target. Approval
+  binds the exact Proposal revision and canonical artifact digest. Concrete
+  Views use View Repository validation, Transformations use repository CAS and
+  ordinary Execution, and View Packages may reference only an exact registered
+  catalog implementation whose manifest digest still matches. Generated
+  executable code, manifests, commands, entrypoints, and source blobs are
+  rejected until a separate sandbox and signing design exists.
+- Authoring candidates are bounded to 1 MB. A Request policy must equal or
+  strengthen the strictest exact source policy and its external-model decision
+  is passed to the Agent runtime. The canonical Agent bridge treats a runtime
+  as external-model capable unless its id is explicitly registered as local;
+  a prohibited Request fails before runtime submission. Concrete View relations
+  and revision bases must already be frozen exact Request sources; the applied
+  View retains the Request plus those sources in provenance.
 - `packages/adapters/transformation-sqlite` owns durable Transformation
   revision heads, exact historical reads, replay idempotency, and atomic
   compare-and-swap. `packages/execution` owns Feedback target/Run validation and

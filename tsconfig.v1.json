@@ -6,6 +6,7 @@
   "include": [
     "packages/view/**/*.ts",
     "packages/view-package/**/*.ts",
+    "packages/authoring/**/*.ts",
     "packages/transformation/**/*.ts",
     "packages/execution/**/*.ts",
     "packages/automation/**/*.ts",

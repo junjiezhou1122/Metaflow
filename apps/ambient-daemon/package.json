@@ -9,6 +9,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.37.0",
     "@info/agent-runtime-adapter": "workspace:*",
+    "@info/authoring": "workspace:*",
     "@info/automation": "workspace:*",
     "@info/automation-execution-adapter": "workspace:*",
     "@info/automation-sqlite": "workspace:*",
@@ -30,6 +31,10 @@
     "@info/transformation": "workspace:*",
     "@info/transformation-sqlite": "workspace:*",
     "@info/view": "workspace:*",
+    "@info/view-package": "workspace:*",
+    "@info/view-package-application-space": "workspace:*",
+    "@info/view-package-github-repository-summary": "workspace:*",
+    "@info/view-package-obsidian-document": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   }

@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.22.1",
+    "@info/authoring": "workspace:*",
     "@info/execution": "workspace:*"
   }
 }

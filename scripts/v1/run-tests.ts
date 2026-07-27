@@ -14,6 +14,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/automation-sqlite.test.ts",
   "tests/automation-trace.test.ts",
   "tests/automation-v1.test.ts",
+  "tests/authoring.test.ts",
   "tests/browser-automation-extension.test.ts",
   "tests/browser-automation-http.test.ts",
   "tests/browser-automation.test.ts",

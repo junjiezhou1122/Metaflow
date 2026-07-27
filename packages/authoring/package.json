@@ -1,5 +1,5 @@
 {
-  "name": "@info/operations",
+  "name": "@info/authoring",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,12 +7,10 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "@info/authoring": "workspace:*",
-    "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
-    "@info/search": "workspace:*",
     "@info/transformation": "workspace:*",
     "@info/view": "workspace:*",
-    "zod": "^3.25.76"
+    "@info/view-package": "workspace:*",
+    "zod": "^3.24.4"
   }
 }
