@@ -26,6 +26,7 @@ export const ACTIVE_V1_TEST_FILES = [
   "tests/failure-repair.test.ts",
   "tests/feedback-evolution.test.ts",
   "tests/macos-ambient-vertical.test.ts",
+  "tests/markdown-parser.test.ts",
   "tests/metaflow-v1-vertical.test.ts",
   "tests/operation-surfaces.test.ts",
   "tests/obsidian-capture.test.ts",

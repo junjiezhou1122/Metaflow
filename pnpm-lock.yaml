@@ -50,6 +50,9 @@ importers:
       '@info/macos-automation-adapter':
         specifier: workspace:*
         version: link:packages/adapters/macos-automation
+      '@info/markdown-parser-adapter':
+        specifier: workspace:*
+        version: link:packages/adapters/markdown-parser
       '@info/obsidian-capture-adapter':
         specifier: workspace:*
         version: link:packages/adapters/obsidian-capture
@@ -416,6 +419,33 @@ importers:
       '@info/view':
         specifier: workspace:*
         version: link:../../view
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
+
+  packages/adapters/markdown-parser:
+    dependencies:
+      '@info/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../view
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
+      mdast-util-to-string:
+        specifier: ^4.0.0
+        version: 4.0.0
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
       zod:
         specifier: ^3.24.4
         version: 3.25.76

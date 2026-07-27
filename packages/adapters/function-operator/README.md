@@ -15,5 +15,8 @@ new registration; it does not add a View Core type or fixed semantic taxonomy.
 
 `FunctionOperatorAdapter` emits `function.started`, `function.completed`,
 `function.failed`, and `function.cancelled` events through the Run trace.
+Implementations may throw `OperatorExecutionFailure` from `@info/execution` to
+return a typed terminal failure without losing the implementation error code;
+unexpected exceptions remain observable `operator_crashed` failures.
 `OperatorExecutionRouter` in `@info/execution` composes it with Agent, Workflow,
 model, human, and remote-service ports in one Runtime instance.

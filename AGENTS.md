@@ -166,6 +166,14 @@ but there is no separate canonical Worker domain layer.
   load, mount, abort, and disposal. Its JSON, safe Markdown, image, and bounded
   Schema-driven table implementations are explicit registrations, never a
   generic fallback; it does not read View Store/SQLite or fetch arbitrary URLs.
+- `packages/adapters/markdown-parser`: the deterministic first Parser Worker
+  implementation. It accepts one exact inline Markdown View through the ordinary
+  Function Operator/Execution path, enforces frozen byte and fragment bounds,
+  and returns one untrusted strict `metaflow.view.fragment-set@1` candidate with
+  exact source evidence and locations. CPU parsing runs in a terminable Worker
+  Thread so Execution timeout and cancellation remain enforceable. It never
+  commits Views, writes an index, computes embeddings, fetches references, or
+  runs on the Search query path.
 - `packages/adapters/browser-automation`: validates Browser events, performs
   cheap declarative matching, requests exact page/selection evidence through
   the Browser Capture port, and projects Delivery and interaction transport.
@@ -367,6 +375,11 @@ Operations.
   leaves the prior index intact and the same reserved run can resume; failed
   runs require a new explicit run id. Privacy Forget removes governed FTS rows
   in the same Core purge transaction.
+- Parser Workers are deterministic bounded Processors hosted behind the same
+  exact Operator execution contract. They return untrusted fragment-set
+  candidates; only Execution may validate and commit them. Search consumes
+  previously committed projections and must never invoke parsing, fetching,
+  OCR, transcription, enrichment, or embedding as a query-time side effect.
 - A Transformation freezes exact inputs, Operator, policy, output contract, and
   budget before its Run starts. Alternatives are observable attempts, never
   silent fallbacks.
