@@ -24,6 +24,8 @@
     "@info/scheduler-automation-adapter": "workspace:*",
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
+    "@info/function-operator-adapter": "workspace:*",
+    "@info/markdown-parser-adapter": "workspace:*",
     "@info/storage-sqlite": "workspace:*",
     "@info/transformation": "workspace:*",
     "@info/transformation-sqlite": "workspace:*",

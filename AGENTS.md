@@ -29,10 +29,13 @@ but there is no separate canonical Worker domain layer.
   `ViewCommitted` event/outbox ports and post-commit dispatcher.
 - `packages/view-package`: the fail-fast authoring and discovery module for a
   coherent Schema family. It validates Representation and Materialization
-  profiles, human Renderer descriptors, Agent Methods that reference existing
-  Operations or exact Transformations, evolution edges, catalog registration,
-  and conformance fixtures. It never executes a Renderer or Operator, reads a
-  database, or creates another transport/runtime.
+  profiles, exact Processor and Parser descriptors, human Renderer descriptors,
+  Agent Methods that reference existing Operations or exact Transformations,
+  evolution edges, catalog registration, and conformance fixtures. Processor
+  descriptors expose `View[] -> View` formation; Parser descriptors expose the
+  narrower one-source committed search-projection profile. They contain no
+  executable code or runtime connection. The package never executes a Renderer
+  or Operator, reads a database, or creates another transport/runtime.
 - `view-packages/*`: declarative installable View Package bundles. A bundle may
   depend only on `view`, `transformation`, and `view-package`; concrete hosts
   resolve its Renderer descriptors and existing Operation/Transformation

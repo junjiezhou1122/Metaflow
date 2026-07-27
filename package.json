@@ -41,6 +41,7 @@
     "test:screenpipe-capture": "node --experimental-sqlite --import tsx --test tests/screenpipe-capture.test.ts",
     "test:obsidian-capture": "node --experimental-sqlite --import tsx --test tests/obsidian-capture.test.ts",
     "test:codex-history-capture": "node --experimental-sqlite --import tsx --test tests/codex-history-capture.test.ts",
+    "test:view-package": "node --experimental-sqlite --import tsx --test tests/view-package.test.ts tests/view-graph-project.test.ts",
     "test:web-view-renderers": "node --import tsx --test packages/adapters/web-view-renderers/web-view-renderers.test.ts tests/view-package.test.ts",
     "test:connector-kit": "node --experimental-sqlite --import tsx --test tests/connector-kit.test.ts tests/capture-runtime.test.ts",
     "test:operation-surfaces": "node --experimental-sqlite --import tsx --test tests/operation-surfaces.test.ts",

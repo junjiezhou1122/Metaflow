@@ -41,6 +41,25 @@ export const githubRepositorySummaryViewPackage = defineViewPackage({
     representation_kinds: ["agent_output"],
     priority: 100,
   }],
+  processors: [{
+    id: "processor.github.repository-summary",
+    version: 1,
+    inputs: [
+      {
+        role: "current_page",
+        schemas: [{ name: "capture.browser.page_snapshot", version: 1 }],
+        required: true,
+      },
+      {
+        role: "current_selection",
+        schemas: [{ name: "capture.browser.selection", version: 1 }],
+        required: false,
+      },
+    ],
+    output_schema: githubRepositorySummarySchemaKey,
+    transformation: { transformation_id: "transformation.github.repository_summary", revision: 1 },
+    priority: 100,
+  }],
   methods: [
     {
       id: "inspect",

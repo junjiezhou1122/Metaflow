@@ -1,0 +1,12 @@
+{
+  "name": "@info/view-package-obsidian-document",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/view-package": "workspace:*"
+  }
+}

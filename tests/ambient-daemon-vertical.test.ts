@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createAmbientDaemonComposition } from "../apps/ambient-daemon/composition.ts";
+import { exactViewRef } from "@info/view";
 import {
   CodexHistoryCaptureConnector,
   codexHistorySourceConnection,
@@ -139,6 +140,14 @@ test("Ambient composition persists exact Transformation owners and projects cano
       revision: 1,
     });
     assert.equal(transformation?.name, "GitHub repository summary");
+    const parserTransformation = await first.transformations.get({
+      transformation_id: "transformation.parser.markdown",
+      revision: 1,
+    });
+    assert.equal(parserTransformation?.operator.reference.kind, "function");
+    assert.equal(parserTransformation?.operator.reference.kind === "function"
+      ? parserTransformation.operator.reference.function_id
+      : undefined, "parser.markdown");
     const catalog = await request(first.handler, "POST", "/metaflow/v1/operations/catalog.list", {});
     assert.equal(catalog.status, 200);
     assert.equal(catalog.body.ok, true);
@@ -230,6 +239,28 @@ test("Ambient composition registers and pulls explicit Codex and Obsidian Source
       revisions: "latest",
       limit: 20,
     })).length, 1);
+    const source = (await composition.views.query({
+      schema_name: "capture.obsidian.document",
+      revisions: "latest",
+      limit: 20,
+    }))[0]!;
+    const parserTransformation = await composition.transformations.get({
+      transformation_id: "transformation.parser.markdown",
+      revision: 1,
+    });
+    assert.ok(parserTransformation?.policy);
+    const parsed = await composition.execution.execute({
+      run_id: "run:ambient:obsidian-markdown-parser",
+      correlation_id: "correlation:ambient:obsidian-markdown-parser",
+      transformation: parserTransformation,
+      access_policy: parserTransformation.policy,
+      access_use: "local_execution",
+      invocation_inputs: [{ role: "source", views: [exactViewRef(source)] }],
+      idempotency_key: "ambient:obsidian-markdown-parser",
+    });
+    assert.equal(parsed.run.status, "succeeded");
+    assert.equal(parsed.outputs[0]?.schema.name, "metaflow.view.fragment-set");
+    assert.deepEqual(parsed.outputs[0]?.provenance.inputs, [exactViewRef(source)]);
     await assert.rejects(
       composition.captureSources.pull("obsidian:not-configured"),
       /not configured/,

@@ -6,12 +6,19 @@ import {
   defineViewPackage,
   runViewPackageConformance,
 } from "@info/view-package";
+import { exactTransformationRef } from "@info/transformation";
+import { obsidianMarkdownParserTransformation } from "../apps/ambient-daemon/definitions.ts";
 import {
   githubRepositorySummaryFixtures,
   githubRepositorySummarySchema,
   githubRepositorySummarySchemaKey,
   githubRepositorySummaryViewPackage,
 } from "../view-packages/github-repository-summary/index.ts";
+import {
+  obsidianDocumentFixtures,
+  obsidianDocumentSchemaKey,
+  obsidianDocumentViewPackage,
+} from "../view-packages/obsidian-document/index.ts";
 
 const environment = {
   operations: new Set(["view.get", "view.traverse", "run.execute"]),
@@ -21,8 +28,24 @@ const environment = {
     {
       ref: { transformation_id: "transformation.github.repository_summary", revision: 1 },
       output_schema: githubRepositorySummarySchema,
+      input_roles: [
+        { role: "current_page", required: true, schemas: [{ name: "capture.browser.page_snapshot", version: 1 }] },
+        { role: "current_selection", required: false, schemas: [{ name: "capture.browser.selection", version: 1 }] },
+      ],
     },
   ]]),
+};
+
+const markdownTransformation = {
+  ref: exactTransformationRef(obsidianMarkdownParserTransformation),
+  output_schema: obsidianMarkdownParserTransformation.output.schema,
+  input_roles: [{ role: "source", required: true, schemas: [obsidianDocumentSchemaKey] }],
+} as const;
+
+const obsidianEnvironment = {
+  operations: new Set(["view.get", "view.search"]),
+  renderers: new Set<string>(),
+  transformations: new Map([["transformation.parser.markdown@1", markdownTransformation]]),
 };
 
 test("one View Package binds Schema, Materialization, human Renderer, and Agent Methods", () => {
@@ -39,6 +62,8 @@ test("one View Package binds Schema, Materialization, human Renderer, and Agent 
     fixtures: 1,
     methods: 3,
     renderers: 1,
+    parsers: 0,
+    processors: 1,
     evolutions: 0,
   });
   assert.equal(githubRepositorySummaryViewPackage.schema(githubRepositorySummarySchemaKey).mode, "freeform");
@@ -52,12 +77,130 @@ test("View Package catalog discovers Schema owners and rejects duplicate registr
   const catalog = new ViewPackageCatalog();
   catalog.register(githubRepositorySummaryViewPackage);
 
-  assert.equal(catalog.get("view-package.github.repository-summary", 1), githubRepositorySummaryViewPackage);
-  assert.equal(catalog.latest("view-package.github.repository-summary"), githubRepositorySummaryViewPackage);
-  assert.deepEqual(catalog.forSchema(githubRepositorySummarySchemaKey), [githubRepositorySummaryViewPackage]);
+  assert.deepEqual(catalog.get("view-package.github.repository-summary", 1).manifest,
+    githubRepositorySummaryViewPackage.manifest);
+  assert.deepEqual(catalog.latest("view-package.github.repository-summary")?.manifest,
+    githubRepositorySummaryViewPackage.manifest);
+  assert.deepEqual(catalog.forSchema(githubRepositorySummarySchemaKey).map(item => item.manifest),
+    [githubRepositorySummaryViewPackage.manifest]);
   assert.throws(
     () => catalog.register(githubRepositorySummaryViewPackage),
     (error: unknown) => error instanceof ViewPackageError && error.code === "duplicate_package",
+  );
+});
+
+test("View Package definitions are deeply immutable and catalog registration rejects conflicting Parser identities", () => {
+  assert.throws(() => {
+    (obsidianDocumentViewPackage.manifest.parsers[0]!.transformation as { revision: number }).revision = 2;
+  }, TypeError);
+
+  const catalog = new ViewPackageCatalog();
+  catalog.register(obsidianDocumentViewPackage);
+  const conflict = defineViewPackage({
+    ...obsidianDocumentViewPackage.manifest,
+    id: "view-package.obsidian.document.parser-conflict",
+    parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({
+      ...parser,
+      transformation: { ...parser.transformation, revision: parser.transformation.revision + 1 },
+    })),
+  });
+  assert.throws(
+    () => catalog.register(conflict),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "duplicate_parser",
+  );
+  assert.equal(catalog.list().length, 1);
+});
+
+test("Parser discovery matches MIME essence and resolves one exact Transformation descriptor", () => {
+  const report = runViewPackageConformance({
+    package: obsidianDocumentViewPackage,
+    fixtures: obsidianDocumentFixtures,
+    ...obsidianEnvironment,
+  });
+  assert.deepEqual(report, {
+    package_id: "view-package.obsidian.document",
+    package_version: 1,
+    schemas: 1,
+    fixtures: 1,
+    methods: 2,
+    renderers: 0,
+    parsers: 1,
+    processors: 0,
+    evolutions: 0,
+  });
+
+  const catalog = new ViewPackageCatalog();
+  catalog.register(obsidianDocumentViewPackage);
+  const parser = catalog.resolveParser(obsidianDocumentSchemaKey, {
+    form: "inline",
+    kind: "obsidian_markdown_document",
+    media_type: "Text/Markdown; Charset=UTF-8",
+    value: { markdown: "# Exact source" },
+    metadata: {},
+  });
+  assert.equal(parser.id, "parser.markdown");
+  assert.deepEqual(parser.transformation, { transformation_id: "transformation.parser.markdown", revision: 1 });
+  assert.deepEqual(obsidianDocumentViewPackage.parsers(obsidianDocumentSchemaKey), [parser]);
+  assert.deepEqual(githubRepositorySummaryViewPackage.processors(githubRepositorySummarySchemaKey),
+    githubRepositorySummaryViewPackage.manifest.processors);
+});
+
+test("Parser discovery fails explicitly when no parser matches or top priority is ambiguous", () => {
+  const catalog = new ViewPackageCatalog();
+  catalog.register(obsidianDocumentViewPackage);
+  const malformedRepresentation = {
+    form: "inline" as const,
+    kind: "obsidian_markdown_document",
+    media_type: "; input=bad",
+    value: {},
+    metadata: {},
+  };
+  assert.throws(
+    () => obsidianDocumentViewPackage.parsers(obsidianDocumentSchemaKey, malformedRepresentation),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_representation_media_type",
+  );
+  assert.throws(
+    () => catalog.resolveParser(obsidianDocumentSchemaKey, malformedRepresentation),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_representation_media_type",
+  );
+  assert.throws(
+    () => catalog.resolveParser(obsidianDocumentSchemaKey, {
+      form: "inline",
+      kind: "obsidian_markdown_document",
+      media_type: "application/pdf",
+      value: {},
+      metadata: {},
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "missing_parser",
+  );
+
+  const preferredCatalog = new ViewPackageCatalog();
+  preferredCatalog.register(obsidianDocumentViewPackage);
+  preferredCatalog.register(defineViewPackage({
+    ...obsidianDocumentViewPackage.manifest,
+    id: "view-package.obsidian.document.preferred-parser",
+    parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({
+      ...parser,
+      id: "parser.markdown.preferred",
+      priority: parser.priority + 100,
+    })),
+  }));
+  assert.equal(
+    preferredCatalog.resolveParser(obsidianDocumentSchemaKey, obsidianDocumentFixtures[0].representation).id,
+    "parser.markdown.preferred",
+  );
+
+  catalog.register(defineViewPackage({
+    ...obsidianDocumentViewPackage.manifest,
+    id: "view-package.obsidian.document.alternative-parser",
+    parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({
+      ...parser,
+      id: "parser.markdown.alternative",
+    })),
+  }));
+  assert.throws(
+    () => catalog.resolveParser(obsidianDocumentSchemaKey, obsidianDocumentFixtures[0].representation),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "ambiguous_parser",
   );
 });
 
@@ -82,10 +225,176 @@ test("View Package conformance fails on unavailable implementations and output d
         {
           ref: { transformation_id: "transformation.github.repository_summary", revision: 1 },
           output_schema: { name: "summary.github.repository", version: 2 },
+          input_roles: [
+            { role: "current_page", required: true, schemas: [{ name: "capture.browser.page_snapshot", version: 1 }] },
+            { role: "current_selection", required: false, schemas: [{ name: "capture.browser.selection", version: 1 }] },
+          ],
         },
       ]]),
     }),
     (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_output_mismatch",
+  );
+});
+
+test("Parser conformance rejects incomplete fixture coverage and Transformation contract drift", () => {
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: [{
+        ...obsidianDocumentFixtures[0],
+        representation: { ...obsidianDocumentFixtures[0].representation, media_type: "; fixture=bad" },
+      }],
+      ...obsidianEnvironment,
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_fixture",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: [],
+      ...obsidianEnvironment,
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "missing_parser_fixture",
+  );
+
+  assert.throws(
+    () => defineViewPackage({
+      ...obsidianDocumentViewPackage.manifest,
+      id: "view-package.obsidian.document.profile-drift",
+      parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({
+        ...parser,
+        accepts: { ...parser.accepts, media_types: ["application/pdf"] },
+      })),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
+  );
+
+  const uncoveredFixture = defineViewPackage({
+    ...obsidianDocumentViewPackage.manifest,
+    id: "view-package.obsidian.document.uncovered-fixture",
+    representations: obsidianDocumentViewPackage.manifest.representations.map(profile => ({
+      ...profile,
+      kinds: [...profile.kinds, "obsidian_markdown_note"],
+    })),
+    parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({
+      ...parser,
+      accepts: {
+        ...parser.accepts,
+        representation_kinds: [...parser.accepts.representation_kinds, "obsidian_markdown_note"],
+      },
+    })),
+  });
+  assert.throws(
+    () => runViewPackageConformance({
+      package: uncoveredFixture,
+      fixtures: obsidianDocumentFixtures,
+      ...obsidianEnvironment,
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "missing_parser_fixture",
+  );
+
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: obsidianDocumentFixtures,
+      ...obsidianEnvironment,
+      transformations: new Map(),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "missing_transformation",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: obsidianDocumentFixtures,
+      ...obsidianEnvironment,
+      transformations: new Map([["transformation.parser.markdown@1", {
+        ...markdownTransformation,
+        output_schema: { name: "metaflow.view.fragment-set", version: 2 },
+      }]]),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_output_mismatch",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: obsidianDocumentFixtures,
+      ...obsidianEnvironment,
+      transformations: new Map([["transformation.parser.markdown@1", {
+        ...markdownTransformation,
+        ref: { transformation_id: "transformation.parser.markdown", revision: 99 },
+      }]]),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_reference_mismatch",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: obsidianDocumentFixtures,
+      ...obsidianEnvironment,
+      transformations: new Map([["transformation.parser.markdown@1", {
+        ...markdownTransformation,
+        input_roles: [{ role: "documents", required: true, schemas: [obsidianDocumentSchemaKey] }],
+      }]]),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_input_mismatch",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: obsidianDocumentViewPackage,
+      fixtures: obsidianDocumentFixtures,
+      ...obsidianEnvironment,
+      transformations: new Map([["transformation.parser.markdown@1", {
+        ...markdownTransformation,
+        input_roles: [{
+          role: "source",
+          required: true,
+          schemas: [{ name: "capture.obsidian.attachment", version: 1 }],
+        }],
+      }]]),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_input_mismatch",
+  );
+});
+
+test("Processor conformance rejects role drift from the exact Transformation", () => {
+  assert.throws(
+    () => runViewPackageConformance({
+      package: githubRepositorySummaryViewPackage,
+      fixtures: githubRepositorySummaryFixtures,
+      ...environment,
+      transformations: new Map([["transformation.github.repository_summary@1", {
+        ...environment.transformations.get("transformation.github.repository_summary@1")!,
+        input_roles: [{
+          role: "current_page",
+          required: true,
+          schemas: [{ name: "capture.browser.page_snapshot", version: 1 }],
+        }],
+      }]]),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_input_mismatch",
+  );
+  assert.throws(
+    () => runViewPackageConformance({
+      package: githubRepositorySummaryViewPackage,
+      fixtures: githubRepositorySummaryFixtures,
+      ...environment,
+      transformations: new Map([["transformation.github.repository_summary@1", {
+        ...environment.transformations.get("transformation.github.repository_summary@1")!,
+        input_roles: [
+          {
+            role: "current_page",
+            required: true,
+            schemas: [{ name: "capture.browser.navigation", version: 1 }],
+          },
+          {
+            role: "current_selection",
+            required: false,
+            schemas: [{ name: "capture.browser.selection", version: 1 }],
+          },
+        ],
+      }]]),
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "transformation_input_mismatch",
   );
 });
 
@@ -98,6 +407,31 @@ test("View Package manifest and strict fixtures fail fast", () => {
     }),
     (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
   );
+
+  for (const invalidMediaType of ["; profile=bad", "text", "/markdown", "text/"]) {
+    assert.throws(
+      () => defineViewPackage({
+        ...obsidianDocumentViewPackage.manifest,
+        id: `view-package.invalid-media.${invalidMediaType.length}`,
+        representations: obsidianDocumentViewPackage.manifest.representations.map(profile => ({
+          ...profile,
+          media_types: [invalidMediaType],
+        })),
+      }),
+      (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
+    );
+    assert.throws(
+      () => defineViewPackage({
+        ...obsidianDocumentViewPackage.manifest,
+        id: `view-package.invalid-parser-media.${invalidMediaType.length}`,
+        parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({
+          ...parser,
+          accepts: { ...parser.accepts, media_types: [invalidMediaType] },
+        })),
+      }),
+      (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
+    );
+  }
 
   assert.throws(
     () => defineViewPackage({
@@ -121,6 +455,30 @@ test("View Package manifest and strict fixtures fail fast", () => {
         media_types: ["application/json"],
         locations: ["inline"],
       }],
+    }),
+    (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
+  );
+
+  for (const forbidden of [
+    { executable: "export default () => null" },
+    { entrypoint: "./worker.ts" },
+    { url: "https://worker.example.test" },
+    { queue: "metaflow-parser-v1" },
+  ]) {
+    assert.throws(
+      () => defineViewPackage({
+        ...obsidianDocumentViewPackage.manifest,
+        id: `view-package.forbidden.${Object.keys(forbidden)[0]}`,
+        parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({ ...parser, ...forbidden })),
+      }),
+      (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
+    );
+  }
+  assert.throws(
+    () => defineViewPackage({
+      ...obsidianDocumentViewPackage.manifest,
+      id: "view-package.parser-unknown-abi",
+      parsers: obsidianDocumentViewPackage.manifest.parsers.map(parser => ({ ...parser, abi_version: 2 })),
     }),
     (error: unknown) => error instanceof ViewPackageError && error.code === "invalid_manifest",
   );

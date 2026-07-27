@@ -144,12 +144,18 @@ importers:
       '@info/execution':
         specifier: workspace:*
         version: link:../../packages/execution
+      '@info/function-operator-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/function-operator
       '@info/inbox-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/inbox-automation
       '@info/macos-automation-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/macos-automation
+      '@info/markdown-parser-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/markdown-parser
       '@info/obsidian-capture-adapter':
         specifier: workspace:*
         version: link:../../packages/adapters/obsidian-capture
@@ -713,6 +719,12 @@ importers:
         version: link:../../packages/view-package
 
   view-packages/github-repository-summary:
+    dependencies:
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../../packages/view-package
+
+  view-packages/obsidian-document:
     dependencies:
       '@info/view-package':
         specifier: workspace:*

@@ -18,6 +18,11 @@ import {
   parseViewAccessPolicySnapshot,
 } from "@info/execution";
 import { AgentExecutionAdapter, type AgentRuntimeAdapter } from "@info/agent-runtime-adapter";
+import { FunctionOperatorAdapter } from "@info/function-operator-adapter";
+import {
+  MARKDOWN_PARSER_FUNCTION,
+  executeMarkdownParser,
+} from "@info/markdown-parser-adapter";
 import {
   AutomationExecutionCommandHandler,
   AutomationExecutionTarget,
@@ -81,6 +86,7 @@ import {
   dailySummaryTransformation,
   macVoiceAssistAutomationDraft,
   macVoiceAssistTransformation,
+  obsidianMarkdownParserTransformation,
 } from "./definitions.js";
 import { createAmbientV1HttpHandler } from "./http-handler.js";
 import { createAmbientMcpHttpHandler } from "./mcp-handler.js";
@@ -131,6 +137,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
   const schedulerCursors = new SqliteScheduleCursorRepository(automationPath);
   try {
     await seedTransformation(transformations, githubSummaryTransformation, "seed:transformation.github.repository_summary@1");
+    await seedTransformation(transformations, obsidianMarkdownParserTransformation, "seed:transformation.parser.markdown@1");
     await seedTransformation(transformations, macVoiceAssistTransformation, "seed:transformation.macos.voice_assist@1");
     await seedTransformation(transformations, dailySummaryTransformation, "seed:transformation.ambient.daily_summary@1");
     await seedAutomation(views, githubSummaryAutomationDraft, "seed:automation.browser.github_repository_summary@1");
@@ -146,6 +153,13 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     });
     const operators = new OperatorExecutionRouter([
       { kind: "agent", port: new AgentOperatorExecutionBridge(agent, { now: () => now().toISOString() }) },
+      {
+        kind: "function",
+        port: new FunctionOperatorAdapter([{
+          reference: MARKDOWN_PARSER_FUNCTION,
+          execute: executeMarkdownParser,
+        }]),
+      },
     ]);
     const execution = new ExecutionRuntime(
       views,

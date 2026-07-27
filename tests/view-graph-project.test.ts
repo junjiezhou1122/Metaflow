@@ -54,6 +54,8 @@ test("Application Space View Package is strict and binds ordinary read Operation
     fixtures: 1,
     methods: 2,
     renderers: 1,
+    parsers: 0,
+    processors: 0,
     evolutions: 0,
   });
   assert.equal(applicationSpaceViewPackage.schema({ name: "application.space", version: 1 }).mode, "strict");
