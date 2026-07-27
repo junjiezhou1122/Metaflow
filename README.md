@@ -103,8 +103,11 @@ remote or credential-bearing endpoint configuration fails closed. The Chrome
 extension restricts local storage to trusted extension contexts before it
 migrates, reads, or writes the token; unsupported isolation clears the legacy
 token and refuses credential use, while content scripts receive only projected
-non-secret settings from the background. Never place the token in Agent prompts
-or skills. Set
+non-secret settings from the background. Runtime messages use one fail-closed
+sender policy: page content scripts may submit only declared capture and
+non-secret interactions, while exact View, query, delivery, task, failure, and
+settings paths require a trusted extension page before any credential or local
+data is touched. Never place the token in Agent prompts or skills. Set
 `METAFLOW_DATA_DIR` to change the SQLite data directory.
 
 Health and exact View reads:

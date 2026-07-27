@@ -1,5 +1,9 @@
 import { handleInfoCaptureMessage, installInfoCaptureDefaults, startInfoCapture } from "./lib/info-capture";
 import { ensureTrustedOperationStorageAccess } from "./lib/operation-auth-storage";
+import {
+  TRUSTED_BACKGROUND_RUNTIME_SENDER,
+  authorizeRuntimeMessageSender,
+} from "./lib/runtime-sender-policy";
 
 let pendingSidepanelPrompt: any = null;
 const RECENT_CAPTION_GAPS_KEY = "language.recent_caption_gaps";
@@ -51,7 +55,7 @@ type SavedCaptionVideo = {
   segments: CaptionGap[];
 };
 
-const backgroundCaptionSender: chrome.runtime.MessageSender = {};
+const backgroundCaptionSender = TRUSTED_BACKGROUND_RUNTIME_SENDER;
 
 async function injectContentScript(tabId: number) {
   await chrome.scripting.executeScript({
@@ -268,6 +272,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    const authorization = authorizeRuntimeMessageSender(message, sender);
+    if (!authorization.ok) {
+      sendResponse(authorization);
+      return;
+    }
     if (message?.type === "selection-actions.get") {
       await ensureTrustedOperationStorageAccess();
       const stored = await chrome.storage.local.get("selectionActions");

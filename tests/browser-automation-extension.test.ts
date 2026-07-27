@@ -28,7 +28,17 @@ import {
   writeOperationAuthToken,
   type OperationAuthStorageArea,
 } from "../apps/chrome-acp/packages/chrome-extension/src/lib/operation-auth-storage.ts";
-import { publicInfoSettings } from "../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture.ts";
+import {
+  handleInfoCaptureMessage,
+  publicInfoSettings,
+} from "../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture.ts";
+import {
+  CONTENT_SCRIPT_RUNTIME_MESSAGE_TYPES,
+  PRIVILEGED_RUNTIME_MESSAGE_TYPES,
+  TRUSTED_BACKGROUND_RUNTIME_SENDER,
+  authorizeRuntimeMessageSender,
+  projectRuntimeMessageResult,
+} from "../apps/chrome-acp/packages/chrome-extension/src/lib/runtime-sender-policy.ts";
 
 class FakeLocalStorage implements OperationAuthStorageArea {
   readonly values: Record<string, unknown>;
@@ -124,6 +134,271 @@ test("Chrome extension clears legacy Operation tokens and fails closed when isol
     readOperationAuthToken(unsupported),
     (error: unknown) => error instanceof OperationAuthStorageIsolationError,
   );
+});
+
+test("Chrome runtime sender policy covers every Info handler branch and grants content scripts only declared capture interactions", () => {
+  const source = readFileSync(
+    new URL("../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture.ts", import.meta.url),
+    "utf8",
+  );
+  const handledTypes = [...source.matchAll(/message\?\.type === "([^"]+)"/gu)].map(match => match[1]);
+  assert.deepEqual(
+    [...new Set(handledTypes)].sort(),
+    [...CONTENT_SCRIPT_RUNTIME_MESSAGE_TYPES, ...PRIVILEGED_RUNTIME_MESSAGE_TYPES]
+      .filter(type => ![
+        "selection-actions.get",
+        "language.caption_gap.recent",
+        "language.caption_gap.sync",
+        "sidepanel.explain.selection",
+        "sidepanel.run.selection_action",
+        "sidepanel.consume-pending-prompt",
+      ].includes(type))
+      .sort(),
+  );
+
+  const environment = {
+    extensionId: "metaflow-extension-id",
+    extensionRoot: "chrome-extension://metaflow-extension-id/",
+  };
+  const contentSender = {
+    id: environment.extensionId,
+    url: "https://hostile.example/frame",
+    tab: { id: 41 },
+  } as chrome.runtime.MessageSender;
+  const trustedSender = {
+    id: environment.extensionId,
+    url: `${environment.extensionRoot}sidepanel.html`,
+  } as chrome.runtime.MessageSender;
+
+  for (const type of CONTENT_SCRIPT_RUNTIME_MESSAGE_TYPES) {
+    assert.deepEqual(authorizeRuntimeMessageSender({ type }, contentSender, environment), {
+      ok: true,
+      principal: "content-script",
+    });
+  }
+  for (const type of PRIVILEGED_RUNTIME_MESSAGE_TYPES) {
+    assert.equal(authorizeRuntimeMessageSender({ type }, contentSender, environment).ok, false, type);
+    assert.deepEqual(authorizeRuntimeMessageSender({ type }, trustedSender, environment), {
+      ok: true,
+      principal: "trusted-extension-page",
+    });
+  }
+  assert.equal(authorizeRuntimeMessageSender({ type: "unknown-message" }, trustedSender, environment).ok, false);
+  assert.deepEqual(authorizeRuntimeMessageSender(
+    { type: "youtube-observation" },
+    { ...TRUSTED_BACKGROUND_RUNTIME_SENDER, tab: { id: 41 } } as chrome.runtime.MessageSender,
+    environment,
+  ), { ok: true, principal: "trusted-background" });
+
+  const contentAuthorization = authorizeRuntimeMessageSender(
+    { type: "context.capture.writing_input" },
+    contentSender,
+    environment,
+  );
+  assert.equal(contentAuthorization.ok, true);
+  if (!contentAuthorization.ok) throw new Error("content authorization unexpectedly failed");
+  assert.deepEqual(projectRuntimeMessageResult(contentAuthorization, {
+    ok: true,
+    status: 200,
+    record_id: "private-record-id",
+    written_views: ["view:private"],
+    views: [{ content: { secret: true } }],
+    body: { private: true },
+  }), { ok: true, status: 200 });
+  assert.deepEqual(projectRuntimeMessageResult(
+    authorizeRuntimeMessageSender({ type: "get-ambient-exact-view" }, trustedSender, environment) as {
+      ok: true;
+      principal: "trusted-extension-page";
+    },
+    { ok: true, view: { content: { private: true } } },
+  ), { ok: true, view: { content: { private: true } } });
+});
+
+test("hostile runtime senders cannot reach any privileged Info path or expose the Operation token", async () => {
+  const previousChrome = Reflect.get(globalThis, "chrome");
+  const previousFetch = globalThis.fetch;
+  let storageCalls = 0;
+  let networkCalls = 0;
+  const forbiddenStorage = async () => {
+    storageCalls += 1;
+    throw new Error("privileged storage must not be reached");
+  };
+  Reflect.set(globalThis, "chrome", {
+    runtime: {
+      id: "metaflow-extension-id",
+      getURL: (path: string) => `chrome-extension://metaflow-extension-id/${path}`,
+    },
+    storage: {
+      local: { get: forbiddenStorage, set: forbiddenStorage, remove: forbiddenStorage },
+      session: { get: forbiddenStorage, set: forbiddenStorage },
+    },
+  });
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("network must not be reached");
+  };
+
+  try {
+    const hostileSender = {
+      id: "metaflow-extension-id",
+      url: "https://hostile.example/frame",
+      tab: { id: 41 },
+    } as chrome.runtime.MessageSender;
+    for (const type of PRIVILEGED_RUNTIME_MESSAGE_TYPES.filter(type => ![
+      "language.caption_gap.sync",
+      "sidepanel.consume-pending-prompt",
+    ].includes(type))) {
+      const response = await handleInfoCaptureMessage({
+        type,
+        view_id: "view:private",
+        revision: 1,
+        settings: { operationAuthToken: "attacker-controlled-operation-token" },
+      }, hostileSender);
+      assert.deepEqual(response, {
+        ok: false,
+        code: "runtime_sender_forbidden",
+        error: "The runtime sender is not authorized for this message type",
+      }, type);
+    }
+    assert.equal(storageCalls, 0);
+    assert.equal(networkCalls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousChrome === undefined) Reflect.deleteProperty(globalThis, "chrome");
+    else Reflect.set(globalThis, "chrome", previousChrome);
+  }
+});
+
+test("trusted extension pages retain nonce-proved exact View access", async () => {
+  const previousChrome = Reflect.get(globalThis, "chrome");
+  const previousFetch = globalThis.fetch;
+  const token = "trusted-extension-operation-token-32-bytes";
+  const endpoint = "http://127.0.0.1:3111";
+  const authorizations: Array<string | null> = [];
+  let requests = 0;
+  const localStorage = {
+    async setAccessLevel(options: { accessLevel: string }) {
+      assert.equal(options.accessLevel, "TRUSTED_CONTEXTS");
+    },
+    async get() {
+      return { endpoint, operationAuthToken: token };
+    },
+    async set() {},
+    async remove() {},
+  };
+  Reflect.set(globalThis, "chrome", {
+    runtime: {
+      id: "metaflow-extension-id",
+      getURL: (path: string) => `chrome-extension://metaflow-extension-id/${path}`,
+    },
+    storage: {
+      local: localStorage,
+      session: { async get() { return {}; } },
+    },
+  });
+  globalThis.fetch = async (input, init) => {
+    requests += 1;
+    authorizations.push(new Headers(init?.headers).get("authorization"));
+    const url = new URL(String(input));
+    if (url.pathname === "/metaflow/v1/doctor") {
+      const challenge = url.searchParams.get("challenge") ?? "";
+      return new Response(JSON.stringify({
+        ok: true,
+        protocol: BROWSER_OPERATION_WIRE_CONTRACT.protocol,
+        server: { ...BROWSER_OPERATION_WIRE_CONTRACT.server, origin: url.origin },
+        authentication: {
+          ...BROWSER_OPERATION_WIRE_CONTRACT.authentication,
+          challenge,
+          proof: doctorAuthenticationProof(token, challenge, url.origin),
+        },
+        catalog: BROWSER_OPERATION_WIRE_CONTRACT.catalog,
+        endpoints: BROWSER_OPERATION_WIRE_CONTRACT.endpoints,
+      }), { status: 200, headers: { "x-metaflow-protocol-version": "1" } });
+    }
+    assert.equal(url.pathname, "/context/v1/views/view%3Aprivate");
+    assert.equal(url.searchParams.get("revision"), "1");
+    return new Response(JSON.stringify({
+      ok: true,
+      view: { id: "view:private", revision: 1, content: { private: true } },
+    }), { status: 200 });
+  };
+
+  try {
+    const response = await handleInfoCaptureMessage({
+      type: "get-ambient-exact-view",
+      view_id: "view:private",
+      revision: 1,
+    }, {
+      id: "metaflow-extension-id",
+      url: "chrome-extension://metaflow-extension-id/sidepanel.html",
+    });
+    assert.deepEqual(response, {
+      ok: true,
+      status: 200,
+      endpoint: "http://127.0.0.1:3111/context/v1/views/view%3Aprivate?revision=1",
+      view: { id: "view:private", revision: 1, content: { private: true } },
+    });
+    assert.equal(requests, 2);
+    assert.deepEqual(authorizations, [null, `Bearer ${token}`]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousChrome === undefined) Reflect.deleteProperty(globalThis, "chrome");
+    else Reflect.set(globalThis, "chrome", previousChrome);
+  }
+});
+
+test("content writing capture does not start privileged assist generation or exact View reads", async () => {
+  const previousChrome = Reflect.get(globalThis, "chrome");
+  const previousFetch = globalThis.fetch;
+  const requestedPaths: string[] = [];
+  const localStorage = {
+    async setAccessLevel() {},
+    async get() { return { endpoint: "http://127.0.0.1:3111" }; },
+    async set() {},
+    async remove() {},
+  };
+  Reflect.set(globalThis, "chrome", {
+    runtime: {
+      id: "metaflow-extension-id",
+      getURL: (path: string) => `chrome-extension://metaflow-extension-id/${path}`,
+    },
+    storage: {
+      local: localStorage,
+      session: { async get() { return {}; } },
+    },
+  });
+  globalThis.fetch = async input => {
+    const url = new URL(String(input));
+    requestedPaths.push(url.pathname);
+    assert.equal(url.pathname, "/context/ingest");
+    assert.equal(url.search, "");
+    return new Response(JSON.stringify({
+      ok: true,
+      id: "record:writing:1",
+      written_views: ["view:private-writing-result"],
+    }), { status: 200 });
+  };
+
+  try {
+    const response = await handleInfoCaptureMessage({
+      type: "context.capture.writing_input",
+      payload: {
+        text: "A sufficiently long writing sample for capture.",
+        url: "https://example.com/editor",
+        domain: "example.com",
+      },
+    }, {
+      id: "metaflow-extension-id",
+      url: "https://example.com/editor",
+      tab: { id: 51, windowId: 7, url: "https://example.com/editor", title: "Editor" },
+    } as chrome.runtime.MessageSender);
+    assert.deepEqual(response, { ok: true, status: 200 });
+    assert.deepEqual(requestedPaths, ["/context/ingest"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousChrome === undefined) Reflect.deleteProperty(globalThis, "chrome");
+    else Reflect.set(globalThis, "chrome", previousChrome);
+  }
 });
 
 test("Chrome extension wire constants conform exactly to the canonical resident daemon contract", () => {

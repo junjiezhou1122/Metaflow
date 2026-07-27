@@ -30,6 +30,10 @@ import {
   negotiateBrowserOperationAccess,
 } from "./operation-auth";
 import { ensureTrustedOperationStorageAccess } from "./operation-auth-storage";
+import {
+  authorizeRuntimeMessageSender,
+  projectRuntimeMessageResult,
+} from "./runtime-sender-policy";
 
 const LEGACY_DEFAULT_ENDPOINTS = new Set([
   "http://localhost:3111/context/ingest",
@@ -247,10 +251,12 @@ function macBrowserContextResponsesEndpoint(endpoint: string): string {
 }
 
 export async function handleInfoCaptureMessage(message: any, sender: chrome.runtime.MessageSender) {
+  const authorization = authorizeRuntimeMessageSender(message, sender);
+  if (!authorization.ok) return authorization;
   await ensureTabStateLoaded();
   if (message?.type === "context.capture.browser_attention") {
     const tab = sender.tab ?? await getActiveTab();
-    return sendBrowserAttention(message.payload, message.kind, tab);
+    return projectRuntimeMessageResult(authorization, await sendBrowserAttention(message.payload, message.kind, tab));
   }
   if (message?.type === "context.explain.selection") {
     const tab = sender.tab ?? await getActiveTab();
@@ -258,7 +264,12 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   }
   if (message?.type === "context.capture.writing_input") {
     const tab = sender.tab ?? await getActiveTab();
-    return sendWritingInput(message.payload, tab);
+    return projectRuntimeMessageResult(
+      authorization,
+      await sendWritingInput(message.payload, tab, {
+        allow_privileged_assist: authorization.principal !== "content-script",
+      }),
+    );
   }
   if (message?.type === "save-current-page") {
     const tab = await getActiveTab();
@@ -269,7 +280,7 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
     return submitBrowserAutomation({ ...message, reason_kind: "manual" }, tab);
   }
   if (message?.type === "feedback-view") {
-    return postViewFeedback(message);
+    return projectRuntimeMessageResult(authorization, await postViewFeedback(message));
   }
   if (message?.type === "poll-ambient-deliveries") {
     return pollBrowserDeliveries(message);
@@ -306,10 +317,11 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
   }
   if (message?.type === "trigger-ambient" || message?.type === "automation.browser.signal") {
     const tab = sender.tab ?? await getActiveTab();
-    return submitBrowserAutomation(
+    const result = await submitBrowserAutomation(
       message?.type === "trigger-ambient" ? { ...message, reason_kind: "manual" } : message,
       tab,
     );
+    return projectRuntimeMessageResult(authorization, result);
   }
   if (message?.type === "youtube-comprehension-gap") {
     // Ingest a single comprehension gap record produced by the YouTube
@@ -341,11 +353,14 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
         visit_id: state.visitId,
       },
     });
-    return postLegacyRecord(record, { process: true, cascadeViews: true });
+    return projectRuntimeMessageResult(
+      authorization,
+      await postLegacyRecord(record, { process: true, cascadeViews: true }),
+    );
   }
   if (message?.type === "youtube-observation") {
     const tab = sender.tab ?? await getActiveTab();
-    return sendYouTubeObservation(message, tab);
+    return projectRuntimeMessageResult(authorization, await sendYouTubeObservation(message, tab));
   }
   if (message?.type === "get-current-status") {
     const tab = await getActiveTab();
@@ -358,13 +373,6 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
     };
   }
   if (message?.type === "update-info-capture-settings") {
-    if (!isTrustedExtensionPage(sender)) {
-      return {
-        ok: false,
-        code: "operation_auth_settings_forbidden",
-        error: "Operation authentication settings may be changed only by a trusted extension page",
-      };
-    }
     if (message.settings?.operationAuthToken !== undefined
       && !isValidOperationAuthToken(message.settings.operationAuthToken)) {
       return {
@@ -799,7 +807,11 @@ async function explainSelection(payload: any, tab?: chrome.tabs.Tab) {
   }
 }
 
-async function sendWritingInput(payload: any, tab?: chrome.tabs.Tab) {
+async function sendWritingInput(
+  payload: any,
+  tab: chrome.tabs.Tab | undefined,
+  options: { allow_privileged_assist: boolean },
+) {
   const text = String(payload?.text ?? "").trim();
   if (text.length < 12) return { ok: false, error: "writing text too short" };
   const settings = await getSettings();
@@ -826,7 +838,18 @@ async function sendWritingInput(payload: any, tab?: chrome.tabs.Tab) {
       writing_surface: "browser_inline",
     },
   };
-  const posted = await postWritingAssistRecord(record);
+  const posted = options.allow_privileged_assist
+    ? await postWritingAssistRecord(record)
+    : await postLegacyRecord(record);
+  if (!options.allow_privileged_assist) {
+    const captureResult = posted as Record<string, unknown>;
+    return {
+      ok: captureResult.ok === true,
+      ...(typeof captureResult.status === "number" ? { status: captureResult.status } : {}),
+      ...(typeof captureResult.stored === "boolean" ? { stored: captureResult.stored } : {}),
+      ...(typeof captureResult.reason === "string" ? { reason: captureResult.reason } : {}),
+    };
+  }
   const writtenViews = viewIdsFromProcessedIngestResponse(posted.body);
   const views = Array.isArray(posted.body?.views)
     ? posted.body.views.map((view: any) => ({ ok: true, status: posted.status, body: { view }, view, endpoint: posted.endpoint }))
@@ -1505,11 +1528,6 @@ export function publicInfoSettings(settings: InfoSettings) {
     ...publicSettings,
     operationAuthConfigured: isValidOperationAuthToken(operationAuthToken),
   };
-}
-
-function isTrustedExtensionPage(sender: chrome.runtime.MessageSender): boolean {
-  const extensionRoot = chrome.runtime.getURL("");
-  return typeof sender.url === "string" && sender.url.startsWith(extensionRoot);
 }
 
 function getTabState(

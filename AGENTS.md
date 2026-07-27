@@ -302,7 +302,12 @@ Operations.
   contexts; inability to establish that access level clears any legacy token
   and fails closed. Content scripts obtain explicitly projected non-secret
   settings through the trusted background and public settings responses remain
-  token-free. Browser-safe and native constant copies have executable
+  token-free. One exhaustive runtime-sender policy admits content scripts only
+  to declared capture and non-secret interaction messages; exact View, query,
+  task, delivery, failure, settings, and other local-data paths require a
+  trusted extension page before storage, doctor negotiation, or network access,
+  and content-script responses cannot project View content or exact refs.
+  Browser-safe and native constant copies have executable
   conformance gates against the canonical wire contract. `mf` validates strict
   JSON or `@file` input, returns one stdout envelope, keeps diagnostics on
   stderr, and uses stable typed exit categories. MCP structured content is the
