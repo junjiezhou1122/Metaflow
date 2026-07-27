@@ -7,6 +7,7 @@ import {
   AgentOperatorExecutionBridge,
   DeterministicViewAccessAuthorizer,
   ExecutionRuntime,
+  OperatorExecutionFailure,
   OperatorExecutionRouter,
   type AgentOperatorInvocation,
   type AgentOperatorPort,
@@ -271,6 +272,37 @@ test("a durable trace failure is observable and releases Function attempt state"
   });
   assert.equal(recovered.status, "succeeded");
   assert.equal(executions, 1);
+});
+
+test("a typed Function failure retains both the Operator and durable trace errors", async () => {
+  const reference = functionRef("test.typed-failure-trace", 1);
+  const operatorError = new OperatorExecutionFailure("typed_failure", "typed execution failed");
+  const adapter = new FunctionOperatorAdapter([{
+    reference,
+    execute() {
+      throw operatorError;
+    },
+  }]);
+  const invocation = {
+    run: { frozen: { transformation: { operator: { reference } } } },
+    attempt: { id: "attempt:typed-failure-trace" },
+    inputs: [],
+  } as OperatorExecutionInvocation;
+  let emits = 0;
+
+  await assert.rejects(
+    adapter.execute(invocation, {
+      signal: new AbortController().signal,
+      emit: async () => {
+        emits += 1;
+        if (emits === 2) throw new Error("failure trace unavailable");
+      },
+    }),
+    (error: unknown) => error instanceof AggregateError
+      && error.errors[0] === operatorError
+      && error.errors[1] instanceof Error
+      && error.errors[1].message === "failure trace unavailable",
+  );
 });
 
 test("Function cancellation emits one cancellation event and no contradictory failure", async () => {

@@ -593,6 +593,24 @@ test("adapter crash becomes structured Failure evidence instead of an untracked 
   });
 });
 
+test("Operator failure details cannot overwrite the trusted runtime code", async () => {
+  await withHarness(async harness => {
+    harness.operator.behavior = async () => ({
+      status: "failed",
+      error: {
+        code: "trusted_operator_code",
+        message: "typed failure",
+        details: { operator_code: "spoofed", provider_status: "rejected" },
+      },
+    });
+    const result = await harness.runtime.execute(request(harness.input, "run:failure-code"));
+    assert.equal(result.run.status, "failed");
+    assert.equal(result.run.error?.code, "operator_failed");
+    assert.equal(result.run.error?.details.operator_code, "trusted_operator_code");
+    assert.equal(result.run.error?.details.provider_status, "rejected");
+  });
+});
+
 test("SQLite failure rolls back every output and then records a separate Failure View", async () => {
   await withHarness(async harness => {
     const db = new DatabaseSync(harness.dbPath);

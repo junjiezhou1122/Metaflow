@@ -234,6 +234,20 @@ export type OperatorExecutionEvent = {
   payload?: JsonObject;
 };
 
+export class OperatorExecutionFailure extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly details: JsonObject = {},
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "OperatorExecutionFailure";
+    IdentifierSchema.parse(code);
+    JsonObjectSchema.parse(details);
+  }
+}
+
 export type OperatorExecutionResult =
   | {
       status: "succeeded";

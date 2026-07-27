@@ -273,8 +273,8 @@ export class ExecutionRuntime {
       }
       if (outcome.status === "failed") {
         throw new ExecutionRuntimeError(outcome.error.message, "operator_failed", "execution", {
-          operator_code: outcome.error.code,
           ...(outcome.error.details ?? {}),
+          operator_code: outcome.error.code,
         });
       }
       candidate = outcome.candidate;

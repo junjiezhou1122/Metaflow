@@ -5,6 +5,7 @@ import type {
   OperatorExecutionPort,
   OperatorExecutionResult,
 } from "@info/execution";
+import { OperatorExecutionFailure } from "@info/execution";
 
 export type FunctionOperatorReference = Extract<OperatorReference, { kind: "function" }>;
 
@@ -110,6 +111,25 @@ export class FunctionOperatorAdapter implements OperatorExecutionPort {
           throw new AggregateError([error, traceError], `Function Operator ${key} cancellation trace failed`);
         }
         throw error;
+      }
+      if (error instanceof OperatorExecutionFailure) {
+        try {
+          await context.emit({
+            type: "function.failed",
+            payload: {
+              function_id: reference.function_id,
+              version: reference.version,
+              code: error.code,
+              message: error.message,
+            },
+          });
+        } catch (traceError) {
+          throw new AggregateError([error, traceError], `Function Operator ${key} and failure trace both failed`);
+        }
+        return {
+          status: "failed",
+          error: { code: error.code, message: error.message, details: error.details },
+        };
       }
       try {
         await context.emit({

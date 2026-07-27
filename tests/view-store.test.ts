@@ -658,9 +658,12 @@ type WorkerOutcome = {
 async function commitFromConcurrentWorkers(path: string, drafts: ViewDraft[]): Promise<WorkerOutcome[]> {
   const start = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const workerUrl = new URL("./helpers/view-store-writer.ts", import.meta.url);
-  const workers = drafts.map(draft => new Worker(workerUrl, {
-    execArgv: ["--experimental-sqlite", "--import", "tsx"],
-    workerData: { path, draft, start },
+  // Node does not install --import loaders inside Worker threads (tsx#354).
+  // Register tsx inside each Worker before importing the TypeScript entrypoint.
+  const bootstrapUrl = new URL("./helpers/tsx-worker-bootstrap.mjs", import.meta.url);
+  const workers = drafts.map(draft => new Worker(bootstrapUrl, {
+    execArgv: ["--experimental-sqlite"],
+    workerData: { path, draft, start, typescript_entry: workerUrl.href },
   }));
   const ready = workers.map(worker => new Promise<void>((resolve, reject) => {
     const onMessage = (message: { type?: string; error?: string }) => {
