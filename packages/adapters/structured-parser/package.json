@@ -1,0 +1,18 @@
+{
+  "name": "@info/structured-parser-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@info/execution": "workspace:*",
+    "@info/transformation": "workspace:*",
+    "@info/view": "workspace:*",
+    "zod": "^3.24.4"
+  }
+}

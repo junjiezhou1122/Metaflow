@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ExactViewRefSchema, IdentifierSchema, TimestampSchema } from "@info/view/schema";
+import { ExactViewRefSchema, IdentifierSchema, JsonPointerSchema, TimestampSchema } from "@info/view/schema";
 import { compileViewSearchMatchExpression } from "@info/view/search-match";
 
 export const SEARCH_CONTRACT_VERSION = 1 as const;
@@ -148,6 +148,32 @@ export type ExactEmbeddingProfileRef = z.infer<typeof ExactEmbeddingProfileRefSc
 export type ExactRerankerDescriptor = z.infer<typeof ExactRerankerDescriptorSchema>;
 export type SearchRequestV1 = z.infer<typeof SearchRequestV1Schema>;
 
+export const SearchRepresentationCoordinatesSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("json_pointer"),
+    path: JsonPointerSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("table_cell"),
+    path: JsonPointerSchema,
+    row: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+    row_id: IdentifierSchema.optional(),
+    column_id: IdentifierSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("graph_element"),
+    path: JsonPointerSchema,
+    element_kind: z.enum(["node", "edge"]),
+    element_id: IdentifierSchema,
+    property: JsonPointerSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("external_reference"),
+    path: JsonPointerSchema,
+  }).strict(),
+]);
+
 export const SearchMatchLocationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("envelope"), path: z.string().startsWith("/") }).strict(),
   z.object({
@@ -155,6 +181,7 @@ export const SearchMatchLocationSchema = z.discriminatedUnion("kind", [
     path: z.string().startsWith("/"),
     element_id: IdentifierSchema.optional(),
     page: z.number().int().nonnegative().optional(),
+    coordinates: SearchRepresentationCoordinatesSchema.optional(),
   }).strict(),
   z.object({ kind: z.literal("related_view"), ref: ExactViewRefSchema }).strict(),
 ]);
@@ -215,6 +242,7 @@ export const SearchResponseV1Schema = z.object({
 }).strict();
 
 export type SearchMatchLocation = z.infer<typeof SearchMatchLocationSchema>;
+export type SearchRepresentationCoordinates = z.infer<typeof SearchRepresentationCoordinatesSchema>;
 export type SearchMatchV1 = z.infer<typeof SearchMatchV1Schema>;
 export type SearchPathStep = z.infer<typeof SearchPathStepSchema>;
 export type SearchHitV1 = z.infer<typeof SearchHitV1Schema>;

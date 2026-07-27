@@ -194,6 +194,13 @@ but there is no separate canonical Worker domain layer.
   Thread so Execution timeout and cancellation remain enforceable. It never
   commits Views, writes an index, computes embeddings, fetches references, or
   runs on the Search query path.
+- `packages/adapters/structured-parser`: the exact-versioned JSON, table,
+  property-graph, and external-reference Parser Worker suite. It projects one
+  exact committed View through terminable Function Operators into an untrusted
+  strict `metaflow.view.fragment-set@2` candidate with JSON Pointer,
+  row/column, graph element/property, or reference coordinates. The graph
+  Parser creates no second graph store, and the external-reference Parser
+  requires a matching committed URI Materialization and never fetches it.
 - `packages/adapters/browser-automation`: validates Browser events, performs
   cheap declarative matching, requests exact page/selection evidence through
   the Browser Capture port, and projects Delivery and interaction transport.
@@ -412,6 +419,11 @@ Operations.
   candidates; only Execution may validate and commit them. Search consumes
   previously committed projections and must never invoke parsing, fetching,
   OCR, transcription, enrichment, or embedding as a query-time side effect.
+- Internal-only keyword Search fails with `parser_capability_missing` when its
+  frozen authorized scope has no committed internal search projection.
+  Fragment-set v2 hits retain their indexed evidence path plus exact source
+  coordinates; combined envelope+internal Search may still return valid
+  envelope evidence when no internal projection exists.
 - A Transformation freezes exact inputs, Operator, policy, output contract, and
   budget before its Run starts. Alternatives are observable attempts, never
   silent fallbacks.
