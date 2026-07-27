@@ -43,3 +43,13 @@ View; the Execution Runtime remains the sole validation and commit boundary.
 
 Session reuse is only a latency optimization for ACP-style agents. The durable
 state remains the task handoff, traces, artifacts, and committed Views.
+
+`AgentRuntimeAuthoringProposalAdapter` projects an authoring Request into the
+same runtime with `schema_value`, `allowWrite=false`, and an explicit
+declarative-only constraint. It returns the JSON value unchanged and has no
+repository dependency. `@info/authoring` remains responsible for candidate
+validation, Proposal digesting, approval, and target commit delegation.
+Authoring runtimes are external-model capable by default. A runtime must be
+explicitly registered in `local_runtime_ids` before it may receive a Request
+whose frozen policy has `allow_external_model=false`; otherwise the bridge
+fails before `submit`.

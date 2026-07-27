@@ -11,6 +11,7 @@ import {
   ConnectorRuntime,
   type ConnectorPort,
 } from "@info/capture";
+import { AuthoringService, lifecycleValue } from "@info/authoring";
 import {
   DeterministicViewAccessAuthorizer,
   ExecutionRuntime,
@@ -44,6 +45,7 @@ import {
   sqliteVecSourceDigest,
 } from "@info/storage-sqlite";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
+import { ViewPackageCatalog } from "@info/view-package";
 
 type Surface = {
   name: "in-process" | "cli" | "http" | "mcp";
@@ -125,6 +127,31 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
       assert.deepEqual(new Set(mcp.toolNames), new Set(OPERATION_NAMES.map(operationMcpToolName)));
     } finally {
       await Promise.all([...surfaces, ...forbiddenGraphSurfaces].map(surface => surface.close()));
+    }
+  });
+});
+
+test("natural-language View authoring has one exact lifecycle across in-process, CLI, HTTP, and official MCP", async () => {
+  await withHarness(async harness => {
+    const surfaces = await createSurfaces(harness, () => context("request:authoring-equivalent"));
+    try {
+      const requested = await callEquivalent(surfaces, "view.authoring.request", authoringRequest());
+      const requestRef = exactViewRef(requested.data as any);
+      const proposed = await callEquivalent(surfaces, "view.authoring.propose", authoringPropose(requestRef));
+      const proposal = proposed.data as any;
+      const proposalValue = lifecycleValue(proposal) as any;
+      const stale = await surfaces[0]!.call("view.authoring.approve", authoringDecision(exactViewRef(proposal), "0".repeat(64)));
+      assert.equal(stale.ok, false);
+      if (!stale.ok) assert.equal(stale.error.code, "authoring_digest_mismatch");
+      const approved = await callEquivalent(surfaces, "view.authoring.approve", authoringDecision(exactViewRef(proposal), proposalValue.artifact_digest));
+      const receipt = await callEquivalent(surfaces, "view.authoring.apply", authoringApply(exactViewRef(approved.data as any)));
+      assert.equal((lifecycleValue(receipt.data as any) as any).status, "applied");
+      const inspected = await callEquivalent(surfaces, "view.authoring.inspect", { ref: exactViewRef(receipt.data as any) });
+      assert.deepEqual((inspected.data as any).view, receipt.data);
+      const mcp = surfaces.find(surface => surface.name === "mcp") as Surface & { toolNames?: string[] };
+      assert.equal(mcp.toolNames?.includes(operationMcpToolName("view.authoring.apply")), true);
+    } finally {
+      await Promise.all(surfaces.map(surface => surface.close()));
     }
   });
 });
@@ -499,6 +526,19 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     observer: { async record() {} },
     now: clock,
   });
+  const authoring = new AuthoringService({
+    views,
+    transformations,
+    execution,
+    packages: new ViewPackageCatalog(),
+    agent: {
+      async propose() {
+        return operationAuthoringViewCandidate();
+      },
+    },
+    observer: { async record() {} },
+    now: clock,
+  });
   const service = new OperationService({
     views,
     graph: views.search,
@@ -511,6 +551,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     privacy,
     capture,
     capture_traces: views,
+    authoring,
     authorization: new GrantOperationAuthorizer(),
     observer,
     now: clock,
@@ -524,6 +565,80 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     views.close();
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+async function callEquivalent(surfaces: Surface[], operation: OperationName, input: unknown) {
+  const responses = await Promise.all(surfaces.map(surface => surface.call(operation, input)));
+  for (const response of responses.slice(1)) assert.deepEqual(response, responses[0]);
+  assert.equal(responses[0]?.ok, true, responses[0]?.ok ? undefined : JSON.stringify(responses[0]?.error));
+  return responses[0] as Extract<OperationEnvelope, { ok: true }>;
+}
+
+function authoringRequest() {
+  return {
+    view_id: "view:operation:authoring:request",
+    expected_revision: 0,
+    artifact_kind: "view",
+    prompt: "Create an English learning View from my saved material",
+    source_views: [],
+    policy,
+    trace_id: "trace:operation:authoring",
+    idempotency_key: "operation:authoring:request",
+    created_at: "2026-07-26T14:10:00.000Z",
+  };
+}
+
+function authoringPropose(request: { view_id: string; revision: number }) {
+  return {
+    request,
+    proposal_view_id: "view:operation:authoring:proposal",
+    expected_revision: 0,
+    idempotency_key: "operation:authoring:proposal",
+    failure_receipt_view_id: "view:operation:authoring:proposal-failure",
+    created_at: "2026-07-26T14:10:01.000Z",
+  };
+}
+
+function authoringDecision(proposal: { view_id: string; revision: number }, proposalDigest: string) {
+  return {
+    proposal,
+    proposal_digest: proposalDigest,
+    decision_view_id: "view:operation:authoring:decision",
+    expected_revision: 0,
+    idempotency_key: "operation:authoring:decision",
+    created_at: "2026-07-26T14:10:02.000Z",
+  };
+}
+
+function authoringApply(decision: { view_id: string; revision: number }) {
+  return {
+    decision,
+    receipt_view_id: "view:operation:authoring:receipt",
+    expected_revision: 0,
+    idempotency_key: "operation:authoring:apply",
+    created_at: "2026-07-26T14:10:03.000Z",
+  };
+}
+
+function operationAuthoringViewCandidate() {
+  return {
+    kind: "view",
+    view: {
+      id: "view:operation:authored:learning",
+      name: "Authored English learning View",
+      purpose: "Prove one authoring lifecycle across every shared surface",
+      aliases: [],
+      schema: { name: "learning.operation.authored", version: 1, mode: "freeform" },
+      representation: { form: "inline", kind: "markdown", media_type: "text/markdown", value: "# Learning", metadata: {} },
+      materialization: {
+        primary: { id: "canonical", format: "markdown", media_type: "text/markdown", location: { kind: "inline" } },
+        alternatives: [],
+      },
+      relations: [],
+      metadata: {},
+      expected_revision: 0,
+    },
+  };
 }
 
 function searchRequest(ref: { view_id: string; revision: number }, text: string) {

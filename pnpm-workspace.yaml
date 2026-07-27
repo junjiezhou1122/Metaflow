@@ -3,6 +3,7 @@
 packages:
   - "packages/view"
   - "packages/view-package"
+  - "packages/authoring"
   - "packages/transformation"
   - "packages/execution"
   - "packages/automation"

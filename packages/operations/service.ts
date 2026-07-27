@@ -41,6 +41,12 @@ import {
   type ViewReadAuthorizationPort,
 } from "@info/search";
 import {
+  AuthoringDecisionValueSchema,
+  AuthoringError,
+  AuthoringProposalValueSchema,
+  type AuthoringService,
+} from "@info/authoring";
+import {
   OPERATION_DESCRIPTIONS,
   OPERATION_NAMES,
   OperationContextSchema,
@@ -76,6 +82,7 @@ export type OperationServiceDependencies = {
   privacy: Pick<PrivacyForgetService, "request" | "execute" | "inspect">;
   capture: Pick<ConnectorRuntime, "submitBatch">;
   capture_traces: Pick<CaptureRuntimeRepository, "getCaptureTrace">;
+  authoring: Pick<AuthoringService, "request" | "propose" | "inspect" | "approve" | "reject" | "apply">;
   authorization: OperationAuthorizationPort;
   observer: OperationObserver;
   now?: () => string;
@@ -238,6 +245,28 @@ export class OperationService {
           origin: { kind: "operation", id: context.request_id },
         });
       }
+      case "view.authoring.request": {
+        await this.requireViewRead(context, input.source_views, "read");
+        return this.dependencies.authoring.request(input, context.principal.id);
+      }
+      case "view.authoring.propose":
+        await this.requireViewRead(context, [input.request], "read");
+        return this.dependencies.authoring.propose(input, context.principal.id);
+      case "view.authoring.inspect":
+        await this.requireViewRead(context, [input.ref], "read");
+        return this.dependencies.authoring.inspect(input);
+      case "view.authoring.approve":
+        await this.requireViewRead(context, [input.proposal], "read");
+        return this.dependencies.authoring.approve(input, context.principal.id);
+      case "view.authoring.reject":
+        await this.requireAuthoringProposalChain(context, input.proposal);
+        return this.dependencies.authoring.reject(input, context.principal.id);
+      case "view.authoring.apply": {
+        await this.requireViewRead(context, [input.decision], "read");
+        const decision = AuthoringDecisionValueSchema.parse((await this.dependencies.authoring.inspect({ ref: input.decision })).lifecycle);
+        await this.requireAuthoringProposalChain(context, decision.proposal);
+        return this.dependencies.authoring.apply(input, context.principal.id);
+      }
       case "transformation.submit":
         return this.dependencies.transformations.commit(input);
       case "transformation.get": {
@@ -351,6 +380,17 @@ export class OperationService {
     return run;
   }
 
+  private async requireAuthoringProposalChain(
+    context: OperationContext,
+    proposalRef: { view_id: string; revision: number },
+  ) {
+    await this.requireViewRead(context, [proposalRef], "read");
+    const inspected = await this.dependencies.authoring.inspect({ ref: proposalRef });
+    const proposal = AuthoringProposalValueSchema.parse(inspected.lifecycle);
+    await this.requireViewRead(context, [proposal.request], "read");
+    return proposal;
+  }
+
   private async fail(
     context: OperationContext,
     operation: OperationName | undefined,
@@ -402,6 +442,14 @@ function operationError(cause: unknown): OperationError {
       message: cause.message,
       category: searchCategory(cause.code),
       details: { stage: cause.stage, retryable: cause.retryable },
+    });
+  }
+  if (cause instanceof AuthoringError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: authoringCategory(cause.code),
+      details: cause.details,
     });
   }
   if (cause instanceof ViewGraphProjectionOperationError) {
@@ -480,6 +528,14 @@ function operationError(cause: unknown): OperationError {
     category: "internal",
     details: {},
   });
+}
+
+function authoringCategory(code: string): OperationErrorCategory {
+  if (code.endsWith("_not_found") || code === "authoring_view_not_found") return "not_found";
+  if (code.includes("owner_mismatch") || code.includes("forbidden")) return "forbidden";
+  if (code.includes("conflict") || code.includes("digest_mismatch") || code === "authoring_not_approved") return "conflict";
+  if (code.includes("dependency") || code.includes("runtime_missing") || code.startsWith("authoring_package_")) return "failed_dependency";
+  return "invalid_request";
 }
 
 function validateReadDecisions(

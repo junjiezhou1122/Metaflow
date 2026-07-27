@@ -23,6 +23,14 @@ import {
   StartExecutionParametersSchema,
 } from "@info/execution";
 import { CaptureBatchSchema } from "@info/capture";
+import {
+  AuthoringApplyInputSchema,
+  AuthoringDecisionInputSchema,
+  AuthoringInspectInputSchema,
+  AuthoringProposeInputSchema,
+  AuthoringRejectInputSchema,
+  AuthoringRequestInputSchema,
+} from "@info/authoring";
 
 export const OPERATION_NAMES = [
   "catalog.list",
@@ -33,6 +41,12 @@ export const OPERATION_NAMES = [
   "view.search.reindex",
   "view.traverse",
   "view.tombstone",
+  "view.authoring.request",
+  "view.authoring.propose",
+  "view.authoring.inspect",
+  "view.authoring.approve",
+  "view.authoring.reject",
+  "view.authoring.apply",
   "transformation.submit",
   "transformation.get",
   "run.execute",
@@ -58,6 +72,12 @@ export const OperationInputSchemas = {
   "view.search.reindex": ReindexViewSearchInputSchema,
   "view.traverse": z.object({ query: RelationTraversalQuerySchema }).strict(),
   "view.tombstone": SourceTombstoneParametersSchema,
+  "view.authoring.request": AuthoringRequestInputSchema,
+  "view.authoring.propose": AuthoringProposeInputSchema,
+  "view.authoring.inspect": AuthoringInspectInputSchema,
+  "view.authoring.approve": AuthoringDecisionInputSchema,
+  "view.authoring.reject": AuthoringRejectInputSchema,
+  "view.authoring.apply": AuthoringApplyInputSchema,
   "transformation.submit": z.object({
     transformation: TransformationSchema,
     expected_revision: z.number().int().nonnegative(),
@@ -91,6 +111,12 @@ export const OPERATION_DESCRIPTIONS: Record<OperationName, string> = {
   "view.search.reindex": "Explicitly rebuild the deterministic local View Search projection.",
   "view.traverse": "Traverse typed relations from one exact View revision.",
   "view.tombstone": "Append an immutable source-deletion tombstone without claiming privacy erasure.",
+  "view.authoring.request": "Freeze one natural-language View authoring Request before Agent proposal generation.",
+  "view.authoring.propose": "Generate and freeze one declarative untrusted Agent Proposal for an exact Request.",
+  "view.authoring.inspect": "Inspect one exact Request, Proposal, Decision, or Receipt View.",
+  "view.authoring.approve": "Approve one exact Proposal revision and digest without applying it.",
+  "view.authoring.reject": "Reject one exact Proposal and atomically commit its terminal Receipt.",
+  "view.authoring.apply": "Apply one exact approved Proposal through its canonical repository and commit a terminal Receipt.",
   "transformation.submit": "Commit one immutable Transformation revision.",
   "transformation.get": "Read one exact Transformation revision.",
   "run.execute": "Execute one committed Transformation revision with frozen inputs and policy.",

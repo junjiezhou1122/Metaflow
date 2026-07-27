@@ -41,6 +41,7 @@ test("canonical workspace exposes only v1 capability owners", () => {
   assert.deepEqual(packages, [
     "packages/view",
     "packages/view-package",
+    "packages/authoring",
     "packages/transformation",
     "packages/execution",
     "packages/automation",

@@ -5,7 +5,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { AgentExecutionAdapter, type AgentRuntimeAdapter, type AgentRuntimeContext, type AgentTaskRequest, type AgentTaskResult } from "@info/agent-runtime-adapter";
+import {
+  AgentExecutionAdapter,
+  AgentRuntimeAuthoringProposalAdapter,
+  type AgentRuntimeAdapter,
+  type AgentRuntimeContext,
+  type AgentTaskRequest,
+  type AgentTaskResult,
+} from "@info/agent-runtime-adapter";
+import { AuthoringService } from "@info/authoring";
 import { browserSourceConnection, configureBrowserCapture } from "@info/browser-capture-adapter";
 import { CaptureIngress, ConnectorRuntime } from "@info/capture";
 import {
@@ -48,6 +56,7 @@ import {
 } from "@info/screenpipe-capture-adapter";
 import { SqliteViewRepository } from "@info/storage-sqlite";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
+import { ViewPackageCatalog } from "@info/view-package";
 import {
   exactTransformationRef,
   parseTransformation,
@@ -173,6 +182,15 @@ test("Browser and Screenpipe evidence evolves through Function, Agent, feedback,
     observer: { async record() {} },
     now: clock,
   });
+  const authoring = new AuthoringService({
+    views,
+    transformations,
+    execution,
+    packages: new ViewPackageCatalog(),
+    agent: new AgentRuntimeAuthoringProposalAdapter([agentRuntime], agentRuntime.id),
+    observer: { async record() {} },
+    now: clock,
+  });
   const operations = new OperationService({
     views,
     graph: views.search,
@@ -185,6 +203,7 @@ test("Browser and Screenpipe evidence evolves through Function, Agent, feedback,
     privacy,
     capture,
     capture_traces: views,
+    authoring,
     authorization: new GrantOperationAuthorizer(),
     observer,
     now: clock,

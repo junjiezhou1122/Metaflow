@@ -42,6 +42,7 @@
     "test:obsidian-capture": "node --experimental-sqlite --import tsx --test tests/obsidian-capture.test.ts",
     "test:codex-history-capture": "node --experimental-sqlite --import tsx --test tests/codex-history-capture.test.ts",
     "test:view-package": "node --experimental-sqlite --import tsx --test tests/view-package.test.ts tests/view-graph-project.test.ts",
+    "test:authoring": "node --experimental-sqlite --import tsx --test tests/authoring.test.ts",
     "test:web-view-renderers": "node --import tsx --test packages/adapters/web-view-renderers/web-view-renderers.test.ts tests/view-package.test.ts",
     "test:connector-kit": "node --experimental-sqlite --import tsx --test tests/connector-kit.test.ts tests/capture-runtime.test.ts",
     "test:operation-surfaces": "node --experimental-sqlite --import tsx --test tests/operation-surfaces.test.ts",
@@ -57,12 +58,13 @@
     "test:boundaries": "node --import tsx --test tests/package-boundaries.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.v1.json && pnpm --dir apps/view-explorer exec tsc --noEmit",
     "typecheck:v1": "tsc --noEmit -p tsconfig.v1.json && pnpm --dir apps/view-explorer exec tsc --noEmit",
-    "check:boundaries": "depcruise --config dependency-cruiser.config.cjs packages/view packages/view-package packages/transformation packages/execution packages/automation packages/capture packages/search packages/operations packages/adapters view-packages && tsx scripts/check-v1-package-manifests.ts",
+    "check:boundaries": "depcruise --config dependency-cruiser.config.cjs packages/view packages/view-package packages/authoring packages/transformation packages/execution packages/automation packages/capture packages/search packages/operations packages/adapters view-packages && tsx scripts/check-v1-package-manifests.ts",
     "verify:v1:boundaries": "pnpm typecheck:v1 && pnpm check:boundaries && pnpm test:boundaries"
   },
   "dependencies": {
     "@info/agent-runtime-adapter": "workspace:*",
     "@info/automation": "workspace:*",
+    "@info/authoring": "workspace:*",
     "@info/automation-execution-adapter": "workspace:*",
     "@info/automation-sqlite": "workspace:*",
     "@info/browser-automation-adapter": "workspace:*",

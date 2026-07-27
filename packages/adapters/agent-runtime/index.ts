@@ -8,6 +8,7 @@ export * from "./providers/mcp-provider.js";
 export * from "./providers/info-context-provider.js";
 export * from "./outputs/view-output.js";
 export * from "./execution-adapter.js";
+export * from "./authoring-agent.js";
 
 import { AcpStdioAgentRuntimeAdapter } from "./acp/stdio-runtime.js";
 import { createClaudeCodeRuntime } from "./cli-json-runtime.js";

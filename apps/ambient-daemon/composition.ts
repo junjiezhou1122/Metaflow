@@ -17,7 +17,12 @@ import {
   OperatorExecutionRouter,
   parseViewAccessPolicySnapshot,
 } from "@info/execution";
-import { AgentExecutionAdapter, type AgentRuntimeAdapter } from "@info/agent-runtime-adapter";
+import {
+  AgentExecutionAdapter,
+  AgentRuntimeAuthoringProposalAdapter,
+  type AgentRuntimeAdapter,
+} from "@info/agent-runtime-adapter";
+import { AuthoringService } from "@info/authoring";
 import { FunctionOperatorAdapter } from "@info/function-operator-adapter";
 import {
   MARKDOWN_PARSER_FUNCTION,
@@ -72,6 +77,10 @@ import {
 import { SearchService } from "@info/search";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
 import { exactTransformationRef, type Transformation } from "@info/transformation";
+import { ViewPackageCatalog } from "@info/view-package";
+import { applicationSpaceViewPackage } from "@info/view-package-application-space";
+import { githubRepositorySummaryViewPackage } from "@info/view-package-github-repository-summary";
+import { obsidianDocumentViewPackage } from "@info/view-package-obsidian-document";
 import {
   PrivacyForgetService,
   canonicalJson,
@@ -169,6 +178,34 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       undefined,
       { now: () => now().toISOString() },
     );
+    const viewPackages = new ViewPackageCatalog();
+    for (const viewPackage of [
+      applicationSpaceViewPackage,
+      githubRepositorySummaryViewPackage,
+      obsidianDocumentViewPackage,
+    ]) {
+      viewPackages.register(viewPackage);
+    }
+    const authoring = new AuthoringService({
+      views,
+      transformations,
+      execution,
+      packages: viewPackages,
+      agent: new AgentRuntimeAuthoringProposalAdapter([options.agent_runtime], options.agent_runtime.id),
+      observer: {
+        async record(event, cause) {
+          console.info(JSON.stringify({
+            component: "metaflow-authoring",
+            ...event,
+            ...(cause instanceof Error ? {
+              cause_name: cause.name,
+              cause_message_digest: createHash("sha256").update(cause.message).digest("hex"),
+            } : {}),
+          }));
+        },
+      },
+      now: () => now().toISOString(),
+    });
     const target = new AutomationExecutionTarget({
       transformations,
       execution,
@@ -301,6 +338,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       privacy,
       capture: connectorRuntime,
       capture_traces: views,
+      authoring,
       authorization: new GrantOperationAuthorizer(),
       observer: new JsonConsoleOperationObserver(),
       now: () => now().toISOString(),
@@ -328,6 +366,8 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       ledger,
       traces,
       execution,
+      authoring,
+      viewPackages,
       operationService,
       delivery,
       scheduler,
