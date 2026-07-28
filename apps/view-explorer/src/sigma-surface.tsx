@@ -10,9 +10,7 @@ import {
   type LayoutRequest,
 } from "./layout-protocol.js";
 
-const FOCUSED_COLOR = "#6558d9";
 const NEIGHBOR_COLOR = "#505553";
-const MUTED_NODE_COLOR = "#d9dcda";
 const DEFAULT_EDGE_COLOR = "#cfd2d0";
 type LayoutFailureCode = "graph_layout_worker_start_failed" | "graph_layout_worker_failed" | "graph_layout_protocol_failed";
 

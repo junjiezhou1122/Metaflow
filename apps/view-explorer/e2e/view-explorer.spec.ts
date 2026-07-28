@@ -236,6 +236,9 @@ test("pointer hover reveals only the loaded neighborhood and restores selection 
   await page.goto("/?fixture=10&selected=view:fixture:0003@1&cx=0.5&cy=0.5&ratio=1&angle=0");
   await ready(page, 10);
   await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await closeDialog(page);
+  const selectedOption = page.getByRole("option", { name: /Research View 0003/ });
+  await expect(selectedOption).toHaveAttribute("aria-selected", "true");
   await expect.poll(async () => cameraDistance(await currentCamera(page), cameraFromUrl(page.url()))).toBeLessThanOrEqual(0.0002);
 
   const baselineUrl = page.url();
@@ -258,7 +261,7 @@ test("pointer hover reveals only the loaded neighborhood and restores selection 
   expect(hovered!.unrelatedNodeCount).toBeGreaterThan(0);
   expect(hovered!.unrelatedEdgeCount).toBeGreaterThan(0);
   expect((await explorerDebug(page)).hoverEnterCount).toBeGreaterThanOrEqual(1);
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(selectedOption).toHaveAttribute("aria-selected", "true");
   expect(page.url()).toBe(baselineUrl);
   expect(await fixtureCallCount(page)).toBe(baselineCalls);
   expect(cameraDistance(await currentCamera(page), baselineCamera)).toBeLessThanOrEqual(0.0002);
@@ -266,7 +269,7 @@ test("pointer hover reveals only the loaded neighborhood and restores selection 
   await page.mouse.move(20, 20);
   await expect.poll(async () => (await explorerDebug(page)).hoveredNeighborhood).toBeUndefined();
   expect((await explorerDebug(page)).hoverLeaveCount).toBeGreaterThanOrEqual(1);
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(selectedOption).toHaveAttribute("aria-selected", "true");
   expect(page.url()).toBe(baselineUrl);
   expect(await fixtureCallCount(page)).toBe(baselineCalls);
   expect(cameraDistance(await currentCamera(page), baselineCamera)).toBeLessThanOrEqual(0.0002);

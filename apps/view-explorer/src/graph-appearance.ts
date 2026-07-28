@@ -1,12 +1,9 @@
 import type Graph from "graphology";
 
-export const EDGE_COLORS: Record<string, string> = {
-  derived_from: "#d86638",
-  member_of: "#4878b7",
-  references: "#7b6d61",
-  application_member: "#2d8b72",
-  application_composition: "#2d8b72",
-};
+const FOCUSED_COLOR = "#6558d9";
+const NEIGHBOR_COLOR = "#505553";
+const MUTED_NODE_COLOR = "#d9dcda";
+const MUTED_EDGE_COLOR = "#e5e7e5";
 
 export type GraphAppearanceState = {
   selectedKey?: string | undefined;
@@ -40,19 +37,19 @@ export function reduceNodeAppearance<T extends DisplayAttributes>(
   if (key === active) {
     return {
       ...attributes,
-      color: hovered ? "#0d594b" : "#e9ad31",
+      color: FOCUSED_COLOR,
       forceLabel: true,
       highlighted: true,
       zIndex: hovered ? 3 : 2,
-      size: Number(attributes.size) * (hovered ? 1.55 : 1.45),
+      size: Number(attributes.size) * (hovered ? 1.55 : 1.5),
     };
   }
   if (graph.areNeighbors(key, active)) {
     return hovered
-      ? { ...attributes, zIndex: 2, size: Number(attributes.size) * 1.12 }
-      : { ...attributes, zIndex: 1 };
+      ? { ...attributes, color: NEIGHBOR_COLOR, zIndex: 2, size: Number(attributes.size) * 1.12 }
+      : { ...attributes, color: NEIGHBOR_COLOR, zIndex: 1 };
   }
-  return { ...attributes, color: "#c8cbc6", label: "", zIndex: 0 };
+  return { ...attributes, color: MUTED_NODE_COLOR, label: "", zIndex: 0 };
 }
 
 export function reduceEdgeAppearance<T extends DisplayAttributes>(
@@ -68,12 +65,12 @@ export function reduceEdgeAppearance<T extends DisplayAttributes>(
   if (source === active || target === active) {
     return {
       ...attributes,
-      color: EDGE_COLORS[String(attributes.relationType)] ?? "#594f46",
-      size: hovered ? 2.5 : 2.2,
+      color: FOCUSED_COLOR,
+      size: hovered ? 1.9 : 1.65,
       zIndex: hovered ? 2 : 1,
     };
   }
-  return { ...attributes, color: "#dedfda", hidden: false, size: hovered ? 0.3 : 0.35, zIndex: 0 };
+  return { ...attributes, color: MUTED_EDGE_COLOR, hidden: false, size: 0.3, zIndex: 0 };
 }
 
 function resolveActiveNode(graph: Graph, state: GraphAppearanceState): { active?: string; hovered?: string } {
