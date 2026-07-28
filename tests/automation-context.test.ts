@@ -22,7 +22,7 @@ test("Context resolution selects and authorizes exact trigger evidence and query
     id: "view:project:info",
     revision: 7,
     schema: "project.current",
-    value: { project_path: "/Users/junjie/info" },
+    value: { project_path: "/workspace/metaflow" },
   });
   const resolver = resolverFor([browser, project]);
   const { automation, occurrence } = fixture({

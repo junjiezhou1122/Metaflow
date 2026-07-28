@@ -37,7 +37,7 @@ test("push-to-talk Automation hands current voice/screen context to the shared A
       bundle_id: "com.apple.Safari",
       window_title: "Ambient Runtime design",
       url: "https://example.com/ambient-runtime",
-      project_path: "/Users/junjie/info",
+      project_path: "/workspace/metaflow",
     },
   });
   const events: string[] = [];
@@ -172,7 +172,7 @@ test("push-to-talk Automation hands current voice/screen context to the shared A
   assert.equal((agentInvocation?.current_context.voice as { transcript?: string })?.transcript, "把当前选中的内容总结一下，并告诉我和 Metaflow 有什么关系");
   assert.equal((agentInvocation?.current_context.screen as { selected_text?: string })?.selected_text, "Ambient should invoke expensive work only after a declared trigger.");
   assert.equal((agentInvocation?.current_context.screen as { url?: string })?.url, "https://example.com/ambient-runtime");
-  assert.equal((agentInvocation?.current_context.app as { project_path?: string })?.project_path, "/Users/junjie/info");
+  assert.equal((agentInvocation?.current_context.app as { project_path?: string })?.project_path, "/workspace/metaflow");
   assert.ok(agentInvocation?.view_tools.some(tool => tool.kind === "cli"));
   assert.ok(agentInvocation?.view_tools.some(tool => tool.kind === "mcp"));
   assert.deepEqual(agentInvocation?.inputs.map(input => input.views.map(view => view.ref)), [

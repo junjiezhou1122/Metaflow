@@ -37,8 +37,8 @@ export async function startAmbientDaemon() {
     acpPermissions: createNativeAgentPermissionBroker(),
     pi: {
       command: process.env.METAFLOW_PI_COMMAND ?? "pi",
-      defaultProvider: process.env.METAFLOW_PI_PROVIDER ?? "xem-gpt",
-      defaultModel: process.env.METAFLOW_PI_MODEL ?? "gpt-5.6-terra",
+      defaultProvider: process.env.METAFLOW_PI_PROVIDER ?? "",
+      defaultModel: process.env.METAFLOW_PI_MODEL ?? "",
       thinking: parsePiThinking(process.env.METAFLOW_PI_THINKING),
       env: process.env.METAFLOW_PI_AGENT_DIR
         ? { PI_CODING_AGENT_DIR: process.env.METAFLOW_PI_AGENT_DIR }

@@ -200,8 +200,8 @@ final class AccessibilitySmokeTests: XCTestCase {
         XCTAssertEqual(screenImage["mime_type"] as? String, "image/jpeg")
         XCTAssertEqual(screenImage["data"] as? String, Data("jpeg fixture".utf8).base64EncodedString())
         XCTAssertEqual(agent["harness"] as? String, "claude_code_acp")
-        XCTAssertEqual(agent["provider"] as? String, "xem-gpt")
-        XCTAssertEqual(agent["model"] as? String, "gpt-5.6-terra")
+        XCTAssertNil(agent["provider"])
+        XCTAssertNil(agent["model"])
     }
 
     func testAssistRequestCanTargetAnExplicitConversation() throws {
@@ -530,8 +530,8 @@ final class AccessibilitySmokeTests: XCTestCase {
     func testDefaultAgentBackendUsesClaudeCodeACP() {
         let backend = AgentBackendConfiguration.defaultValue
         XCTAssertEqual(backend.harness, .claudeCodeACP)
-        XCTAssertEqual(backend.provider, "xem-gpt")
-        XCTAssertEqual(backend.model, "gpt-5.6-terra")
+        XCTAssertEqual(backend.provider, "")
+        XCTAssertEqual(backend.model, "")
         XCTAssertEqual(backend.displayName, "Claude Code ACP")
     }
 

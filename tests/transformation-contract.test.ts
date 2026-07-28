@@ -18,7 +18,7 @@ const operatorReferences: OperatorReference[] = [
   { kind: "agent", adapter: "codex-acp", profile: "researcher" },
   { kind: "workflow", workflow_id: "workflow:daily-summary", revision: 3 },
   { kind: "function", function_id: "function:merge-markdown", version: 2 },
-  { kind: "model", provider: "openai", model: "gpt-5.6" },
+  { kind: "model", provider: "fixture-provider", model: "fixture-model" },
   { kind: "human", channel: "inbox", role: "editor" },
   { kind: "remote_service", service: "notion", operation: "append_page", api_version: "2026-03" },
 ];
@@ -71,9 +71,9 @@ test("a one-off natural-language Transformation is fully frozen without requirin
     instruction: { format: "natural_language", text: "Create three names for this project." },
     inputs: [],
     operator: {
-      id: "operator:model:openai",
+      id: "operator:model:fixture",
       revision: 1,
-      reference: { kind: "model", provider: "openai", model: "gpt-5.6" },
+      reference: { kind: "model", provider: "fixture-provider", model: "fixture-model" },
     },
     output: {
       schema: { name: "brainstorm.names", version: 1, mode: "freeform" },

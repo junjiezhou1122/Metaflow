@@ -162,6 +162,26 @@ test("Direct Assist defaults to Claude ACP and starts Pi only when explicitly se
   }
 });
 
+test("Direct Assist rejects an unconfigured Pi backend before starting a runtime", async () => {
+  const router = new DirectAssistRuntimeRouter({
+    acp: new RecordingConversationRuntime(),
+    pi: {
+      command: process.execPath,
+      defaultProvider: "",
+      defaultModel: "",
+      thinking: "off",
+    },
+  });
+
+  await assert.rejects(router.converse({
+    id: "request:pi-unconfigured",
+    conversationId: "conversation:router",
+    message: "PI",
+    backend: { harness: "pi" },
+  }), /Pi provider must be selected explicitly or configured through METAFLOW_PI_PROVIDER/);
+  await router.close();
+});
+
 test("Direct Assist fails closed when an ACP request offers no allow option", () => {
   assert.throws(() => selectNativeAgentPermission({
     sessionId: "session:no-allow",
@@ -181,7 +201,7 @@ test("Direct assist passes plain conversation input to one resident runtime", as
 
   const first = await service.assist({
     ...assistRequest("request:first", "Summarize this"),
-    agent: { harness: "pi" as const, provider: "xem-gpt", model: "gpt-5.6-terra" },
+    agent: { harness: "pi" as const, provider: "fixture-provider", model: "fixture-model" },
   });
   const second = await service.assist(assistRequest("request:second", "Explain the selection"));
 
@@ -193,7 +213,7 @@ test("Direct assist passes plain conversation input to one resident runtime", as
   assert.equal(runtime.calls[0]?.currentContext?.screen?.selected_text, "Exact selected text");
   assert.equal(runtime.calls[0]?.currentContext?.app?.bundle_id, "com.apple.Safari");
   assert.equal(runtime.calls[0]?.screenImage?.mimeType, "image/jpeg");
-  assert.deepEqual(runtime.calls[0]?.backend, { harness: "pi", provider: "xem-gpt", model: "gpt-5.6-terra" });
+  assert.deepEqual(runtime.calls[0]?.backend, { harness: "pi", provider: "fixture-provider", model: "fixture-model" });
 });
 
 test("persistent ACP conversation accepts plain text and reuses process and session without MCP", async () => {

@@ -225,8 +225,8 @@ test("Clipboard Connector passes conformance through ordinary Capture Runtime an
       formats: ["public.file-url"],
       content: {
         file_urls: [
-          "file:///Users/junjie/Documents/source.pdf",
-          "file:///Users/junjie/Documents/slides.key",
+          "file:///workspace/documents/source.pdf",
+          "file:///workspace/documents/slides.key",
         ],
       },
     };

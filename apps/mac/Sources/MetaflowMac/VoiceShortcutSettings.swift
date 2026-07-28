@@ -11,11 +11,37 @@ struct AgentBackendConfiguration: Codable, Equatable {
     let provider: String
     let model: String
 
+    init(harness: AgentHarness, provider: String, model: String) {
+        self.harness = harness
+        self.provider = provider
+        self.model = model
+    }
+
     static let defaultValue = AgentBackendConfiguration(
         harness: .claudeCodeACP,
-        provider: "xem-gpt",
-        model: "gpt-5.6-terra"
+        provider: "",
+        model: ""
     )
+
+    private enum CodingKeys: String, CodingKey {
+        case harness
+        case provider
+        case model
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        harness = try container.decode(AgentHarness.self, forKey: .harness)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? ""
+        model = try container.decodeIfPresent(String.self, forKey: .model) ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(harness, forKey: .harness)
+        if !provider.isEmpty { try container.encode(provider, forKey: .provider) }
+        if !model.isEmpty { try container.encode(model, forKey: .model) }
+    }
 
     var displayName: String {
         switch harness {
@@ -115,12 +141,10 @@ final class VoiceShortcutSettingsController: NSObject, NSWindowDelegate {
         harness.action = #selector(harnessChanged)
 
         let provider = NSComboBox()
-        provider.addItems(withObjectValues: ["xem-gpt", "pixel", "tokendance", "xem"])
         provider.stringValue = agent.provider
         provider.placeholderString = "Pi provider"
 
         let model = NSComboBox()
-        model.addItems(withObjectValues: ["gpt-5.6-terra", "gpt-5.4-mini", "minimax-m2.7", "qwen3-vl-plus", "claude-haiku-4-5-20251001"])
         model.stringValue = agent.model
         model.placeholderString = "Pi model"
 

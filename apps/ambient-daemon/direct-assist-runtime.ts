@@ -31,7 +31,10 @@ export class DirectAssistRuntimeRouter implements AgentConversationRuntimeAdapte
   constructor(private readonly options: DirectAssistRuntimeRouterOptions) {}
 
   async warmup(conversationId = "metaflow-notch"): Promise<Record<string, unknown>> {
-    const runtime = this.piRuntime(this.options.pi.defaultProvider, this.options.pi.defaultModel);
+    const runtime = this.piRuntime(
+      requirePiBackendValue(this.options.pi.defaultProvider, "provider"),
+      requirePiBackendValue(this.options.pi.defaultModel, "model"),
+    );
     return await runtime.warmup(conversationId);
   }
 
@@ -60,8 +63,8 @@ export class DirectAssistRuntimeRouter implements AgentConversationRuntimeAdapte
         },
       });
     }
-    const provider = backend.provider?.trim() || this.options.pi.defaultProvider;
-    const model = backend.model?.trim() || this.options.pi.defaultModel;
+    const provider = requirePiBackendValue(backend.provider?.trim() || this.options.pi.defaultProvider, "provider");
+    const model = requirePiBackendValue(backend.model?.trim() || this.options.pi.defaultModel, "model");
     return await this.piRuntime(provider, model).converse(request, context);
   }
 
@@ -91,6 +94,12 @@ export class DirectAssistRuntimeRouter implements AgentConversationRuntimeAdapte
     this.piRuntimes.set(key, runtime);
     return runtime;
   }
+}
+
+function requirePiBackendValue(value: string, field: "provider" | "model"): string {
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`Pi ${field} must be selected explicitly or configured through METAFLOW_PI_${field.toUpperCase()}`);
+  return normalized;
 }
 
 export function createNativeAgentPermissionBroker(

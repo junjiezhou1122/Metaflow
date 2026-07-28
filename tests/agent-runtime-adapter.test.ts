@@ -202,7 +202,7 @@ test("buildAgentHandoff derives current context and default View tools from a si
       id: "task:handoff",
       runtime: "cli_json",
       goal: "Summarize this.",
-      cwd: "/Users/junjie/info",
+      cwd: "/workspace/metaflow",
       outputContract: { viewType: "analysis.agent_task" },
     },
     signal: {
@@ -213,14 +213,14 @@ test("buildAgentHandoff derives current context and default View tools from a si
       title: "Agent Runtime notes",
       url: "https://example.com/runtime",
       text_preview: "Current page talks about agent runtime adapters.",
-      project_path: "/Users/junjie/info",
+      project_path: "/workspace/metaflow",
     },
   });
 
   assert.equal(handoff.prompt, "Summarize this.");
   assert.equal(handoff.currentContext.screen?.app, "Chrome");
   assert.equal(handoff.currentContext.screen?.url, "https://example.com/runtime");
-  assert.equal(handoff.currentContext.app?.project_path, "/Users/junjie/info");
+  assert.equal(handoff.currentContext.app?.project_path, "/workspace/metaflow");
   assert.ok(handoff.viewTools.some(tool => tool.kind === "cli"));
   assert.ok(handoff.viewTools.some(tool => tool.kind === "mcp"));
 });
