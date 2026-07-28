@@ -105,6 +105,7 @@ export type AgentConversationEvent =
 export type AgentConversationContext = {
   onEvent?(event: AgentConversationEvent): void | Promise<void>;
   permissions?: AgentPermissionBroker;
+  signal?: AbortSignal;
 };
 
 export type AgentConversationRuntimeAdapter = {
@@ -242,6 +243,8 @@ export type AgentAcpStdioRuntimeOptions = {
   };
   env?: NodeJS.ProcessEnv;
   lifecycle?: "per_task" | "persistent";
+  maxPersistentConversations?: number;
+  persistentConversationIdleMs?: number;
 };
 
 export type AgentRuntimeSelection = {

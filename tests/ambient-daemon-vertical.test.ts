@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createAmbientDaemonComposition } from "../apps/ambient-daemon/composition.ts";
 import { exactViewRef } from "@info/view";
+import { legacyMacVoiceAssistAutomationDraft } from "../apps/ambient-daemon/definitions.ts";
+import { SqliteViewRepository } from "@info/storage-sqlite";
 import {
   CodexHistoryCaptureConnector,
   codexHistorySourceConnection,
@@ -172,6 +174,43 @@ test("Ambient composition persists exact Transformation owners and projects cano
     });
     assert.equal(transformation?.revision, 1);
     assert.equal(transformation?.operator.reference.kind, "agent");
+  } finally {
+    await restarted.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Ambient composition migrates the exact legacy macOS source as one immutable revision", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "metaflow-ambient-mac-source-migration-"));
+  const seed = new SqliteViewRepository(join(directory, "metaflow.sqlite"));
+  await seed.commit({
+    draft: legacyMacVoiceAssistAutomationDraft,
+    expected_revision: 0,
+    idempotency_key: "fixture:legacy-macos-automation@1",
+  });
+  seed.close();
+
+  const first = await createAmbientDaemonComposition({
+    data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
+    agent_runtime: new DeterministicAcpRuntime(),
+  });
+  try {
+    const migrated = await first.views.getLatest("automation.macos.voice_assist");
+    assert.equal(migrated?.revision, 2);
+    assert.match(JSON.stringify(migrated?.representation), /"source":"metaflow-mac"/);
+    assert.doesNotMatch(JSON.stringify(migrated?.representation), /metaflow-mac-companion/);
+  } finally {
+    await first.close();
+  }
+
+  const restarted = await createAmbientDaemonComposition({
+    data_directory: directory,
+    operation_auth_token: "test-operation-auth-token-32-bytes",
+    agent_runtime: new DeterministicAcpRuntime(),
+  });
+  try {
+    assert.equal((await restarted.views.getLatest("automation.macos.voice_assist"))?.revision, 2);
   } finally {
     await restarted.close();
     rmSync(directory, { recursive: true, force: true });

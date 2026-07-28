@@ -4,7 +4,7 @@ Native notch UI for the current Metaflow direct-assist slice.
 
 ```text
 hold Right Option, release to send, or submit a typed prompt
-  -> freeze current Accessibility context
+  -> freeze current app, window, and selected-text Accessibility context
   -> Doubao realtime ASR for voice
   -> POST /ambient/v1/assist
   -> resident Claude Code ACP conversation
@@ -14,12 +14,24 @@ hold Right Option, release to send, or submit a typed prompt
 This path is intentionally thin. It does not create or retrieve Views, invoke
 Automation, poll Delivery, submit Feedback, or register MCP tools. The daemon
 keeps one Claude Code ACP process resident and maps each notch `conversation_id`
-to its own resident session. Claude uses its native ACP tools and receives no
+to its own exact resumable session. At most four sessions remain open; capacity
+or ten minutes of inactivity closes an inactive session, and revisiting it uses
+ACP `session/load` with the prior session id. Claude uses its native ACP tools and receives no
 Metaflow MCP servers. Pi RPC remains available as a lazily started alternative.
 The voice shortcut is configurable from the Metaflow menu; a custom key
 combination also uses hold-to-talk.
 The same Settings window selects the direct conversation harness and Pi
 provider/model. Current harness choices are Pi RPC and Claude Code ACP.
+
+Explicit notch and voice activation resolve selection from native
+`AXSelectedText`, character ranges, browser/Electron text-marker ranges, and a
+bounded Accessibility descendant search. This covers applications that expose
+their selection through the macOS Accessibility contract without continuously
+walking their UI trees. Periodic observation remains focused-element-only.
+Selected code and prose retain their original line breaks and indentation in
+Agent context; the visible attachment preview is the only single-line form.
+Applications that do not expose selected text remain explicitly unsupported;
+Metaflow does not synthesize Copy or mutate the clipboard as a hidden fallback.
 
 ## Configuration
 
@@ -54,6 +66,10 @@ the active Pi model catalog. MiniMax and other text-only models still receive
 Accessibility text but are rejected when the request includes a screenshot;
 there is no silent image drop. The direct notch path sends no MCP servers and
 does not use Views or AgentTask output contracts.
+Ordinary Direct Assist turns complete in the foreground. Background Agent/Task,
+worktree creation, and repository writes require an explicit request in that
+turn. Closing the HTTP stream cancels active ACP work. The native request's
+900-second timeout is only the final hard deadline.
 
 Assistant responses use `swift-markdown-ui` for block-level CommonMark
 rendering. Headings, paragraphs, lists, links, code, and tables therefore keep
@@ -62,6 +78,8 @@ Text-only turns begin streaming after a short tool-detection buffer. If the
 Agent invokes tools, the notch replaces provisional prose with a live bounded
 tool timeline and shows the complete answer only when the turn finishes. Raw
 tool arguments and results remain out of the UI stream.
+A background Agent launch remains visually running even when its launch tool
+reports `completed`; it changes to Done only when the whole turn completes.
 Progress never opens a docked notch. Typed turns submitted while expanded can be
 watched live; voice turns and manually docked in-progress turns remain docked
 until terminal success or failure.

@@ -18,7 +18,7 @@ final class AccessibilitySmokeTests: XCTestCase {
         XCTAssertEqual(ResidentOperationWireContract.authenticationRequired, true)
         XCTAssertEqual(ResidentOperationWireContract.authenticationScheme, "Bearer")
         XCTAssertEqual(ResidentOperationWireContract.challengeScheme, "HMAC-SHA256")
-        XCTAssertEqual(ResidentOperationWireContract.operations.count, 39)
+        XCTAssertEqual(ResidentOperationWireContract.operations.count, 41)
         XCTAssertEqual(ResidentOperationWireContract.operationsEndpoint, "/metaflow/v1/operations/")
         XCTAssertEqual(ResidentOperationWireContract.mcpEndpoint, "/mcp")
     }
@@ -147,6 +147,7 @@ final class AccessibilitySmokeTests: XCTestCase {
         XCTAssertEqual(result.output["ok"] as? Bool, true)
         let accessibility = result.output["accessibility"] as? [String: Any]
         XCTAssertEqual(accessibility?["selected_text"] as? String, "Metaflow exact live selection")
+        XCTAssertEqual(accessibility?["selected_text_method"] as? String, "selected_text")
     }
 
     func testPermissionStatusLabelsRemainClosedAndObservable() {
@@ -180,7 +181,10 @@ final class AccessibilitySmokeTests: XCTestCase {
             prompt: "总结当前内容",
             source: .voice,
             transcript: "总结当前内容",
-            snapshot: snapshot(bundleIdentifier: "com.apple.TextEdit", selectedText: "Metaflow selected context"),
+            snapshot: snapshot(
+                bundleIdentifier: "com.apple.TextEdit",
+                selectedText: "  Metaflow selected\n    context  "
+            ),
             screenImage: AmbientScreenImage(mimeType: "image/jpeg", data: Data("jpeg fixture".utf8))
         )
         let object = try XCTUnwrap(
@@ -193,15 +197,65 @@ final class AccessibilitySmokeTests: XCTestCase {
         let agent = try XCTUnwrap(object["agent"] as? [String: Any])
 
         XCTAssertEqual(request.url?.path, "/ambient/v1/assist")
+        XCTAssertEqual(request.timeoutInterval, 900)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-ndjson")
         XCTAssertEqual(object["conversation_id"] as? String, client.conversationID)
-        XCTAssertEqual(screen["selected_text"] as? String, "Metaflow selected context")
+        XCTAssertEqual(screen["selected_text"] as? String, "  Metaflow selected\n    context  ")
         XCTAssertEqual(voice["transcript"] as? String, "总结当前内容")
         XCTAssertEqual(screenImage["mime_type"] as? String, "image/jpeg")
         XCTAssertEqual(screenImage["data"] as? String, Data("jpeg fixture".utf8).base64EncodedString())
         XCTAssertEqual(agent["harness"] as? String, "claude_code_acp")
         XCTAssertNil(agent["provider"])
         XCTAssertNil(agent["model"])
+    }
+
+    @MainActor
+    func testNotchFreezesExternalContextBeforeExpanding() {
+        let model = MetaflowNotchModel()
+        var presentationWhenCaptureStarts: MetaflowNotchPresentation?
+        model.onWillOpen = {
+            presentationWhenCaptureStarts = model.presentation
+        }
+
+        model.open()
+
+        XCTAssertEqual(presentationWhenCaptureStarts, .docked)
+        XCTAssertEqual(model.presentation, .expanded)
+    }
+
+    @MainActor
+    func testSelectedTextContextIsVisibleAndEmptySelectionsAreRemoved() {
+        let model = MetaflowNotchModel()
+
+        model.setSelectionContext(
+            appName: "TextEdit",
+            selectedText: "  Metaflow\n exact   selected context  "
+        )
+
+        XCTAssertEqual(model.selectionContext?.appName, "TextEdit")
+        XCTAssertEqual(model.selectionContext?.preview, "Metaflow exact selected context")
+        XCTAssertEqual(model.expandedHeight, 282)
+
+        model.setSelectionContext(appName: "TextEdit", selectedText: "  \n ")
+        XCTAssertNil(model.selectionContext)
+    }
+
+    @MainActor
+    func testBackgroundAgentRemainsRunningUntilTheConversationCompletes() {
+        let model = MetaflowNotchModel()
+        model.beginWorking()
+        model.recordToolActivity(AmbientToolActivityEvent(
+            toolCallID: "agent:background",
+            title: "Research in background",
+            kind: "think",
+            status: "completed",
+            toolName: "Agent",
+            background: true
+        ))
+
+        XCTAssertEqual(model.toolActivities.first?.status, "background")
+        model.complete(text: "Research complete")
+        XCTAssertEqual(model.toolActivities.first?.status, "completed")
     }
 
     func testAssistRequestCanTargetAnExplicitConversation() throws {
@@ -600,6 +654,7 @@ final class AccessibilitySmokeTests: XCTestCase {
             subrole: nil,
             focusedValue: nil,
             selectedText: selectedText,
+            selectedTextMethod: selectedText == nil ? nil : "selected_text",
             description: nil,
             placeholder: nil
         )

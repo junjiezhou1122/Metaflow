@@ -126,6 +126,7 @@ import {
   dailySummaryAutomationDraft,
   dailySummaryTransformation,
   macVoiceAssistAutomationDraft,
+  legacyMacVoiceAssistAutomationDraft,
   macVoiceAssistTransformation,
   obsidianMarkdownParserTransformation,
 } from "./definitions.js";
@@ -210,7 +211,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     await seedTransformation(transformations, macVoiceAssistTransformation, "seed:transformation.macos.voice_assist@1");
     await seedTransformation(transformations, dailySummaryTransformation, "seed:transformation.ambient.daily_summary@1");
     await seedAutomation(views, githubSummaryAutomationDraft, "seed:automation.browser.github_repository_summary@1");
-    await seedAutomation(views, macVoiceAssistAutomationDraft, "seed:automation.macos.voice_assist@1");
+    await seedMacVoiceAssistAutomation(views);
     await seedAutomation(views, dailySummaryAutomationDraft, "seed:automation.ambient.daily_summary@1");
 
     const access = new DeterministicViewAccessAuthorizer();
@@ -663,6 +664,46 @@ async function seedAutomation(
     draft,
     expected_revision: 0,
     idempotency_key: idempotencyKey,
+  });
+  parseAutomationView(committed.view);
+}
+
+async function seedMacVoiceAssistAutomation(views: SqliteViewRepository): Promise<void> {
+  const latest = await views.getLatest(macVoiceAssistAutomationDraft.id);
+  if (!latest) {
+    await seedAutomation(views, macVoiceAssistAutomationDraft, "seed:automation.macos.voice_assist@1");
+    return;
+  }
+
+  const currentV1 = parseView({ ...macVoiceAssistAutomationDraft, revision: 1 });
+  if (latest.revision === 1 && canonicalJson(latest) === canonicalJson(currentV1)) {
+    parseAutomationView(latest);
+    return;
+  }
+
+  const migrationDraft = {
+    ...macVoiceAssistAutomationDraft,
+    relations: [{
+      type: "supersedes" as const,
+      target: { view_id: macVoiceAssistAutomationDraft.id, revision: 1 },
+      metadata: {},
+    }],
+  };
+  const currentV2 = parseView({ ...migrationDraft, revision: 2 });
+  if (latest.revision === 2 && canonicalJson(latest) === canonicalJson(currentV2)) {
+    parseAutomationView(latest);
+    return;
+  }
+
+  const legacyV1 = parseView({ ...legacyMacVoiceAssistAutomationDraft, revision: 1 });
+  if (latest.revision !== 1 || canonicalJson(latest) !== canonicalJson(legacyV1)) {
+    throw new Error(`Seed Automation revision conflict: ${latest.id}@${latest.revision}`);
+  }
+
+  const committed = await views.commit({
+    draft: migrationDraft,
+    expected_revision: 1,
+    idempotency_key: "seed:automation.macos.voice_assist@2",
   });
   parseAutomationView(committed.view);
 }

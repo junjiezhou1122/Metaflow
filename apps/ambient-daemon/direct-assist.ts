@@ -14,6 +14,7 @@ const ToolActivitySchema = z.object({
   kind: z.string().trim().min(1).max(200).optional(),
   status: z.string().trim().min(1).max(100).optional(),
   tool_name: z.string().trim().min(1).max(300).optional(),
+  background: z.boolean().optional(),
 }).strict();
 const Base64Image = z.string()
   .min(4)
@@ -132,16 +133,37 @@ export class DirectAssistError extends Error {
 
 export function createDirectAssistHttpHandler(service: DirectAssistService) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    const abortController = new AbortController();
+    let requestId: string | undefined;
+    const abort = (source: "request_aborted" | "response_closed") => {
+      if (abortController.signal.aborted) return;
+      const reason = new Error(`Ambient assist client disconnected (${source})`);
+      abortController.abort(reason);
+      console.log(JSON.stringify({
+        component: "ambient-direct-assist",
+        event: "assist.client_disconnected",
+        request_id: requestId,
+        source,
+      }));
+    };
+    const onRequestAborted = () => abort("request_aborted");
+    const onResponseClosed = () => {
+      if (!response.writableEnded) abort("response_closed");
+    };
+    request.once("aborted", onRequestAborted);
+    response.once?.("close", onResponseClosed);
     try {
       const input = await readJson(request);
-      AmbientAssistRequestSchema.parse(input);
+      requestId = AmbientAssistRequestSchema.parse(input).request_id;
       if (acceptsNdjson(request)) {
-        await streamAssist(service, input, response);
+        await streamAssist(service, input, response, abortController.signal);
         return;
       }
-      const result = await service.assist(input);
+      const result = await service.assist(input, { signal: abortController.signal });
+      if (!canWrite(response)) return;
       sendJson(response, 200, { ok: true, result });
     } catch (error) {
+      if (!canWrite(response)) return;
       if (error instanceof z.ZodError) {
         sendJson(response, 400, {
           ok: false,
@@ -165,6 +187,9 @@ export function createDirectAssistHttpHandler(service: DirectAssistService) {
         code: "assist_internal_error",
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      request.off("aborted", onRequestAborted);
+      response.off?.("close", onResponseClosed);
     }
   };
 }
@@ -173,6 +198,7 @@ async function streamAssist(
   service: DirectAssistService,
   input: unknown,
   response: ServerResponse,
+  signal: AbortSignal,
 ): Promise<void> {
   const parsed = AmbientAssistRequestSchema.parse(input);
   response.writeHead(200, {
@@ -188,7 +214,9 @@ async function streamAssist(
   });
   try {
     const result = await service.assist(parsed, {
+      signal,
       onEvent(event) {
+        if (!canWrite(response)) return;
         if (event.type === "text_delta") {
           writeNdjson(response, {
             type: "assistant_message_delta",
@@ -221,9 +249,9 @@ async function streamAssist(
     writeNdjson(response, { type: "assistant_message_done", result });
   } catch (error) {
     const envelope = directAssistErrorEnvelope(error);
-    writeNdjson(response, { type: "assistant_message_error", ...envelope });
+    if (canWrite(response)) writeNdjson(response, { type: "assistant_message_error", ...envelope });
   } finally {
-    response.end();
+    if (canWrite(response)) response.end();
   }
 }
 
@@ -249,6 +277,7 @@ function parseToolActivity(
     kind: value.kind,
     status: value.status,
     tool_name: value.toolName,
+    background: value.background,
   });
   if (!parsed.success) {
     throw new DirectAssistError(
@@ -288,6 +317,10 @@ function acceptsNdjson(request: IncomingMessage): boolean {
 
 function writeNdjson(response: ServerResponse, value: unknown): void {
   response.write(`${JSON.stringify(value)}\n`);
+}
+
+function canWrite(response: ServerResponse): boolean {
+  return response.destroyed !== true && response.writableEnded !== true;
 }
 
 function directAssistErrorEnvelope(error: unknown): {

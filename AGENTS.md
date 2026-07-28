@@ -293,6 +293,10 @@ remain backend capability; neither product surface is a release blocker.
   never enables an implicit marketplace. Semantic Search is enabled only when
   the composition receives both an exact SQLite semantic profile set and a
   query embedding port; providing only one side fails before persistence opens.
+  The ACP parent process remains resident,
+  while at most four conversation sessions remain open; an inactive session is
+  closed after ten minutes and revisiting it must use ACP `session/load` with
+  the exact prior session id.
 - `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
   shared Operations, validates graph/search/exact-View responses, and keeps a
   disposable Graphology projection plus Sigma camera/layout state in the
@@ -688,7 +692,7 @@ Operations.
   or bounded accumulation Trigger. The notch and browser UI are Delivery
   adapters, not decision engines.
 - Direct notch assist defaults to one resident Claude Code ACP process and one
-  session per conversation id. It
+  exact resumable session per conversation id. It
   receives only the prompt, frozen immediate context, and current screenshot;
   it streams Markdown text and has no MCP servers, Views, Automation, or
   AgentTask output contract. Current screen context is explicitly supplemental
@@ -700,6 +704,17 @@ Operations.
   Metaflow must not replace or narrow harness capabilities. Provider/model, process reuse, first-token time,
   total duration, parse failure, and process exit are observable. A model that
   does not declare image input fails instead of silently dropping the screen.
+  Ordinary direct-assist turns must settle in the foreground: background Agent,
+  Task, worktree, or repository writes require an explicit request in that
+  turn. The HTTP client disconnect signal cancels the active ACP prompt. The
+  resident process permits at most four open conversation sessions, closes an
+  inactive session after ten minutes, and resumes an evicted session only by
+  exact ACP `session/load`; unsupported exact resume fails.
+  Daemon shutdown stops admission and closes live HTTP connections so their
+  disconnect signals cancel active prompts before ACP and persistence close.
+  Startup recognizes only the exact legacy macOS Automation revision whose
+  source was `metaflow-mac-companion`; it appends a `supersedes` revision using
+  `metaflow-mac`. Any other seed drift remains a fatal conflict.
 - The native Settings surface persists the global voice shortcut and direct
   Agent harness/provider/model selection. The default is Claude Code ACP; Pi
   RPC with a user-selected provider/model remains an explicit alternative.
@@ -726,6 +741,15 @@ Operations.
   register MCP tools. Missing Doubao configuration, denied Accessibility,
   failed ASR, and missing selection remain distinct observable outcomes; Apple
   Speech is not a fallback.
+- Explicit notch or voice activation resolves selected text across native,
+  browser, Electron, terminal, and PDF Accessibility shapes through direct
+  selected text, character ranges, text-marker ranges, and a bounded descendant
+  search of at most 120 elements over 12 levels. Periodic macOS observation
+  remains focused-element-only and must not inherit that traversal cost. Agent
+  context preserves selection whitespace;
+  only the one-line UI preview may normalize it. Unsupported or inaccessible
+  application text remains explicitly unavailable and never triggers a hidden
+  clipboard mutation.
 - Holding Right Option starts push-to-talk and releasing it submits. The notch
   remains docked for listening, transcription, and Agent work, then expands only
   when the turn reaches terminal success or failure. If the user starts a typed
@@ -738,10 +762,14 @@ Operations.
   answer text, displays bounded per-tool running/completed/failed activity, and
   appends only the complete final answer. Tool ids, names, kinds, titles, and
   status are observable; raw tool input and result content are not sent to the UI.
+  A completed launch event for a tool with `run_in_background=true` remains
+  visually running until the containing conversation reaches terminal completion.
   The composer is the bottom-most surface and
   sent-message bubbles size to their content up to the conversation width.
   Assistant content uses a CommonMark block renderer so headings, paragraphs,
   lists, links, and code retain structure while streaming.
+  The native request has a 900-second final hard deadline; this does not replace
+  disconnect cancellation or Agent/session lifecycle completion.
   Each selected conversation and each new user turn declaratively anchors its
   latest user message at the top of the conversation viewport after that row is
   laid out. Streaming answer deltas never force-follow the bottom; after the

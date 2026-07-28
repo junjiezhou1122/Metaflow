@@ -377,87 +377,101 @@ export const macVoiceAssistTransformation = parseTransformation({
   metadata: { application: "ambient.macos.voice_assist" },
 });
 
-export const macVoiceAssistAutomationDefinition = parseAutomationDefinition({
-  version: 1,
-  enabled: true,
-  trigger: {
-    id: "macos-push-to-talk",
-    kind: "user",
-    source: "metaflow-mac",
-    event: "push_to_talk.release",
-  },
-  target: {
-    kind: "transformation",
-    transformation_id: macVoiceAssistTransformation.id,
-    revision: macVoiceAssistTransformation.revision,
-  },
-  input_mapping: [
-    {
-      role: "voice_utterance",
-      required: true,
-      sources: [{ kind: "trigger_evidence", schema_name: "capture.macos.voice_utterance", source: "metaflow-mac" }],
-    },
-    {
-      role: "current_app",
-      required: true,
-      sources: [{ kind: "trigger_evidence", schema_name: "capture.macos.accessibility_snapshot", source: "metaflow-mac" }],
-    },
-    {
-      role: "current_page",
-      required: false,
-      sources: [{ kind: "trigger_evidence", schema_name: "capture.browser.page_opened", source: "chrome-acp" }],
-    },
-  ],
-  delivery: [{
-    surface: "macos",
-    urgency: "glance",
-    replacement: "replace",
-    show_progress: true,
-    expires_after_ms: 5 * 60_000,
-    actions: ["accept", "dismiss", "cancel", "correct"],
-  }],
-  limits: {
-    dedupe_window_ms: 0,
-    cooldown_ms: 0,
-    max_concurrency: 1,
-    timeout_ms: 60_000,
-  },
-});
-
-export const macVoiceAssistAutomationDraft = parseViewDraft({
-  id: "automation.macos.voice_assist",
-  name: "Ask from the current macOS context",
-  purpose: "Use one explicit global push-to-talk gesture to ask the configured or named Agent with exact foreground context",
-  schema: {
-    name: "metaflow.automation",
+function macVoiceAssistAutomationDefinitionForSource(
+  source: "metaflow-mac" | "metaflow-mac-companion",
+) {
+  return parseAutomationDefinition({
     version: 1,
-    mode: "strict",
-    dialect: "https://json-schema.org/draft/2020-12/schema",
-    json_schema: { type: "object" },
-  },
-  role: "derived",
-  time: { created_at: createdAt },
-  representation: {
-    form: "inline",
-    kind: "automation",
-    media_type: "application/json",
-    value: macVoiceAssistAutomationDefinition,
-  },
-  materialization: {
-    primary: { id: "canonical-json", format: "json", media_type: "application/json", location: { kind: "inline" } },
-  },
-  provenance: { inputs: [], actor: "metaflow:ambient-daemon" },
-  policy: {
-    owner: "user:local",
-    visibility: "private",
-    privacy: "private",
-    retention: "normal",
-    allow_external_model: false,
-    allow_embedding: false,
-    labels: ["ambient", "macos", "voice"],
-  },
-  metadata: { target: `${macVoiceAssistTransformation.id}@${macVoiceAssistTransformation.revision}` },
-});
+    enabled: true,
+    trigger: {
+      id: "macos-push-to-talk",
+      kind: "user",
+      source,
+      event: "push_to_talk.release",
+    },
+    target: {
+      kind: "transformation",
+      transformation_id: macVoiceAssistTransformation.id,
+      revision: macVoiceAssistTransformation.revision,
+    },
+    input_mapping: [
+      {
+        role: "voice_utterance",
+        required: true,
+        sources: [{ kind: "trigger_evidence", schema_name: "capture.macos.voice_utterance", source }],
+      },
+      {
+        role: "current_app",
+        required: true,
+        sources: [{ kind: "trigger_evidence", schema_name: "capture.macos.accessibility_snapshot", source }],
+      },
+      {
+        role: "current_page",
+        required: false,
+        sources: [{ kind: "trigger_evidence", schema_name: "capture.browser.page_opened", source: "chrome-acp" }],
+      },
+    ],
+    delivery: [{
+      surface: "macos",
+      urgency: "glance",
+      replacement: "replace",
+      show_progress: true,
+      expires_after_ms: 5 * 60_000,
+      actions: ["accept", "dismiss", "cancel", "correct"],
+    }],
+    limits: {
+      dedupe_window_ms: 0,
+      cooldown_ms: 0,
+      max_concurrency: 1,
+      timeout_ms: 60_000,
+    },
+  });
+}
+
+export const macVoiceAssistAutomationDefinition = macVoiceAssistAutomationDefinitionForSource("metaflow-mac");
+export const legacyMacVoiceAssistAutomationDefinition = macVoiceAssistAutomationDefinitionForSource("metaflow-mac-companion");
+
+function macVoiceAssistAutomationDraftForDefinition(
+  definition: typeof macVoiceAssistAutomationDefinition,
+) {
+  return parseViewDraft({
+    id: "automation.macos.voice_assist",
+    name: "Ask from the current macOS context",
+    purpose: "Use one explicit global push-to-talk gesture to ask the configured or named Agent with exact foreground context",
+    schema: {
+      name: "metaflow.automation",
+      version: 1,
+      mode: "strict",
+      dialect: "https://json-schema.org/draft/2020-12/schema",
+      json_schema: { type: "object" },
+    },
+    role: "derived",
+    time: { created_at: createdAt },
+    representation: {
+      form: "inline",
+      kind: "automation",
+      media_type: "application/json",
+      value: definition,
+    },
+    materialization: {
+      primary: { id: "canonical-json", format: "json", media_type: "application/json", location: { kind: "inline" } },
+    },
+    provenance: { inputs: [], actor: "metaflow:ambient-daemon" },
+    policy: {
+      owner: "user:local",
+      visibility: "private",
+      privacy: "private",
+      retention: "normal",
+      allow_external_model: false,
+      allow_embedding: false,
+      labels: ["ambient", "macos", "voice"],
+    },
+    metadata: { target: `${macVoiceAssistTransformation.id}@${macVoiceAssistTransformation.revision}` },
+  });
+}
+
+export const macVoiceAssistAutomationDraft = macVoiceAssistAutomationDraftForDefinition(macVoiceAssistAutomationDefinition);
+export const legacyMacVoiceAssistAutomationDraft = macVoiceAssistAutomationDraftForDefinition(legacyMacVoiceAssistAutomationDefinition);
 
 export const dailySummaryInputSchemas = [
   "capture.browser.page_snapshot",

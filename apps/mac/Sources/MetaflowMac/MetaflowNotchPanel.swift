@@ -285,7 +285,13 @@ private struct MetaflowExpandedNotch: View {
                 }
             }
             Divider().opacity(0.24)
-            composer
+            VStack(spacing: 7) {
+                if let selectionContext = model.selectionContext {
+                    MetaflowSelectionContextRow(context: selectionContext)
+                        .transition(.opacity)
+                }
+                composer
+            }
                 .padding(.horizontal, 14)
                 .padding(.top, 10)
                 .padding(.bottom, 12)
@@ -499,6 +505,40 @@ private struct MetaflowExpandedNotch: View {
 
 }
 
+private struct MetaflowSelectionContextRow: View {
+    let context: MetaflowSelectionContext
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.quote")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.cyan.opacity(0.88))
+                .frame(width: 18, height: 18)
+
+            Text(context.preview)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.78))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 6)
+
+            Text(context.appName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.44))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(.white.opacity(0.07), in: .rect(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        }
+        .help("Selected text from \(context.appName)")
+    }
+}
+
 private struct MetaflowTurnScrollAnchor: Equatable {
     let conversationID: String
     let messageID: UUID?
@@ -693,7 +733,7 @@ private struct MetaflowToolActivityRow: View {
     }
 
     private var isRunning: Bool {
-        ["pending", "in_progress", "running"].contains(normalizedStatus)
+        ["pending", "in_progress", "running", "background"].contains(normalizedStatus)
     }
 
     private var statusLabel: String {

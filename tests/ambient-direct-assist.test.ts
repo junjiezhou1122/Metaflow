@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -42,6 +43,9 @@ test("Ambient conversation prompt contains immediate context and the exact scree
   assert.match(text, /Exact selected text/);
   assert.ok(text.indexOf("USER MESSAGE:") < text.indexOf("CURRENT CONTEXT (supplemental and possibly unrelated):"));
   assert.match(text, /supplemental and possibly unrelated/);
+  assert.match(text, /Answer this turn in the foreground/);
+  assert.match(text, /Do not start a background Agent or Task/);
+  assert.match(text, /unless the user explicitly asks/);
   assert.doesNotMatch(text, /AVAILABLE VIEW TOOLS/);
   assert.doesNotMatch(text, /AgentTaskOutput/);
   assert.doesNotMatch(text, /MCP/);
@@ -297,6 +301,91 @@ test("persistent ACP process keeps concurrent conversation sessions independent"
   }
 });
 
+test("persistent ACP evicts an inactive conversation and resumes its exact session", async () => {
+  const directory = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-session-eviction-test-"));
+  const script = join(directory, "fake-conversation-acp-agent.mjs");
+  writeFileSync(script, fakeConversationAcpAgentSource());
+  chmodSync(script, 0o755);
+  const runtime = new AcpStdioAgentRuntimeAdapter({
+    id: "ambient_session_eviction_test",
+    command: process.execPath,
+    args: [script],
+    cwd: directory,
+    lifecycle: "persistent",
+    maxPersistentConversations: 1,
+    persistentConversationIdleMs: 60_000,
+  });
+
+  try {
+    const first = await runtime.converse({
+      id: "request:eviction:one",
+      conversationId: "conversation:one",
+      message: "FIRST",
+    });
+    await runtime.converse({
+      id: "request:eviction:two",
+      conversationId: "conversation:two",
+      message: "SECOND",
+    });
+    const resumed = await runtime.converse({
+      id: "request:eviction:three",
+      conversationId: "conversation:one",
+      message: "THIRD",
+    });
+
+    assert.equal(resumed.diagnostics?.session_id, first.diagnostics?.session_id);
+    assert.equal(resumed.diagnostics?.session_resumed, true);
+    assert.match(resumed.text ?? "", /turn:2/);
+  } finally {
+    await runtime.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("persistent ACP forwards conversation abort to session cancel", async () => {
+  const directory = mkdtempSync(join(process.cwd(), "packages/adapters/agent-runtime/.tmp-acp-cancel-test-"));
+  const script = join(directory, "fake-conversation-acp-agent.mjs");
+  const cancelMarker = join(directory, "cancelled.txt");
+  const promptMarker = join(directory, "prompt-started.txt");
+  writeFileSync(script, fakeConversationAcpAgentSource());
+  chmodSync(script, 0o755);
+  const runtime = new AcpStdioAgentRuntimeAdapter({
+    id: "ambient_conversation_cancel_test",
+    command: process.execPath,
+    args: [script],
+    cwd: directory,
+    env: { ACP_CANCEL_MARKER: cancelMarker, ACP_PROMPT_MARKER: promptMarker },
+    lifecycle: "persistent",
+  });
+  const controller = new AbortController();
+
+  try {
+    const pending = runtime.converse({
+      id: "request:cancel",
+      conversationId: "conversation:cancel",
+      message: "WAIT_FOR_CANCEL",
+    }, { signal: controller.signal });
+    const promptDeadline = Date.now() + 5_000;
+    while (!existsSync(promptMarker) && Date.now() < promptDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(existsSync(promptMarker), true, "fixture ACP prompt did not start");
+    controller.abort(new Error("stream closed"));
+    const result = await pending;
+    const cancelDeadline = Date.now() + 5_000;
+    while (!existsSync(cancelMarker) && Date.now() < cancelDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(cancelMarker), true, "fixture ACP cancel was not invoked");
+    assert.equal(readFileSync(cancelMarker, "utf8"), "sess_1");
+  } finally {
+    await runtime.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Ambient direct HTTP returns structured success and ACP failure", async () => {
   const runtime = new RecordingConversationRuntime();
   const handler = createDirectAssistHttpHandler(new DirectAssistService(runtime));
@@ -331,6 +420,18 @@ test("Ambient direct HTTP streams Markdown deltas before the final result", asyn
   ]);
   assert.equal(events.filter(event => event.type === "assistant_message_delta").map(event => event.delta).join(""), "**Metaflow**\n- ready");
   assert.equal(((events.at(-1)?.result as Record<string, unknown>)?.text), "answer:Use Markdown");
+});
+
+test("Ambient direct HTTP aborts runtime work when the streaming client disconnects", async () => {
+  const runtime = new DisconnectAwareConversationRuntime();
+  const handler = createDirectAssistHttpHandler(new DirectAssistService(runtime));
+  const pending = invokeDisconnectedStream(handler, assistRequest("request:http:disconnect", "Keep researching"));
+
+  await runtime.started;
+  await pending;
+
+  assert.equal(runtime.signal?.aborted, true);
+  assert.equal(runtime.cancelled, true);
 });
 
 test("Ambient direct HTTP streams bounded tool activity without raw input", async () => {
@@ -512,6 +613,38 @@ class RecordingConversationRuntime implements AgentConversationRuntimeAdapter {
   }
 }
 
+class DisconnectAwareConversationRuntime implements AgentConversationRuntimeAdapter {
+  readonly id = "disconnect_aware_acp";
+  readonly started: Promise<void>;
+  private markStarted!: () => void;
+  signal?: AbortSignal;
+  cancelled = false;
+
+  constructor() {
+    this.started = new Promise(resolve => { this.markStarted = resolve; });
+  }
+
+  async converse(
+    _request: AgentConversationRequest,
+    context?: Parameters<AgentConversationRuntimeAdapter["converse"]>[1],
+  ): Promise<AgentConversationResult> {
+    this.signal = context?.signal;
+    this.markStarted();
+    await new Promise<void>(resolve => {
+      if (context?.signal?.aborted) {
+        this.cancelled = true;
+        resolve();
+        return;
+      }
+      context?.signal?.addEventListener("abort", () => {
+        this.cancelled = true;
+        resolve();
+      }, { once: true });
+    });
+    return { ok: false, reason: "client disconnected" };
+  }
+}
+
 function assistRequest(request_id: string, prompt: string) {
   return {
     request_id,
@@ -574,20 +707,49 @@ async function invokeStream(
   return { status, contentType, raw };
 }
 
+async function invokeDisconnectedStream(
+  handler: ReturnType<typeof createDirectAssistHttpHandler>,
+  body: unknown,
+): Promise<void> {
+  const request = Readable.from([JSON.stringify(body)]) as Readable & { headers: Record<string, string> };
+  request.headers = { "content-type": "application/json", accept: "application/x-ndjson" };
+  const response = new EventEmitter() as EventEmitter & {
+    destroyed: boolean;
+    writableEnded: boolean;
+    writeHead(code: number, headers?: Record<string, string>): void;
+    write(value: string): boolean;
+    end(value?: string): void;
+  };
+  response.destroyed = false;
+  response.writableEnded = false;
+  response.writeHead = () => undefined;
+  response.write = () => !response.destroyed;
+  response.end = () => { response.writableEnded = true; };
+
+  const pending = handler(request as never, response as never);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  response.destroyed = true;
+  response.emit("close");
+  await pending;
+}
+
 function fakeConversationAcpAgentSource(): string {
   return `
 import { AgentSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
+import { writeFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 
 let connection;
 let sessionCount = 0;
 const sessions = new Map();
+const pendingPrompts = new Map();
 const agent = {
   async initialize(params) {
     return {
       protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
       agentCapabilities: {
         promptCapabilities: { image: true },
+        loadSession: true,
         sessionCapabilities: { close: {} }
       },
       agentInfo: { name: "fake-conversation-acp-agent", version: "0.0.1" },
@@ -599,11 +761,19 @@ const agent = {
     sessions.set(sessionId, { turn: 0, mcp: params.mcpServers.length });
     return { sessionId };
   },
+  async loadSession(params) {
+    if (!sessions.has(params.sessionId)) throw new Error("unknown fixture session " + params.sessionId);
+    return {};
+  },
   async prompt(params) {
     const state = sessions.get(params.sessionId);
     state.turn += 1;
     const imageCount = params.prompt.filter(block => block.type === "image").length;
     const promptText = params.prompt.filter(block => block.type === "text").map(block => block.text).join("\\n");
+    if (promptText.includes("WAIT_FOR_CANCEL")) {
+      if (process.env.ACP_PROMPT_MARKER) writeFileSync(process.env.ACP_PROMPT_MARKER, params.sessionId);
+      return await new Promise(resolve => pendingPrompts.set(params.sessionId, resolve));
+    }
     let permission = "";
     if (promptText.includes("TOOL_PERMISSION")) {
       await connection.sessionUpdate({
@@ -650,7 +820,11 @@ const agent = {
     }
     return { stopReason: "end_turn" };
   },
-  async cancel() {},
+  async cancel(params) {
+    if (process.env.ACP_CANCEL_MARKER) writeFileSync(process.env.ACP_CANCEL_MARKER, params.sessionId);
+    pendingPrompts.get(params.sessionId)?.({ stopReason: "cancelled" });
+    pendingPrompts.delete(params.sessionId);
+  },
   async closeSession() { return {}; },
   async authenticate() {}
 };

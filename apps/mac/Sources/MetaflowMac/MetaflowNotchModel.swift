@@ -25,6 +25,20 @@ enum MetaflowContentChange: Equatable, Sendable {
     case throttled
 }
 
+struct MetaflowSelectionContext: Equatable {
+    let appName: String
+    let preview: String
+
+    init?(appName: String, selectedText: String?) {
+        let normalized = (selectedText ?? "")
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+        self.appName = appName
+        preview = String(normalized.prefix(240))
+    }
+}
+
 struct MetaflowNotchMessage: Identifiable, Equatable, Codable {
     enum Role: String, Codable {
         case user
@@ -85,12 +99,14 @@ struct MetaflowToolActivity: Identifiable, Equatable {
     var kind: String?
     var status: String?
     var toolName: String?
+    var isBackground: Bool
 
     init(_ event: AmbientToolActivityEvent) {
         id = event.toolCallID
         title = event.title
         kind = event.kind
-        status = event.status
+        isBackground = event.background == true
+        status = isBackground && event.status == "completed" ? "background" : event.status
         toolName = event.toolName
     }
 
@@ -98,7 +114,10 @@ struct MetaflowToolActivity: Identifiable, Equatable {
         precondition(id == event.toolCallID, "Cannot merge different tool calls")
         title = event.title ?? title
         kind = event.kind ?? kind
-        status = event.status ?? status
+        if event.background == true { isBackground = true }
+        if let nextStatus = event.status {
+            status = isBackground && nextStatus == "completed" ? "background" : nextStatus
+        }
         toolName = event.toolName ?? toolName
     }
 }
@@ -280,6 +299,7 @@ final class MetaflowNotchModel {
     }
     var inputText = ""
     var shortcutLabel = "Hold Right Option"
+    private(set) var selectionContext: MetaflowSelectionContext?
     private(set) var conversations: [MetaflowNotchConversation]
     private(set) var selectedConversationID: String
     private(set) var isConversationPickerPresented = false
@@ -370,13 +390,14 @@ final class MetaflowNotchModel {
     var expandedHeight: CGFloat {
         if phase == .listening || phase == .preparingVoice || phase == .transcribing { return 176 }
         if isConversationPickerPresented { return 466 }
-        if messages.isEmpty { return 248 }
+        if messages.isEmpty { return selectionContext == nil ? 248 : 282 }
         let currentTurn = currentTurnMessages
         let userRows = currentTurn.filter { $0.role == .user }.count
         let assistantText = currentTurn.last(where: { $0.role == .assistant })?.text ?? resultText
         let assistantLines = max(2, min(11, Int(ceil(Double(assistantText.count) / 56.0))))
         let toolRows = min(toolActivities.count, 5)
-        let estimated = 178 + CGFloat(userRows * 46) + CGFloat(assistantLines * 22) + CGFloat(toolRows * 34)
+        let contextHeight: CGFloat = selectionContext == nil ? 0 : 34
+        let estimated = 178 + contextHeight + CGFloat(userRows * 46) + CGFloat(assistantLines * 22) + CGFloat(toolRows * 34)
         return min(540, max(286, estimated))
     }
 
@@ -423,8 +444,21 @@ final class MetaflowNotchModel {
     }
 
     func open() {
-        presentation = .expanded
         onWillOpen?()
+        presentation = .expanded
+    }
+
+    func setSelectionContext(appName: String, selectedText: String?) {
+        let next = MetaflowSelectionContext(appName: appName, selectedText: selectedText)
+        guard selectionContext != next else { return }
+        selectionContext = next
+        notifyContentChange(.immediate)
+    }
+
+    func clearSelectionContext() {
+        guard selectionContext != nil else { return }
+        selectionContext = nil
+        notifyContentChange(.immediate)
     }
 
     func toggleConversationPicker() {
@@ -546,6 +580,9 @@ final class MetaflowNotchModel {
         conversation.streamingMessageID = nil
         conversation.bufferedResponse = ""
         conversation.isToolMode = false
+        for index in conversation.toolActivities.indices where conversation.toolActivities[index].status == "background" {
+            conversation.toolActivities[index].status = "completed"
+        }
         conversation.detail = "Ready"
         conversation.phase = .done
         conversation.isSending = false

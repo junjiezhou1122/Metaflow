@@ -85,6 +85,12 @@ function outputInstructions(mode: NonNullable<AgentTaskRequest["outputContract"]
 export function buildAgentConversationPromptBlocks(request: AgentConversationRequest): ContentBlock[] {
   const context = request.currentContext ?? {};
   const text = [
+    "DIRECT ASSIST TURN CONTRACT:",
+    "Answer this turn in the foreground and return the complete answer before ending the turn.",
+    "Do not start a background Agent or Task, create a worktree, or modify a repository unless the user explicitly asks for that exact background or write behavior in this message.",
+    "If a skill would normally delegate in the background, keep the work in the foreground for this turn.",
+    "Tool use is allowed when needed, but the foreground answer must not finish before that work does.",
+    "",
     "USER MESSAGE:",
     request.message.trim(),
     "",

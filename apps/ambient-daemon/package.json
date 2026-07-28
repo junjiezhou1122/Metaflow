@@ -7,7 +7,7 @@
     "start": "node --experimental-sqlite --import tsx index.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "^0.37.0",
+    "@agentclientprotocol/claude-agent-acp": "^0.62.0",
     "@info/agent-runtime-adapter": "workspace:*",
     "@info/authoring": "workspace:*",
     "@info/automation": "workspace:*",

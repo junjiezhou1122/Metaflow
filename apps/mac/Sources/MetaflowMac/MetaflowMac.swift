@@ -47,6 +47,8 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
     private var activeVoiceSession: ActiveVoiceSession?
     private var lastExternalSnapshot: AccessibilitySnapshot?
     private var frozenNotchSnapshot: AccessibilitySnapshot?
+    private var frozenNotchCaptureID: UUID?
+    private var frozenNotchCaptureTask: Task<AccessibilitySnapshot, Never>?
     private let notchModel = MetaflowNotchModel(conversationStore: .live)
     private var notchPanel: MetaflowNotchPanelController!
 
@@ -530,16 +532,25 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
     }
 
     private func submitTypedCommand(_ command: String, conversationID: String) {
-        let (_, snapshot) = currentAssistAccessibilityContext()
-        postDirectAssist(
-            requestID: UUID().uuidString,
-            conversationID: conversationID,
-            prompt: command,
-            source: .typed,
-            transcript: nil,
-            snapshot: snapshot,
-            screenImage: startScreenCapture()
-        )
+        let pendingCapture = frozenNotchCaptureTask
+        let frozenSnapshot = frozenNotchSnapshot
+        let screenImage = startScreenCapture()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let snapshot = await pendingCapture?.value ?? frozenSnapshot
+            if let snapshot {
+                adoptNotchAccessibilityContext(snapshot)
+            }
+            postDirectAssist(
+                requestID: UUID().uuidString,
+                conversationID: conversationID,
+                prompt: command,
+                source: .typed,
+                transcript: nil,
+                snapshot: snapshot,
+                screenImage: screenImage
+            )
+        }
     }
 
     private func postDirectAssist(
@@ -582,28 +593,50 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
     }
 
     private func freezeNotchAccessibilityContext() {
-        guard accessibilityTrusted(prompt: false),
-              let app = NSWorkspace.shared.frontmostApplication,
-              app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        frozenNotchCaptureTask?.cancel()
+        frozenNotchCaptureTask = nil
+        frozenNotchCaptureID = nil
+        frozenNotchSnapshot = nil
+        notchModel.clearSelectionContext()
+        guard accessibilityTrusted(prompt: false) else {
+            NSLog("[metaflow] assist.context_unavailable reason=accessibility_permission_denied")
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            NSLog("[metaflow] assist.context_unavailable reason=frontmost_application_unavailable")
+            return
+        }
+        guard app.bundleIdentifier != Bundle.main.bundleIdentifier else {
+            NSLog("[metaflow] assist.context_unavailable reason=frontmost_application_is_metaflow")
+            return
+        }
         let name = app.localizedName ?? "Unknown app"
         let bundleIdentifier = app.bundleIdentifier ?? "unknown"
         let processIdentifier = app.processIdentifier
         let started = Date()
+        let captureID = UUID()
         let capture = Task.detached(priority: .userInitiated) {
             AccessibilitySnapshot.capture(
                 appName: name,
                 bundleIdentifier: bundleIdentifier,
-                processIdentifier: processIdentifier
+                processIdentifier: processIdentifier,
+                selectionSearch: .extended
             )
         }
+        frozenNotchCaptureID = captureID
+        frozenNotchCaptureTask = capture
         Task { @MainActor [weak self] in
             let snapshot = await capture.value
-            self?.frozenNotchSnapshot = snapshot
-            self?.lastExternalSnapshot = snapshot
+            guard let self, self.frozenNotchCaptureID == captureID else { return }
+            self.frozenNotchCaptureID = nil
+            self.frozenNotchCaptureTask = nil
+            self.adoptNotchAccessibilityContext(snapshot)
             NSLog(
-                "[metaflow] assist.context_frozen app=%@ bundle_id=%@ elapsed_ms=%.1f",
+                "[metaflow] assist.context_frozen app=%@ bundle_id=%@ selection_method=%@ selected_characters=%d elapsed_ms=%.1f",
                 snapshot.appName,
                 snapshot.bundleIdentifier,
+                snapshot.selectedTextMethod ?? "none",
+                snapshot.selectedText?.count ?? 0,
                 Date().timeIntervalSince(started) * 1_000
             )
         }
@@ -614,11 +647,17 @@ final class MetaflowMac: NSObject, NSApplicationDelegate {
         guard trusted else { return (false, nil) }
         if let app = NSWorkspace.shared.frontmostApplication,
            app.bundleIdentifier != Bundle.main.bundleIdentifier {
-            let snapshot = AccessibilitySnapshot.capture(app: app)
-            lastExternalSnapshot = snapshot
+            let snapshot = AccessibilitySnapshot.capture(app: app, selectionSearch: .extended)
+            adoptNotchAccessibilityContext(snapshot)
             return (true, snapshot)
         }
         return (true, frozenNotchSnapshot ?? lastExternalSnapshot)
+    }
+
+    private func adoptNotchAccessibilityContext(_ snapshot: AccessibilitySnapshot) {
+        frozenNotchSnapshot = snapshot
+        lastExternalSnapshot = snapshot
+        notchModel.setSelectionContext(appName: snapshot.appName, selectedText: snapshot.selectedText)
     }
 
     private func startScreenCapture() -> Task<AmbientScreenImage, Error> {
@@ -1131,7 +1170,11 @@ enum MetaflowMacMain {
 
     private static func runAccessibilitySmoke() {
         let trusted = AXIsProcessTrusted()
-        let snapshot = trusted ? NSWorkspace.shared.frontmostApplication.map(AccessibilitySnapshot.capture) : nil
+        let snapshot = trusted
+            ? NSWorkspace.shared.frontmostApplication.map {
+                AccessibilitySnapshot.capture(app: $0, selectionSearch: .extended)
+            }
+            : nil
         let evaluation = evaluateAccessibilitySmoke(
             trusted: trusted,
             snapshot: snapshot,
@@ -1252,7 +1295,10 @@ func evaluateAccessibilitySmoke(
             "message": "No frontmost application is available to Accessibility."
         ], exitCode: 3)
     }
-    let accessibility = ambientAccessibilityPayload(snapshot: snapshot, trusted: true)
+    var accessibility = ambientAccessibilityPayload(snapshot: snapshot, trusted: true)
+    if let selectedTextMethod = snapshot.selectedTextMethod {
+        accessibility["selected_text_method"] = selectedTextMethod
+    }
     if requireSelectedText && normalize(snapshot.selectedText ?? "").isEmpty {
         return AccessibilitySmokeEvaluation(output: [
             "ok": false,
@@ -1292,6 +1338,11 @@ private func printSmokeJson(_ output: [String: Any]) {
     }
 }
 
+enum AccessibilitySelectionSearch: Sendable {
+    case focusedOnly
+    case extended
+}
+
 struct AccessibilitySnapshot: Sendable {
     let appName: String
     let bundleIdentifier: String
@@ -1301,6 +1352,7 @@ struct AccessibilitySnapshot: Sendable {
     let subrole: String?
     let focusedValue: String?
     let selectedText: String?
+    let selectedTextMethod: String?
     let description: String?
     let placeholder: String?
 
@@ -1335,18 +1387,34 @@ struct AccessibilitySnapshot: Sendable {
         return haystack.range(of: #"password|token|secret|api[_-]?key|credit card|验证码|密码|one-time|otp"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    static func capture(app: NSRunningApplication) -> AccessibilitySnapshot {
+    static func capture(
+        app: NSRunningApplication,
+        selectionSearch: AccessibilitySelectionSearch = .focusedOnly
+    ) -> AccessibilitySnapshot {
         capture(
             appName: app.localizedName ?? "Unknown app",
             bundleIdentifier: app.bundleIdentifier ?? "unknown",
-            processIdentifier: app.processIdentifier
+            processIdentifier: app.processIdentifier,
+            selectionSearch: selectionSearch
         )
     }
 
-    static func capture(appName: String, bundleIdentifier: String, processIdentifier: pid_t) -> AccessibilitySnapshot {
+    static func capture(
+        appName: String,
+        bundleIdentifier: String,
+        processIdentifier: pid_t,
+        selectionSearch: AccessibilitySelectionSearch = .focusedOnly
+    ) -> AccessibilitySnapshot {
         let appElement = AXUIElementCreateApplication(processIdentifier)
         let window: AXUIElement? = axValue(appElement, kAXFocusedWindowAttribute)
         let focused: AXUIElement? = axValue(appElement, kAXFocusedUIElementAttribute)
+        let selection: AccessibilitySelection?
+        switch selectionSearch {
+        case .focusedOnly:
+            selection = focused.flatMap(axDirectSelection)
+        case .extended:
+            selection = axSelection(focused: focused, window: window)
+        }
         return AccessibilitySnapshot(
             appName: appName,
             bundleIdentifier: bundleIdentifier,
@@ -1355,7 +1423,8 @@ struct AccessibilitySnapshot: Sendable {
             role: axString(focused, kAXRoleAttribute),
             subrole: axString(focused, kAXSubroleAttribute),
             focusedValue: axString(focused, kAXValueAttribute),
-            selectedText: axString(focused, kAXSelectedTextAttribute),
+            selectedText: selection?.text,
+            selectedTextMethod: selection?.method,
             description: axString(focused, kAXDescriptionAttribute),
             placeholder: axString(focused, kAXPlaceholderValueAttribute)
         )
@@ -1478,6 +1547,95 @@ private func axString(_ element: AXUIElement?, _ attribute: String) -> String? {
     if let string = value as? String { return string }
     if let attributed = value as? NSAttributedString { return attributed.string }
     return nil
+}
+
+private struct AccessibilitySelection {
+    let text: String
+    let method: String
+}
+
+private func axSelection(
+    focused: AXUIElement?,
+    window: AXUIElement?,
+    maximumDepth: Int = 12,
+    maximumElements: Int = 120
+) -> AccessibilitySelection? {
+    var queue: [(element: AXUIElement, depth: Int)] = []
+    if let focused { queue.append((focused, 0)) }
+    if let window, focused.map({ !CFEqual($0, window) }) ?? true { queue.append((window, 0)) }
+    var seen: [AXUIElement] = []
+    var index = 0
+
+    while index < queue.count && seen.count < maximumElements {
+        let next = queue[index]
+        index += 1
+        guard !seen.contains(where: { CFEqual($0, next.element) }) else { continue }
+        seen.append(next.element)
+
+        if let selection = axDirectSelection(next.element) {
+            let prefix = next.depth == 0 ? "" : "descendant_"
+            return AccessibilitySelection(text: selection.text, method: prefix + selection.method)
+        }
+        guard next.depth < maximumDepth else { continue }
+
+        for attribute in [kAXSelectedChildrenAttribute, kAXChildrenAttribute, kAXContentsAttribute] {
+            let children: [AXUIElement]? = axValue(next.element, attribute)
+            for child in children ?? [] where queue.count < maximumElements {
+                queue.append((child, next.depth + 1))
+            }
+        }
+    }
+    return nil
+}
+
+private func axDirectSelection(_ element: AXUIElement) -> AccessibilitySelection? {
+    if let text = axNonEmptySelection(axString(element, kAXSelectedTextAttribute)) {
+        return AccessibilitySelection(text: text, method: "selected_text")
+    }
+
+    if let rangeValue: AXValue = axValue(element, kAXSelectedTextRangeAttribute) {
+        var range = CFRange()
+        if AXValueGetType(rangeValue) == .cfRange,
+           AXValueGetValue(rangeValue, .cfRange, &range),
+           range.length > 0,
+           let text = axNonEmptySelection(
+               axParameterizedString(element, kAXStringForRangeParameterizedAttribute, parameter: rangeValue)
+           ) {
+            return AccessibilitySelection(text: text, method: "selected_text_range")
+        }
+    }
+
+    if let markerRange: AnyObject = axValue(element, "AXSelectedTextMarkerRange"),
+       let text = axNonEmptySelection(
+           axParameterizedString(element, "AXStringForTextMarkerRange", parameter: markerRange)
+       ) {
+        return AccessibilitySelection(text: text, method: "selected_text_marker_range")
+    }
+    return nil
+}
+
+private func axParameterizedString(
+    _ element: AXUIElement,
+    _ attribute: String,
+    parameter: AnyObject
+) -> String? {
+    var value: CFTypeRef?
+    let result = AXUIElementCopyParameterizedAttributeValue(
+        element,
+        attribute as CFString,
+        parameter,
+        &value
+    )
+    guard result == .success else { return nil }
+    if let string = value as? String { return string }
+    if let attributed = value as? NSAttributedString { return attributed.string }
+    return nil
+}
+
+private func axNonEmptySelection(_ text: String?) -> String? {
+    guard let text,
+          text.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil else { return nil }
+    return text
 }
 
 func normalize(_ text: String) -> String {

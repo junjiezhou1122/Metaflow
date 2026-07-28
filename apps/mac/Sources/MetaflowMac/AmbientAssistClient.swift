@@ -158,7 +158,7 @@ struct AmbientAssistClient {
         )
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 120
+        request.timeoutInterval = 900
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONEncoder().encode(body)
@@ -189,6 +189,23 @@ struct AmbientToolActivityEvent: Decodable, Equatable {
     let kind: String?
     let status: String?
     let toolName: String?
+    let background: Bool?
+
+    init(
+        toolCallID: String,
+        title: String?,
+        kind: String?,
+        status: String?,
+        toolName: String?,
+        background: Bool? = nil
+    ) {
+        self.toolCallID = toolCallID
+        self.title = title
+        self.kind = kind
+        self.status = status
+        self.toolName = toolName
+        self.background = background
+    }
 
     enum CodingKeys: String, CodingKey {
         case toolCallID = "tool_call_id"
@@ -196,6 +213,7 @@ struct AmbientToolActivityEvent: Decodable, Equatable {
         case kind
         case status
         case toolName = "tool_name"
+        case background
     }
 }
 
@@ -236,7 +254,7 @@ private struct AmbientAssistContext: Encodable {
                 title: bounded(snapshot.windowTitle, limit: 2_000),
                 app: snapshot.appName,
                 text: focused,
-                selectedText: bounded(snapshot.selectedText, limit: 50_000)
+                selectedText: boundedSelection(snapshot.selectedText, limit: 50_000)
             )
             app = AppContext(
                 name: snapshot.appName,
@@ -321,6 +339,12 @@ private func bounded(_ value: String?, limit: Int) -> String? {
     let normalized = normalize(value ?? "")
     guard !normalized.isEmpty else { return nil }
     return String(normalized.prefix(limit))
+}
+
+private func boundedSelection(_ value: String?, limit: Int) -> String? {
+    guard let value,
+          value.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil else { return nil }
+    return String(value.prefix(limit))
 }
 
 private func collect(bytes: URLSession.AsyncBytes) async throws -> Data {

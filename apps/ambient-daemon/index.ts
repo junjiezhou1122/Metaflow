@@ -29,6 +29,8 @@ export async function startAmbientDaemon() {
     args: runtimeCommand.args,
     env: runtimeCommand.env,
     lifecycle: "persistent",
+    maxPersistentConversations: 4,
+    persistentConversationIdleMs: 10 * 60_000,
   });
   const agentWarmup = await agentRuntime.warmup();
   console.log(JSON.stringify({
@@ -99,6 +101,7 @@ export async function startAmbientDaemon() {
         }
         void Promise.all([composition.close(), directConversation.close()]).then(() => resolve(), reject);
       });
+      server.closeAllConnections();
     });
     return closing;
   };

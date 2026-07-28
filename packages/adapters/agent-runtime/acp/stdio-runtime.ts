@@ -27,13 +27,21 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
   private persistent?: PersistentAcpConnection;
   private persistentStart?: Promise<PersistentAcpConnection>;
   private persistentSessionByTask = new Map<string, string>();
-  private persistentSessionByConversation = new Map<string, string>();
+  private persistentSessionByConversation = new Map<string, PersistentConversationSession>();
   private activeConversations = new Set<string>();
   private closePromise?: Promise<void>;
   private closed = false;
 
   constructor(private readonly options: AgentAcpStdioRuntimeOptions) {
     this.id = options.id ?? "acp_stdio";
+    const capacity = options.maxPersistentConversations ?? 4;
+    const idleMs = options.persistentConversationIdleMs ?? 10 * 60_000;
+    if (!Number.isSafeInteger(capacity) || capacity < 1) {
+      throw new Error("maxPersistentConversations must be a positive safe integer");
+    }
+    if (!Number.isSafeInteger(idleMs) || idleMs < 1) {
+      throw new Error("persistentConversationIdleMs must be a positive safe integer");
+    }
   }
 
   async capabilities() {
@@ -232,27 +240,32 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
     let runtime: PersistentAcpConnection | undefined;
     let sessionId: string | undefined;
     let sessionReused = false;
+    let sessionResumed = false;
     try {
+      throwIfAborted(conversationContext?.signal, request.id);
       runtime = await this.ensurePersistent({ id: request.id, cwd: request.cwd }, context);
       if (request.screenImage && runtime.initialize.agentCapabilities?.promptCapabilities?.image !== true) {
         throw new Error(`ACP agent ${runtime.initialize.agentInfo?.name ?? this.id} does not advertise image prompt support`);
       }
-      sessionId = this.persistentSessionByConversation.get(request.conversationId);
-      sessionReused = Boolean(sessionId);
-      if (!sessionId) {
-        const session = await runtime.connection.newSession({
-          cwd: request.cwd ?? this.options.cwd ?? process.cwd(),
-          mcpServers: [],
-        });
-        sessionId = session.sessionId;
-        this.persistentSessionByConversation.set(request.conversationId, sessionId);
-      }
+      const acquired = await this.acquireConversationSession(runtime, request);
+      sessionId = acquired.record.sessionId;
+      sessionReused = acquired.reused;
+      sessionResumed = acquired.resumed;
       const updates: acp.SessionNotification[] = [];
       runtime.sessions.set(sessionId, { requestId: request.id, context, updates });
-      const response = await runtime.connection.prompt({
-        sessionId,
-        prompt: buildAgentConversationPromptBlocks(request),
-      });
+      const response = await promptWithAbort(
+        runtime.connection,
+        {
+          sessionId,
+          prompt: buildAgentConversationPromptBlocks(request),
+        },
+        conversationContext?.signal,
+        () => this.logConversationLifecycle("acp.conversation_cancel_requested", request, {
+          session_id: sessionId,
+          reason: abortReason(conversationContext?.signal),
+        }),
+      );
+      acquired.record.lastUsedAt = Date.now();
       return {
         ok: true,
         reason: `continued ACP conversation through ${this.id}`,
@@ -265,6 +278,7 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
           conversation_id: request.conversationId,
           session_id: sessionId,
           session_reused: sessionReused,
+          session_resumed: sessionResumed,
           stop_reason: response.stopReason,
           update_count: updates.length,
           mcp_server_count: 0,
@@ -273,9 +287,24 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
     } catch (error) {
       if (runtime && sessionId) {
         runtime.sessions.delete(sessionId);
-        this.persistentSessionByConversation.delete(request.conversationId);
-        await maybeCloseSession(runtime.connection, sessionId, runtime.initialize.agentCapabilities).catch(() => undefined);
+        const record = this.persistentSessionByConversation.get(request.conversationId);
+        if (record?.sessionId === sessionId && !isAbortError(error, conversationContext?.signal)) {
+          try {
+            await this.closeConversationSession(runtime, request.conversationId, record, "prompt_failure");
+          } catch (closeError) {
+            this.logConversationLifecycle("acp.conversation_close_failed", request, {
+              session_id: sessionId,
+              reason: "prompt_failure",
+              error: errorMessage(closeError),
+            });
+          }
+        }
       }
+      this.logConversationLifecycle(
+        isAbortError(error, conversationContext?.signal) ? "acp.conversation_cancelled" : "acp.conversation_failed",
+        request,
+        { session_id: sessionId, error: errorMessage(error) },
+      );
       return {
         ok: false,
         reason: `persistent ACP conversation failed: ${errorMessage(error)}`,
@@ -290,6 +319,10 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
     } finally {
       if (runtime && sessionId) runtime.sessions.delete(sessionId);
       this.activeConversations.delete(request.conversationId);
+      const record = this.persistentSessionByConversation.get(request.conversationId);
+      if (runtime && record && record.sessionId === sessionId && record.isOpen) {
+        this.scheduleConversationIdleClose(runtime, request.conversationId, record);
+      }
     }
   }
 
@@ -308,6 +341,164 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
     this.closed = true;
     this.closePromise = this.closeProcesses();
     return this.closePromise;
+  }
+
+  private async acquireConversationSession(
+    runtime: PersistentAcpConnection,
+    request: AgentConversationRequest,
+  ): Promise<{ record: PersistentConversationSession; reused: boolean; resumed: boolean }> {
+    const cwd = request.cwd ?? this.options.cwd ?? process.cwd();
+    const existing = this.persistentSessionByConversation.get(request.conversationId);
+    if (existing) {
+      this.clearConversationIdleTimer(existing);
+      if (existing.cwd !== cwd) {
+        throw new Error(
+          `ACP conversation ${request.conversationId} was created in ${existing.cwd} and cannot move to ${cwd}`,
+        );
+      }
+      if (!existing.isOpen) {
+        await this.ensureConversationCapacity(runtime, request.conversationId);
+        if (runtime.initialize.agentCapabilities?.loadSession !== true) {
+          throw new Error(
+            `ACP agent ${runtime.initialize.agentInfo?.name ?? this.id} cannot resume exact session ${existing.sessionId}: session/load is unsupported`,
+          );
+        }
+        await runtime.connection.loadSession({
+          sessionId: existing.sessionId,
+          cwd: existing.cwd,
+          mcpServers: [],
+        });
+        existing.isOpen = true;
+        existing.lastUsedAt = Date.now();
+        this.logConversationLifecycle("acp.conversation_resumed", request, {
+          session_id: existing.sessionId,
+          open_conversations: this.openConversationCount(),
+        });
+        return { record: existing, reused: true, resumed: true };
+      }
+      existing.lastUsedAt = Date.now();
+      return { record: existing, reused: true, resumed: false };
+    }
+
+    await this.ensureConversationCapacity(runtime, request.conversationId);
+    const session = await runtime.connection.newSession({ cwd, mcpServers: [] });
+    const record: PersistentConversationSession = {
+      sessionId: session.sessionId,
+      cwd,
+      isOpen: true,
+      lastUsedAt: Date.now(),
+    };
+    this.persistentSessionByConversation.set(request.conversationId, record);
+    this.logConversationLifecycle("acp.conversation_created", request, {
+      session_id: record.sessionId,
+      open_conversations: this.openConversationCount(),
+    });
+    return { record, reused: false, resumed: false };
+  }
+
+  private async ensureConversationCapacity(
+    runtime: PersistentAcpConnection,
+    requestedConversationId: string,
+  ): Promise<void> {
+    const capacity = this.options.maxPersistentConversations ?? 4;
+    while (this.openConversationCount() >= capacity) {
+      const candidate = [...this.persistentSessionByConversation.entries()]
+        .filter(([conversationId, record]) => (
+          conversationId !== requestedConversationId
+          && record.isOpen
+          && !this.activeConversations.has(conversationId)
+        ))
+        .sort((left, right) => left[1].lastUsedAt - right[1].lastUsedAt)[0];
+      if (!candidate) {
+        throw new Error(
+          `ACP persistent conversation capacity ${capacity} is exhausted by active sessions`,
+        );
+      }
+      const [conversationId, record] = candidate;
+      await this.closeConversationSession(runtime, conversationId, record, "capacity");
+    }
+  }
+
+  private scheduleConversationIdleClose(
+    runtime: PersistentAcpConnection,
+    conversationId: string,
+    record: PersistentConversationSession,
+  ): void {
+    this.clearConversationIdleTimer(record);
+    const idleMs = this.options.persistentConversationIdleMs ?? 10 * 60_000;
+    record.idleTimer = setTimeout(() => {
+      record.idleTimer = undefined;
+      if (this.closed || !record.isOpen || this.activeConversations.has(conversationId)) return;
+      void this.closeConversationSession(runtime, conversationId, record, "idle").catch(error => {
+        this.logConversationLifecycle("acp.conversation_close_failed", {
+          id: "idle-session-close",
+          conversationId,
+        }, {
+          session_id: record.sessionId,
+          reason: "idle",
+          error: errorMessage(error),
+        });
+      });
+    }, idleMs);
+    record.idleTimer.unref?.();
+  }
+
+  private async closeConversationSession(
+    runtime: PersistentAcpConnection,
+    conversationId: string,
+    record: PersistentConversationSession,
+    reason: "capacity" | "idle" | "prompt_failure",
+  ): Promise<void> {
+    this.clearConversationIdleTimer(record);
+    if (!record.isOpen) return;
+    if (!runtime.initialize.agentCapabilities?.sessionCapabilities?.close) {
+      throw new Error(
+        `ACP agent ${runtime.initialize.agentInfo?.name ?? this.id} cannot close resident session ${record.sessionId}`,
+      );
+    }
+    await runtime.connection.closeSession({ sessionId: record.sessionId });
+    record.isOpen = false;
+    record.lastUsedAt = Date.now();
+    this.logConversationLifecycle("acp.conversation_closed", {
+      id: `${reason}-session-close`,
+      conversationId,
+    }, {
+      session_id: record.sessionId,
+      reason,
+      open_conversations: this.openConversationCount(),
+    });
+  }
+
+  private clearConversationIdleTimer(record: PersistentConversationSession): void {
+    if (!record.idleTimer) return;
+    clearTimeout(record.idleTimer);
+    record.idleTimer = undefined;
+  }
+
+  private openConversationCount(): number {
+    return [...this.persistentSessionByConversation.values()].filter(record => record.isOpen).length;
+  }
+
+  private persistentConversationIdForSession(sessionId: string): string | undefined {
+    for (const [conversationId, record] of this.persistentSessionByConversation) {
+      if (record.sessionId === sessionId) return conversationId;
+    }
+    return undefined;
+  }
+
+  private logConversationLifecycle(
+    event: string,
+    request: Pick<AgentConversationRequest, "id" | "conversationId">,
+    details: Record<string, unknown>,
+  ): void {
+    console.log(JSON.stringify({
+      component: "agent-runtime-acp",
+      event,
+      runtime: this.id,
+      request_id: request.id,
+      conversation_id: request.conversationId,
+      ...details,
+    }));
   }
 
   private async submitPersistent(task: AgentTaskRequest, context: AgentRuntimeContext): Promise<AgentTaskResult> {
@@ -464,6 +655,7 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
     const output = Readable.toWeb(child.stdout!) as unknown as ReadableStream<Uint8Array>;
     const stream = acp.ndJsonStream(input, output);
     const runtimeId = this.id;
+    const adapter = this;
     const connection = new acp.ClientSideConnection(
       () => ({
         async requestPermission(params) {
@@ -481,11 +673,14 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
         async sessionUpdate(params) {
           const active = sessions.get(params.sessionId);
           if (!active) {
-            console.error(JSON.stringify({
+            const knownConversation = adapter.persistentConversationIdForSession(params.sessionId);
+            console[knownConversation ? "log" : "error"](JSON.stringify({
               component: "agent-runtime-acp",
-              event: "acp.orphan_session_update",
+              event: knownConversation ? "acp.inactive_conversation_update" : "acp.orphan_session_update",
               runtime: runtimeId,
               session_id: params.sessionId,
+              conversation_id: knownConversation,
+              update_type: params.update.sessionUpdate,
             }));
             return;
           }
@@ -524,6 +719,10 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
       if (cleared) return;
       cleared = true;
       if (this.persistent?.child === child) this.persistent = undefined;
+      for (const record of this.persistentSessionByConversation.values()) {
+        this.clearConversationIdleTimer(record);
+        record.isOpen = false;
+      }
       for (const active of sessions.values()) {
         void emit(active.context, {
           type: "runtime.failed",
@@ -562,6 +761,9 @@ export class AcpStdioAgentRuntimeAdapter implements AgentRuntimeAdapter, AgentCo
     this.persistent = undefined;
     this.persistentStart = undefined;
     this.persistentSessionByTask.clear();
+    for (const record of this.persistentSessionByConversation.values()) {
+      this.clearConversationIdleTimer(record);
+    }
     this.persistentSessionByConversation.clear();
     this.activeConversations.clear();
 
@@ -577,6 +779,14 @@ type PersistentTaskSession = {
   requestId: string;
   context: AgentRuntimeContext;
   updates: acp.SessionNotification[];
+};
+
+type PersistentConversationSession = {
+  sessionId: string;
+  cwd: string;
+  isOpen: boolean;
+  lastUsedAt: number;
+  idleTimer?: NodeJS.Timeout;
 };
 
 type PersistentStartup = {
@@ -676,6 +886,58 @@ async function maybeCloseSession(connection: acp.ClientSideConnection, sessionId
   await connection.closeSession({ sessionId });
 }
 
+async function promptWithAbort(
+  connection: acp.ClientSideConnection,
+  params: Parameters<acp.ClientSideConnection["prompt"]>[0],
+  signal: AbortSignal | undefined,
+  onCancel: () => void,
+): Promise<Awaited<ReturnType<acp.ClientSideConnection["prompt"]>>> {
+  throwIfAborted(signal, params.sessionId);
+  if (!signal) return await connection.prompt(params);
+
+  let removeAbortListener: () => void = () => undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    let cancellationStarted = false;
+    const abort = () => {
+      if (cancellationStarted) return;
+      cancellationStarted = true;
+      onCancel();
+      void connection.cancel({ sessionId: params.sessionId }).then(
+        () => reject(new ConversationAbortedError(abortReason(signal))),
+        error => reject(new Error(`failed to cancel ACP session ${params.sessionId}: ${errorMessage(error)}`)),
+      );
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", abort);
+    if (signal.aborted) abort();
+  });
+  try {
+    return await Promise.race([connection.prompt(params), cancelled]);
+  } finally {
+    removeAbortListener();
+  }
+}
+
+class ConversationAbortedError extends Error {
+  constructor(reason: string) {
+    super(`ACP conversation aborted: ${reason}`);
+    this.name = "ConversationAbortedError";
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, requestId: string): void {
+  if (signal?.aborted) throw new ConversationAbortedError(`${requestId}: ${abortReason(signal)}`);
+}
+
+function abortReason(signal: AbortSignal | undefined): string {
+  if (!signal?.aborted) return "client disconnected";
+  return signal.reason instanceof Error ? signal.reason.message : String(signal.reason ?? "client disconnected");
+}
+
+function isAbortError(error: unknown, signal: AbortSignal | undefined): boolean {
+  return error instanceof ConversationAbortedError || signal?.aborted === true;
+}
+
 async function emit(context: AgentRuntimeContext, event: AgentRuntimeEvent): Promise<void> {
   await context.events?.emit(event);
 }
@@ -688,8 +950,13 @@ function observableToolUpdate(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const update = value as Record<string, unknown>;
   const observable: Record<string, unknown> = {};
-  for (const key of ["sessionUpdate", "toolCallId", "title", "kind", "status", "rawInput"]) {
+  for (const key of ["sessionUpdate", "toolCallId", "title", "kind", "status"]) {
     if (update[key] !== undefined) observable[key] = update[key];
+  }
+  const rawInput = update.rawInput;
+  if (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)) {
+    observable.inputKeys = Object.keys(rawInput as Record<string, unknown>).slice(0, 20);
+    if ((rawInput as Record<string, unknown>).run_in_background === true) observable.background = true;
   }
   const meta = update._meta;
   if (meta && typeof meta === "object" && !Array.isArray(meta)) {

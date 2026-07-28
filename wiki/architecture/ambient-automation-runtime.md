@@ -522,10 +522,13 @@ The first implementation foundation is now present:
   shared OperationService, pure v1 HTTP handler, Feedback service, and trace
   store. Automation Agent Operators still use the explicit ACP adapter. Direct
   assist defaults to the resident Claude Code ACP process and one persistent
-  session per `conversation_id`; Pi RPC is a lazily started, user-selected
+  exact session per `conversation_id`; Pi RPC is a lazily started, user-selected
   alternative. The direct notch conversation sends a bounded current-screen
   image, streams Markdown deltas, and has no `@info/core` or `@info/server`
-  dependency;
+  dependency. The parent process remains resident, but only four conversation
+  sessions may remain open. Capacity or ten minutes of inactivity closes the
+  least-recent inactive session; revisiting it uses ACP `session/load` with the
+  exact retained session id;
 - `tests/automation-execution-adapter.test.ts` and
   `tests/ambient-daemon-vertical.test.ts` verify exact invocation bindings and
   the complete Browser-to-Execution-to-Feedback path.
@@ -580,9 +583,20 @@ prompt templates, project context files, session persistence, and default tool
 permissions. Metaflow does not replace or narrow either harness; it supplies
 only the prompt and supplemental immediate screen context. The TypeScript
 daemon streams strict NDJSON deltas plus a terminal success or failure event.
+Ordinary Direct Assist turns must complete in the foreground. A background
+Agent, Task, worktree, or repository write is allowed only when the current user
+message explicitly asks for that behavior. If the HTTP client disconnects, its
+AbortSignal reaches the conversation runtime and invokes ACP cancellation.
+Daemon shutdown closes live HTTP connections after stopping admission, causing
+the same cancellation path to run before ACP and persistence are closed.
+The one startup compatibility migration accepts only the exact historical
+`metaflow-mac-companion` Automation revision and appends an exact-lineage
+revision using the canonical `metaflow-mac` source; other drift still fails.
 It also projects native ACP and Pi tool execution as bounded `tool_activity`
 events containing correlation id, title/name, kind, and status, never raw tool
-input or result content. The notch briefly buffers initial text to distinguish a
+input or result content. A completed tool-launch event carrying
+`run_in_background=true` remains running until the containing Agent turn is
+terminal. The notch briefly buffers initial text to distinguish a
 direct answer from a tool-using turn. Direct answers then stream; a tool-using
 turn shows its live tool timeline, suppresses provisional prose, and reveals the
 complete final answer only after the Agent turn completes. Progress never owns
@@ -600,7 +614,19 @@ remains docked while listening and while the Agent is working, then expands when
 the turn finishes. The shortcut is persisted and user-configurable; custom
 modifier/key combinations use the same press/release push-to-talk lifecycle.
 Missing Doubao credentials fail explicitly. There is no Apple Speech or hidden
-model fallback.
+model fallback. The macOS request uses 900 seconds as a final hard deadline;
+client disconnect cancellation and foreground turn settlement remain the
+primary lifecycle controls.
+
+Selection resolution is invocation-scoped. It checks direct selected text,
+standard character ranges, WebKit/Chromium text-marker ranges, and at most 120
+Accessibility elements over 12 descendant levels. This bounded traversal is
+never part of periodic macOS observation, which remains focused-element-only.
+The direct-assist request preserves selected-text whitespace for code and
+structured prose. A one-line notch preview may normalize whitespace for layout.
+When an application does not expose selection through Accessibility, capture is
+explicitly unavailable; the app does not synthesize Copy or mutate the system
+clipboard as an implicit fallback.
 
 The native composition must run as an application bundle. `pnpm mac:bundle`
 builds, ad-hoc signs, verifies, and installs the one canonical bundle at
