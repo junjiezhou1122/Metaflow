@@ -228,6 +228,51 @@ test("search focus, pointer and keyboard selection, expansion, filters, history,
   expect(errors).toEqual([]);
 });
 
+test("pointer hover reveals only the loaded neighborhood and restores selection without side effects", async ({ page }) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  const errors = watchErrors(page);
+  await page.goto("/?fixture=10");
+  await ready(page, 10);
+  await page.getByRole("option", { name: /Research View 0003/ }).click();
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+  await expect.poll(async () => fixtureCallCount(page)).toBeGreaterThanOrEqual(2);
+  await page.waitForTimeout(100);
+  await expect.poll(async () => cameraDistance(await currentCamera(page), cameraFromUrl(page.url()))).toBeLessThanOrEqual(0.0002);
+
+  const baselineUrl = page.url();
+  const baselineCamera = await currentCamera(page);
+  const baselineCalls = await fixtureCallCount(page);
+  const graphBounds = await page.locator(".sigma-container").boundingBox();
+  const focused = (await explorerDebug(page)).focusedNode;
+  expect(graphBounds).not.toBeNull();
+  expect(focused).toBeDefined();
+
+  await page.mouse.move(graphBounds!.x + focused!.x, graphBounds!.y + focused!.y);
+  await expect.poll(async () => (await explorerDebug(page)).hoveredNeighborhood).toMatchObject({
+    key: "view:fixture:0003@1",
+    neighborCount: 2,
+    incidentEdgeCount: 2,
+    unrelatedNodeCount: 7,
+  });
+  const hovered = (await explorerDebug(page)).hoveredNeighborhood;
+  expect(hovered!.unrelatedEdgeCount).toBeGreaterThan(0);
+  expect((await explorerDebug(page)).hoverEnterCount).toBeGreaterThanOrEqual(1);
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  expect(page.url()).toBe(baselineUrl);
+  expect(await fixtureCallCount(page)).toBe(baselineCalls);
+  expect(cameraDistance(await currentCamera(page), baselineCamera)).toBeLessThanOrEqual(0.0002);
+
+  await page.mouse.move(20, 20);
+  await expect.poll(async () => (await explorerDebug(page)).hoveredNeighborhood).toBeUndefined();
+  expect((await explorerDebug(page)).hoverLeaveCount).toBeGreaterThanOrEqual(1);
+  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  expect(page.url()).toBe(baselineUrl);
+  expect(await fixtureCallCount(page)).toBe(baselineCalls);
+  expect(cameraDistance(await currentCamera(page), baselineCamera)).toBeLessThanOrEqual(0.0002);
+  expect(errors).toEqual([]);
+});
+
 test("URL reload and Visited cameras remain authoritative after layout and exact-View focus", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1_440, height: 900 });
   const errors = watchErrors(page);
@@ -496,12 +541,18 @@ async function explorerDebug(page: Page): Promise<{
   workersTerminated: number;
   camera?: CameraSnapshot;
   focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+  hoveredNeighborhood?: { key: string; neighborCount: number; incidentEdgeCount: number; unrelatedNodeCount: number; unrelatedEdgeCount: number };
+  hoverEnterCount?: number;
+  hoverLeaveCount?: number;
 }> {
   return page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__: {
     workersCreated: number;
     workersTerminated: number;
     camera?: CameraSnapshot;
     focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+    hoveredNeighborhood?: { key: string; neighborCount: number; incidentEdgeCount: number; unrelatedNodeCount: number; unrelatedEdgeCount: number };
+    hoverEnterCount?: number;
+    hoverLeaveCount?: number;
   } }).__METAFLOW_EXPLORER__);
 }
 
@@ -531,6 +582,10 @@ function cameraDistance(left: CameraSnapshot, right: CameraSnapshot): number {
 
 async function assertCameraEquals(page: Page, expected: CameraSnapshot): Promise<void> {
   await expect.poll(async () => cameraDistance(await currentCamera(page), expected)).toBeLessThanOrEqual(0.0002);
+}
+
+async function fixtureCallCount(page: Page): Promise<number> {
+  return page.evaluate(() => (window as typeof window & { __METAFLOW_FIXTURE_CALLS__?: unknown[] }).__METAFLOW_FIXTURE_CALLS__?.length ?? 0);
 }
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
