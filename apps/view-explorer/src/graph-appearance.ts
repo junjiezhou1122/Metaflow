@@ -49,7 +49,7 @@ export function reduceNodeAppearance<T extends DisplayAttributes>(
   }
   if (graph.areNeighbors(key, active)) {
     return hovered
-      ? { ...attributes, forceLabel: true, zIndex: 2, size: Number(attributes.size) * 1.12 }
+      ? { ...attributes, zIndex: 2, size: Number(attributes.size) * 1.12 }
       : { ...attributes, zIndex: 1 };
   }
   return { ...attributes, color: "#c8cbc6", label: "", zIndex: 0 };
