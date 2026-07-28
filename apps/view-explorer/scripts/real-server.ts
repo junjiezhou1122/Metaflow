@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -13,6 +14,7 @@ import {
   RepositoryViewReadAuthorizer,
   ViewQueryRegistry,
 } from "@info/operations";
+import { ScreenpipeFrameAssetResolver } from "@info/screenpipe-capture-adapter";
 import { ScreenpipeTimelineQueryMethod } from "@info/screenpipe-derived-views";
 import { SqliteViewRepository } from "@info/storage-sqlite";
 import {
@@ -122,6 +124,7 @@ const sessionToken = randomBytes(32).toString("base64url");
 const sessionPath = `/__metaflow_view_session/${sessionToken}`;
 const sessionCookie = `metaflow_view_session=${sessionToken}`;
 let origin = "";
+let screenpipeToken: string | undefined;
 server.on("request", (request, response) => {
   void handle(request, response).catch(error => {
     console.error(JSON.stringify({
@@ -182,6 +185,56 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     response.end();
     return;
   }
+  if (requestUrl.pathname === "/metaflow/v1/assets/screenpipe-frame-thumbnail") {
+    if (request.method !== "GET") {
+      response.writeHead(405, { allow: "GET" });
+      response.end();
+      return;
+    }
+    if (!authorizeSessionRequest(request, response)) return;
+    const ref = {
+      view_id: requestUrl.searchParams.get("view_id") ?? "",
+      revision: Number(requestUrl.searchParams.get("revision")),
+    };
+    const width = Number(requestUrl.searchParams.get("width") ?? 1_440);
+    if (!ref.view_id || !Number.isInteger(ref.revision) || ref.revision < 1
+      || !Number.isInteger(width) || width < 384 || width > 1_920) {
+      writeProblem(response, 400, "screenpipe_asset_request_invalid", "An exact frame View and width from 384 through 1920 are required");
+      return;
+    }
+    const [decision] = await reads.authorize({ principal: { id: "user:local" }, refs: [ref], purpose: "read" });
+    if (decision?.status !== "allowed") {
+      writeProblem(response, decision?.status === "missing" ? 404 : 403, decision?.code ?? "screenpipe_asset_forbidden", "Screenpipe frame View is not authorized");
+      return;
+    }
+    const view = await views.get(ref);
+    if (!view) throw new Error(`Authorized Screenpipe frame disappeared: ${ref.view_id}@${ref.revision}`);
+    const connectionId = view.provenance.capture?.connection_id;
+    if (!connectionId) throw new Error(`Screenpipe frame omitted Capture connection evidence: ${ref.view_id}@${ref.revision}`);
+    const lifecycle = await views.getCaptureConnectionLifecycle(connectionId);
+    if (!lifecycle) throw new Error(`Screenpipe frame connection is unavailable: ${connectionId}`);
+    const asset = await new ScreenpipeFrameAssetResolver({
+      connection: lifecycle.connection,
+      secret_resolver: {
+        async resolve(refValue) {
+          const expected = lifecycle.connection.secret_refs.screenpipe_api_key;
+          if (!expected || refValue.provider !== expected.provider || refValue.key !== expected.key || refValue.version !== expected.version) {
+            throw new Error("Screenpipe asset requested an undeclared local secret reference");
+          }
+          screenpipeToken ??= readScreenpipeToken();
+          return screenpipeToken;
+        },
+      },
+    }).thumbnail(view, { width, quality: 90 }, AbortSignal.timeout(15_000));
+    response.writeHead(200, {
+      "content-type": asset.media_type,
+      "content-length": String(asset.body.byteLength),
+      "cache-control": "private, max-age=31536000, immutable",
+      ...(asset.etag ? { etag: asset.etag } : {}),
+    });
+    response.end(asset.body);
+    return;
+  }
   if (requestUrl.pathname.startsWith("/metaflow/v1/operations/")) {
     if (request.method !== "POST") {
       response.writeHead(405, { allow: "POST" });
@@ -231,6 +284,35 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       if (error) reject(error); else resolveMiddleware();
     });
   });
+}
+
+function authorizeSessionRequest(request: IncomingMessage, response: ServerResponse): boolean {
+  if (!request.headers.cookie?.split(/;\s*/u).includes(sessionCookie)) {
+    writeProblem(response, 401, "view_explorer_session_required", "View Explorer session expired; reopen the server launch URL");
+    return false;
+  }
+  if (request.headers.origin && request.headers.origin !== origin) {
+    writeProblem(response, 403, "view_explorer_origin_forbidden", "View Explorer rejected a cross-origin asset request");
+    return false;
+  }
+  return true;
+}
+
+function writeProblem(response: ServerResponse, status: number, code: string, message: string): void {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  response.end(JSON.stringify({ ok: false, code, error: message }));
+}
+
+function readScreenpipeToken(): string {
+  const result = spawnSync(process.env.SCREENPIPE_CLI ?? "screenpipe", ["auth", "token"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10_000,
+  });
+  if (result.error || result.signal || result.status !== 0) throw new Error("Unable to obtain the local Screenpipe API token");
+  const token = result.stdout.trim();
+  if (!token || /[\r\n]/u.test(token)) throw new Error("Screenpipe returned an invalid local API token");
+  return token;
 }
 
 function writeOperationFailure(

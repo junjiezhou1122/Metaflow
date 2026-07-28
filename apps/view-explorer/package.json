@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@info/operations": "workspace:*",
+    "@info/screenpipe-capture-adapter": "workspace:*",
     "@info/screenpipe-derived-views": "workspace:*",
     "@info/storage-sqlite": "workspace:*",
     "@playwright/test": "1.62.0",

@@ -320,6 +320,9 @@ importers:
       '@info/operations':
         specifier: workspace:*
         version: link:../../packages/operations
+      '@info/screenpipe-capture-adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapters/screenpipe-capture
       '@info/screenpipe-derived-views':
         specifier: workspace:*
         version: link:../../packages/adapters/screenpipe-derived-views
