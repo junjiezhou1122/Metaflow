@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { refKey, type ViewGraphProjectionResult } from "./contracts.js";
-import { EDGE_COLORS, reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
+import { assertGraphNodeLoaded, EDGE_COLORS, reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
 import { deterministicPosition, type CameraState } from "./graph-projection.js";
 import {
   LAYOUT_PROTOCOL_VERSION,
@@ -38,6 +38,7 @@ type DebugState = {
   workersTerminated: number;
   camera?: CameraState;
   focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+  hoverProbe?: { key: string; x: number; y: number } | undefined;
   hoveredNeighborhood?: { key: string; neighborCount: number; incidentEdgeCount: number; unrelatedNodeCount: number; unrelatedEdgeCount: number } | undefined;
   hoverEnterCount?: number;
   hoverLeaveCount?: number;
@@ -103,7 +104,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     const camera = renderer.getCamera();
     const click = ({ node }: { node: string }) => onSelectRef.current(node, camera.getState());
     const enterNode = ({ node }: { node: string }) => {
-      if (!graph.hasNode(node)) return;
+      assertGraphNodeLoaded(graph, node);
       hoveredRef.current = node;
       const incidentEdgeCount = graph.edges(node).length;
       const neighborCount = graph.neighbors(node).length;
@@ -191,6 +192,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     }
     hasRenderedProjectionRef.current = true;
     renderer.refresh();
+    updateHoverProbe(renderer, graph, selectedRef.current);
     debug().camera = renderer.getCamera().getState();
     const firstNode = graph.nodes()[0];
     debug().graph = {
@@ -242,6 +244,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         const currentRestoredCamera = cameraTargetRef.current;
         if (currentRestoredCamera) applyAuthoritativeCamera(renderer, currentRestoredCamera);
         else if (selectedRef.current) focusExactNode(renderer, selectedRef.current);
+        updateHoverProbe(renderer, graph, selectedRef.current);
         onLayoutRef.current("ready");
         disposeWorker(workerRef, active);
       };
@@ -263,7 +266,10 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
   }, [props.projection]);
 
   useEffect(() => {
-    rendererRef.current?.refresh();
+    const graph = graphRef.current;
+    const renderer = rendererRef.current;
+    renderer?.refresh();
+    if (graph && renderer) updateHoverProbe(renderer, graph, props.selectedKey);
   }, [props.selectedKey]);
 
   useEffect(() => {
@@ -311,6 +317,26 @@ function applyAuthoritativeCamera(renderer: Sigma, target: CameraState): void {
   camera.animate(state, { duration: 0 }, () => undefined);
   camera.setState(state);
   debug().camera = camera.getState();
+}
+
+function updateHoverProbe(renderer: Sigma, graph: Graph, selectedKey?: string): void {
+  const dimensions = renderer.getDimensions();
+  let inspected = 0;
+  let probe: DebugState["hoverProbe"];
+  graph.someNode(key => {
+    if (inspected++ >= 32) return true;
+    const neighborCount = graph.neighbors(key).length;
+    const incidentEdgeCount = graph.edges(key).length;
+    if (key === selectedKey || neighborCount === 0 || neighborCount >= graph.order - 1 || incidentEdgeCount >= graph.size) return false;
+    const display = renderer.getNodeDisplayData(key);
+    if (!display) return false;
+    const viewport = renderer.framedGraphToViewport(display, { cameraState: renderer.getCamera().getState() });
+    if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y)) return false;
+    if (viewport.x < 0 || viewport.x > dimensions.width || viewport.y < 0 || viewport.y > dimensions.height) return false;
+    probe = { key, x: viewport.x, y: viewport.y };
+    return true;
+  });
+  debug().hoverProbe = probe;
 }
 
 function schemaColor(schema: string): string {

@@ -13,6 +13,10 @@ export type GraphAppearanceState = {
   hoveredKey?: string | undefined;
 };
 
+export function assertGraphNodeLoaded(graph: Graph, key: string): void {
+  if (!graph.hasNode(key)) throw new Error(`Sigma entered missing graph node ${key}`);
+}
+
 type DisplayAttributes = Record<string, unknown> & {
   color?: string;
   forceLabel?: boolean;
@@ -30,8 +34,7 @@ export function reduceNodeAppearance<T extends DisplayAttributes>(
   attributes: T,
   state: GraphAppearanceState,
 ): T {
-  const hovered = state.hoveredKey && graph.hasNode(state.hoveredKey) ? state.hoveredKey : undefined;
-  const active = hovered ?? (state.selectedKey && graph.hasNode(state.selectedKey) ? state.selectedKey : undefined);
+  const { active, hovered } = resolveActiveNode(graph, state);
   if (!active) return attributes;
 
   if (key === active) {
@@ -58,8 +61,7 @@ export function reduceEdgeAppearance<T extends DisplayAttributes>(
   attributes: T,
   state: GraphAppearanceState,
 ): T {
-  const hovered = state.hoveredKey && graph.hasNode(state.hoveredKey) ? state.hoveredKey : undefined;
-  const active = hovered ?? (state.selectedKey && graph.hasNode(state.selectedKey) ? state.selectedKey : undefined);
+  const { active, hovered } = resolveActiveNode(graph, state);
   if (!active || !graph.hasEdge(key)) return attributes;
 
   const [source, target] = graph.extremities(key);
@@ -72,4 +74,10 @@ export function reduceEdgeAppearance<T extends DisplayAttributes>(
     };
   }
   return { ...attributes, color: "#dedfda", hidden: false, size: hovered ? 0.3 : 0.35, zIndex: 0 };
+}
+
+function resolveActiveNode(graph: Graph, state: GraphAppearanceState): { active?: string; hovered?: string } {
+  if (state.hoveredKey && graph.hasNode(state.hoveredKey)) return { active: state.hoveredKey, hovered: state.hoveredKey };
+  if (state.selectedKey && graph.hasNode(state.selectedKey)) return { active: state.selectedKey };
+  return {};
 }
