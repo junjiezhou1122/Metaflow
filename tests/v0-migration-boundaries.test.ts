@@ -31,7 +31,6 @@ const activeSourceRoots = [
   "packages/adapters",
   "view-packages",
   "apps/ambient-daemon",
-  "apps/timeline-view",
   "apps/view-explorer",
   "scripts/v1",
 ] as const;
@@ -53,7 +52,6 @@ test("canonical workspace exposes only v1 capability owners", () => {
     "packages/adapters/*",
     "view-packages/*",
     "apps/ambient-daemon",
-    "apps/timeline-view",
     "apps/view-explorer",
     "apps/mf-cli",
     "apps/website",
