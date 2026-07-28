@@ -463,6 +463,11 @@ test("Screenpipe Timeline queries lazily and requests DPR-sharp frame thumbnails
   const selected = "view:screenpipe:timeline-index:test@1";
   await page.goto(`/?root=${encodeURIComponent(selected)}&selected=${encodeURIComponent(selected)}`);
   await expect(page.locator('[data-renderer="renderer.screenpipe.timeline@1@1"]')).toBeVisible();
+  const topbarBounds = await page.locator(".topbar").boundingBox();
+  const timelineToolbarBounds = await page.locator(".screenpipe-toolbar").boundingBox();
+  expect(topbarBounds).not.toBeNull();
+  expect(timelineToolbarBounds).not.toBeNull();
+  expect(timelineToolbarBounds!.y).toBeGreaterThanOrEqual(topbarBounds!.y + topbarBounds!.height + 8);
   const frame = page.locator(".screenpipe-frame img").first();
   await expect(frame).toBeVisible();
   const dimensions = await frame.evaluate(image => ({
