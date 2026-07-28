@@ -171,21 +171,30 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       response.end();
       return;
     }
+    const operation = decodeURIComponent(requestUrl.pathname.slice("/metaflow/v1/operations/".length));
+    const requestId = `request:view-explorer-real:${randomUUID()}`;
     if (!request.headers.cookie?.split(/;\s*/u).includes(sessionCookie)) {
-      response.writeHead(401, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-      response.end(JSON.stringify({ error: "view_explorer_session_required" }));
+      writeOperationFailure(response, 401, {
+        request_id: requestId,
+        operation,
+        code: "view_explorer_session_required",
+        message: "View Explorer session expired; reopen the server launch URL",
+      });
       return;
     }
     if (request.headers.origin && request.headers.origin !== origin) {
-      response.writeHead(403, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-      response.end(JSON.stringify({ error: "view_explorer_origin_forbidden" }));
+      writeOperationFailure(response, 403, {
+        request_id: requestId,
+        operation,
+        code: "view_explorer_origin_forbidden",
+        message: "View Explorer rejected a cross-origin Operation request",
+      });
       return;
     }
-    const operation = decodeURIComponent(requestUrl.pathname.slice("/metaflow/v1/operations/".length));
     const input = JSON.parse((await readBoundedBody(request)).toString("utf8"));
     const envelope = await operations.execute(
       { operation, input },
-      { request_id: `request:view-explorer-real:${randomUUID()}`, principal: { id: "user:local", grants: ["*"] } },
+      { request_id: requestId, principal: { id: "user:local", grants: ["*"] } },
     );
     response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     response.end(JSON.stringify(envelope));
@@ -199,12 +208,31 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     };
     response.once("finish", complete);
     response.once("close", complete);
-    vite.middlewares(request, response, error => {
+    vite.middlewares(request, response, (error: unknown) => {
       response.off("finish", complete);
       response.off("close", complete);
       if (error) reject(error); else resolveMiddleware();
     });
   });
+}
+
+function writeOperationFailure(
+  response: ServerResponse,
+  status: 401 | 403,
+  failure: { request_id: string; operation: string; code: string; message: string },
+): void {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  response.end(JSON.stringify({
+    ok: false,
+    request_id: failure.request_id,
+    operation: failure.operation,
+    error: {
+      code: failure.code,
+      message: failure.message,
+      category: "forbidden",
+      details: {},
+    },
+  }));
 }
 
 async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
