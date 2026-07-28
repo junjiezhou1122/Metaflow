@@ -297,7 +297,7 @@ test("legacy SQLite upgrades rebuild constraints and normalize empty Materializa
     assert.equal(db.prepare("pragma foreign_key_list(view_heads_v1)").all().length, 2);
     assert.equal(db.prepare("pragma foreign_key_list(view_idempotency_v1)").all().length, 2);
     assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'view_commit_outbox_v1'").get());
-    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 7);
+    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 8);
     assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'capture_connection_lifecycle_receipts_v1'").get());
     assert.deepEqual(db.prepare("pragma foreign_key_check").all(), []);
     assert.throws(
@@ -306,6 +306,42 @@ test("legacy SQLite upgrades rebuild constraints and normalize empty Materializa
         values ('invalid:null-fingerprint', null, ?, 1, ?)
       `).run(draft.id, createdAt),
     );
+  } finally {
+    db.close();
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("v7 SQLite upgrades connector lifecycle invariants instead of trusting a reused version", () => {
+  const temp = tempDatabase();
+  const repository = new SqliteViewRepository(temp.path);
+  repository.close();
+
+  const legacy = new DatabaseSync(temp.path, { enableForeignKeyConstraints: false });
+  try {
+    legacy.exec(`
+      drop table capture_connection_lifecycle_receipts_v1;
+      alter table capture_connections_v1 drop column generation;
+      alter table capture_connections_v1 drop column lifecycle_status;
+      alter table capture_connections_v1 drop column created_at;
+      update view_store_schema_versions_v1 set version = 7 where component = 'view-store';
+    `);
+  } finally {
+    legacy.close();
+  }
+
+  const migrated = new SqliteViewRepository(temp.path);
+  migrated.close();
+
+  const db = new DatabaseSync(temp.path, { enableForeignKeyConstraints: true });
+  try {
+    const columns = db.prepare("pragma table_info(capture_connections_v1)").all() as Array<{ name: string; notnull: number }>;
+    for (const name of ["generation", "lifecycle_status", "created_at"]) {
+      assert.equal(columns.find(column => column.name === name)?.notnull, 1);
+    }
+    assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'capture_connection_lifecycle_receipts_v1'").get());
+    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 8);
+    assert.deepEqual(db.prepare("pragma foreign_key_check").all(), []);
   } finally {
     db.close();
     rmSync(temp.directory, { recursive: true, force: true });
