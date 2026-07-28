@@ -11,6 +11,7 @@ import {
   browserCaptureEndpoint,
   buildBrowserCaptureEvent,
   deliverBrowserCaptureEvent,
+  retryBrowserCaptureTransportFailure,
   SerializedBrowserCaptureOutbox,
   type BrowserCaptureEventPayload,
   type BrowserCaptureOutbox,
@@ -27,6 +28,7 @@ import {
 import {
   DEFAULT_INFO_CAPTURE_SETTINGS,
   resolveInfoCaptureSettings,
+  resolveInfoCaptureSettingsUpdate,
   type InfoCaptureSettings,
 } from "./info-capture-settings";
 
@@ -326,9 +328,10 @@ export async function handleInfoCaptureMessage(message: any, sender: chrome.runt
     return { ok: true, tab, state: tab?.id ? summarizeState(tabState.get(tab.id)) : undefined, settings: await getSettings() };
   }
   if (message?.type === "update-info-capture-settings") {
-    await chrome.storage.local.set(message.settings ?? {});
+    const settings = resolveInfoCaptureSettingsUpdate(await getSettings(), message.settings ?? {});
+    await chrome.storage.local.set(settings);
     await configureInfoCaptureAlarms();
-    return { ok: true, settings: await getSettings() };
+    return { ok: true, settings };
   }
   if (message?.type === "retry-browser-capture") {
     return retryBrowserCaptureFailure(requiredMessageText(message.failure_id, "failure_id"));
@@ -1100,11 +1103,9 @@ const chromeBrowserCaptureOutbox: BrowserCaptureOutbox & { list(): Promise<Brows
 async function retryBrowserCaptureFailure(id: string) {
   const failure = (await listBrowserCaptureFailures()).find(item => item.id === id && item.status === "pending");
   if (!failure) throw new Error(`Pending Browser Capture transport failure is missing: ${id}`);
-  const result = await deliverBrowserCaptureEvent({
-    event: failure.event,
-    endpoint: failure.endpoint,
+  const result = await retryBrowserCaptureTransportFailure({
+    failure,
     outbox: chromeBrowserCaptureOutbox,
-    previous: failure,
   });
   return { ...result, event_id: failure.event.event_id, failure_id: failure.id };
 }

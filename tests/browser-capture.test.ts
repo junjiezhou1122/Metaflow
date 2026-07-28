@@ -9,6 +9,7 @@ import { CaptureIngress, CaptureRuntimeError, ConnectorRuntime } from "../packag
 import { SqliteViewRepository } from "../packages/adapters/storage-sqlite/index.ts";
 import {
   BrowserCaptureAdapterError,
+  DEFAULT_BROWSER_CAPTURE_DAEMON_PORT,
   browserSourceConnection,
   configureBrowserCapture,
   parseBrowserCaptureEvent,
@@ -17,6 +18,7 @@ import {
   browserCaptureEndpoint,
   buildBrowserCaptureEvent,
   deliverBrowserCaptureEvent,
+  retryBrowserCaptureTransportFailure,
   SerializedBrowserCaptureOutbox,
   type BrowserCaptureOutbox,
   type BrowserCaptureTransportFailure,
@@ -31,11 +33,12 @@ import {
 import {
   DEFAULT_INFO_CAPTURE_ENDPOINT,
   resolveInfoCaptureSettings,
+  resolveInfoCaptureSettingsUpdate,
 } from "../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture-settings.ts";
 import { createAmbientV1HttpHandler } from "../apps/ambient-daemon/http-handler.ts";
 
 test("Browser Capture settings migrate retired daemon endpoints without overriding custom endpoints", () => {
-  assert.equal(DEFAULT_INFO_CAPTURE_ENDPOINT, "http://localhost:3112");
+  assert.equal(DEFAULT_INFO_CAPTURE_ENDPOINT, `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}`);
   for (const endpoint of [
     "http://localhost:3111",
     "http://localhost:3111/context/ingest",
@@ -44,6 +47,22 @@ test("Browser Capture settings migrate retired daemon endpoints without overridi
     assert.equal(resolveInfoCaptureSettings({ endpoint }).endpoint, DEFAULT_INFO_CAPTURE_ENDPOINT);
   }
   assert.equal(resolveInfoCaptureSettings({ endpoint: "http://127.0.0.1:43112" }).endpoint, "http://127.0.0.1:43112");
+  assert.deepEqual(resolveInfoCaptureSettings({ excludedDomains: ["Accounts.Google.COM"] }).excludedDomains, ["accounts.google.com"]);
+  assert.throws(() => resolveInfoCaptureSettings({ endpoint: 42 }), /expected string/i);
+  assert.throws(() => resolveInfoCaptureSettings({ endpoint: "ftp://localhost:3112" }), /HTTP or HTTPS/i);
+  assert.throws(() => resolveInfoCaptureSettings({ captureStream: "yes" }), /expected boolean/i);
+  assert.throws(() => resolveInfoCaptureSettings({ excludedDomains: "example.com" }), /expected array/i);
+  assert.throws(() => resolveInfoCaptureSettings({ excludedDomains: ["."] }), /must be a hostname/i);
+  assert.throws(() => resolveInfoCaptureSettings({ excludedDomains: ["https://example.com"] }), /must be a hostname/i);
+
+  const current = resolveInfoCaptureSettings({ heartbeatSeconds: 120, snapshotOnVisit: false });
+  assert.deepEqual(resolveInfoCaptureSettingsUpdate(current, { heartbeatSeconds: 30 }), {
+    ...current,
+    heartbeatSeconds: 30,
+  });
+  assert.throws(() => resolveInfoCaptureSettingsUpdate(current, { endpoint: 42 }), /expected string/i);
+  assert.equal(current.endpoint, DEFAULT_INFO_CAPTURE_ENDPOINT);
+  assert.equal(current.heartbeatSeconds, 120);
 });
 
 test("Browser Capture commits one atomic page/selection batch and advances stable page revisions", async () => {
@@ -426,6 +445,7 @@ test("Chrome transport outbox retries the exact canonical Browser event", async 
   assert.equal(replay.ok, true);
   assert.deepEqual(JSON.parse(deliveredBody), event);
   assert.equal(outbox.records[0]?.status, "resolved");
+  assert.equal(outbox.records[0]?.resolved_endpoint, endpoint);
   assert.equal(endpoint, "http://localhost:3111/capture/v1/browser-events");
 
   const retryableEvent = { ...event, event_id: "browser-event:http-503" };
@@ -457,6 +477,63 @@ test("Chrome transport outbox retries the exact canonical Browser event", async 
   assert.equal(rejected.error?.code, "invalid_browser_capture_event");
   assert.equal(rejected.failure, undefined);
   assert.equal(outbox.records.length, 2);
+});
+
+test("Chrome transport retry migrates only the retired canonical Browser endpoint", async () => {
+  const event = buildBrowserCaptureEvent(browserEvent());
+  const retiredFailure: BrowserCaptureTransportFailure = {
+    id: `browser-capture:${event.event_id}`,
+    status: "pending",
+    event,
+    endpoint: "http://localhost:3111/capture/v1/browser-events",
+    attempts: 1,
+    failed_at: "2026-07-26T11:00:02.000Z",
+    error: { code: "transport_unreachable" },
+  };
+  const requestedEndpoints: string[] = [];
+  const fetcher: typeof fetch = async input => {
+    requestedEndpoints.push(String(input));
+    if (requestedEndpoints.length === 1) throw new TypeError("server offline");
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const retiredOutbox = new MemoryOutbox();
+  await retiredOutbox.put(retiredFailure);
+  await retryBrowserCaptureTransportFailure({
+    failure: retiredFailure,
+    outbox: retiredOutbox,
+    fetch: fetcher,
+  });
+  assert.equal(retiredOutbox.records[0]?.endpoint, `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}/capture/v1/browser-events`);
+  assert.equal(retiredOutbox.records[0]?.attempts, 2);
+  const migratedFailure = retiredOutbox.records[0];
+  assert.ok(migratedFailure);
+  await retryBrowserCaptureTransportFailure({
+    failure: migratedFailure,
+    outbox: retiredOutbox,
+    fetch: fetcher,
+  });
+  assert.equal(retiredOutbox.records[0]?.status, "resolved");
+  assert.equal(retiredOutbox.records[0]?.resolved_endpoint, `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}/capture/v1/browser-events`);
+
+  const customEndpoint = "http://127.0.0.1:43112/capture/v1/browser-events";
+  const customFailure = { ...retiredFailure, id: "browser-capture:custom", endpoint: customEndpoint };
+  const customOutbox = new MemoryOutbox();
+  await customOutbox.put(customFailure);
+  await retryBrowserCaptureTransportFailure({
+    failure: customFailure,
+    outbox: customOutbox,
+    fetch: fetcher,
+  });
+
+  assert.deepEqual(requestedEndpoints, [
+    `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}/capture/v1/browser-events`,
+    `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}/capture/v1/browser-events`,
+    customEndpoint,
+  ]);
 });
 
 test("Chrome transport outbox serializes concurrent failures without dropping pending events", async () => {
@@ -564,11 +641,12 @@ class MemoryOutbox implements BrowserCaptureOutbox {
     else this.records.push(failure);
   }
 
-  async resolve(id: string, resolvedAt: string) {
+  async resolve(id: string, resolvedAt: string, resolvedEndpoint: string) {
     const item = this.records.find(record => record.id === id);
     if (!item) throw new Error(`missing outbox record ${id}`);
     item.status = "resolved";
     item.resolved_at = resolvedAt;
+    item.resolved_endpoint = resolvedEndpoint;
   }
 }
 

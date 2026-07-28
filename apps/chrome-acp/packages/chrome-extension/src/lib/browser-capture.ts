@@ -1,4 +1,5 @@
 import {
+  DEFAULT_BROWSER_CAPTURE_DAEMON_PORT,
   parseBrowserCaptureWireEvent,
   type BrowserCaptureEvent as BrowserCaptureEventPayload,
 } from "@info/browser-capture-adapter/wire";
@@ -18,11 +19,12 @@ export type BrowserCaptureTransportFailure = {
   failed_at: string;
   error: { code: string; http_status?: number; message?: string };
   resolved_at?: string;
+  resolved_endpoint?: string;
 };
 
 export interface BrowserCaptureOutbox {
   put(failure: BrowserCaptureTransportFailure): Promise<void>;
-  resolve(id: string, resolvedAt: string): Promise<void>;
+  resolve(id: string, resolvedAt: string, resolvedEndpoint: string): Promise<void>;
 }
 
 export interface BrowserCaptureFailureStorage {
@@ -43,14 +45,19 @@ export class SerializedBrowserCaptureOutbox implements BrowserCaptureOutbox {
     });
   }
 
-  async resolve(id: string, resolvedAt: string): Promise<void> {
+  async resolve(id: string, resolvedAt: string, resolvedEndpoint: string): Promise<void> {
     await this.withMutation(async () => {
       const records = await this.readRecords();
       let found = false;
       const next = records.map(item => {
         if (item.id !== id) return item;
         found = true;
-        return { ...item, status: "resolved" as const, resolved_at: resolvedAt };
+        return {
+          ...item,
+          status: "resolved" as const,
+          resolved_at: resolvedAt,
+          resolved_endpoint: resolvedEndpoint,
+        };
       });
       if (!found) throw new Error(`Browser Capture transport failure is missing: ${id}`);
       await this.storage.write(next);
@@ -92,6 +99,30 @@ export function buildBrowserCaptureEvent(input: unknown): BrowserCaptureEventPay
   return parseBrowserCaptureWireEvent(input);
 }
 
+const RETIRED_BROWSER_CAPTURE_ENDPOINT = "http://localhost:3111/capture/v1/browser-events";
+
+export function browserCaptureRetryEndpoint(endpoint: string): string {
+  return endpoint === RETIRED_BROWSER_CAPTURE_ENDPOINT
+    ? `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}/capture/v1/browser-events`
+    : endpoint;
+}
+
+export function retryBrowserCaptureTransportFailure(input: {
+  failure: BrowserCaptureTransportFailure;
+  outbox: BrowserCaptureOutbox;
+  fetch?: typeof fetch;
+  now?: () => string;
+}) {
+  return deliverBrowserCaptureEvent({
+    event: input.failure.event,
+    endpoint: browserCaptureRetryEndpoint(input.failure.endpoint),
+    outbox: input.outbox,
+    previous: input.failure,
+    ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...(input.now ? { now: input.now } : {}),
+  });
+}
+
 export async function deliverBrowserCaptureEvent(input: {
   event: BrowserCaptureEventPayload;
   endpoint: string;
@@ -127,7 +158,7 @@ export async function deliverBrowserCaptureEvent(input: {
       }
       return { ok: false, status: response.status, body, error };
     }
-    if (input.previous) await input.outbox.resolve(input.previous.id, now());
+    if (input.previous) await input.outbox.resolve(input.previous.id, now(), input.endpoint);
     return { ok: true, status: response.status, body };
   } catch (cause) {
     const failure = await persistTransportFailure(
@@ -171,6 +202,8 @@ function parseTransportFailure(input: unknown): BrowserCaptureTransportFailure {
     || typeof value.endpoint !== "string" || !value.endpoint
     || !Number.isInteger(value.attempts) || Number(value.attempts) < 1
     || typeof value.failed_at !== "string" || Number.isNaN(Date.parse(value.failed_at))
+    || (value.resolved_endpoint !== undefined
+      && (typeof value.resolved_endpoint !== "string" || !value.resolved_endpoint))
     || !value.error || typeof value.error.code !== "string") {
     throw new Error("Browser Capture outbox record is malformed");
   }
@@ -187,5 +220,6 @@ function parseTransportFailure(input: unknown): BrowserCaptureTransportFailure {
       ...(value.error.message !== undefined ? { message: value.error.message } : {}),
     },
     ...(value.resolved_at ? { resolved_at: new Date(value.resolved_at).toISOString() } : {}),
+    ...(value.resolved_endpoint ? { resolved_endpoint: value.resolved_endpoint } : {}),
   };
 }

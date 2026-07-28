@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { JsonValueSchema, ViewPolicySchema } from "@info/view/schema";
 
+export const DEFAULT_BROWSER_CAPTURE_DAEMON_PORT = 3112;
+
 const IdentifierSchema = z.string().trim().min(1).max(240);
 const TimestampSchema = z.string().datetime({ offset: true });
 const JsonObjectSchema = z.record(JsonValueSchema);
