@@ -49,10 +49,20 @@ export class ViewExplorerOperationClient {
     return SearchResponseV1Schema.parse(await this.success("view.search", { request }, signal));
   }
 
+  async execute(operation: ExplorerOperation, input: unknown, signal: AbortSignal): Promise<OperationEnvelope> {
+    try {
+      return OperationEnvelopeSchema.parse(await this.transport.call(operation, input, signal));
+    } catch (cause) {
+      if (signal.aborted) throw new ExplorerClientError("Operation was aborted", "aborted", operation, {}, { cause });
+      if (cause instanceof ExplorerClientError) throw cause;
+      throw new ExplorerClientError("Operation returned an invalid envelope", "invalid_response", operation, {}, { cause });
+    }
+  }
+
   private async success(operation: ExplorerOperation, input: unknown, signal: AbortSignal): Promise<unknown> {
     let envelope: OperationEnvelope;
     try {
-      envelope = OperationEnvelopeSchema.parse(await this.transport.call(operation, input, signal));
+      envelope = await this.execute(operation, input, signal);
     } catch (cause) {
       if (signal.aborted) throw new ExplorerClientError("Operation was aborted", "aborted", operation, {}, { cause });
       if (cause instanceof ExplorerClientError) throw cause;

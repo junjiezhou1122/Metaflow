@@ -37,6 +37,7 @@
     "@info/view-package-application-space": "workspace:*",
     "@info/view-package-github-repository-summary": "workspace:*",
     "@info/view-package-obsidian-document": "workspace:*",
+    "@info/view-package-screenpipe-timeline": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
   }

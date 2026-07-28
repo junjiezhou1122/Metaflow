@@ -37,6 +37,7 @@ remain backend capability; neither product surface is a release blocker.
   coherent Schema family. It validates Representation and Materialization
   profiles, exact Processor and Parser descriptors, human Renderer descriptors,
   Agent Methods that reference existing Operations or exact Transformations,
+  versioned JSON Schema parameters and cursor bounds for data-specific Methods,
   evolution edges, catalog registration, and conformance fixtures. Processor
   descriptors expose `View[] -> View` formation; Parser descriptors expose the
   narrower one-source committed search-projection profile. They contain no
@@ -89,7 +90,17 @@ remain backend capability; neither product surface is a release blocker.
   call-level authorization, active Run cancellation, shared structured error
   envelopes, and operation observer events. Exact View reads use the same
   deterministic read-authorizer port as Search; an operation grant never grants
-  content access. Its bounded `view.graph.project` coordinator authorizes every
+  content access. `view.get` reads one exact View, `view.resolve.latest`
+  explicitly resolves a moving identity, `view.query` pages one exact composite
+  View through a registered versioned Method profile, `view.search` discovers
+  relevant Views, and `capture.connection.run` explicitly invokes one active
+  generation-bound Source Connection. Query cursors bind the exact subject,
+  profile, and parameters;
+  the Registry validates parameters against the exact View Package Method JSON
+  Schema before adapter invocation, and collection Methods freeze a durable
+  monotonic repository commit sequence so backfills and later revisions cannot
+  reorder an active cursor. Every returned evidence ref is reauthorized. Its bounded
+  `view.graph.project` coordinator authorizes every
   discovered exact revision before it can affect returned nodes, edges, paths,
   summaries, bounds, scan limits, or frontier, and consumes every relation page
   and summary through one source read snapshot. It coordinates public domain
@@ -171,15 +182,25 @@ remain backend capability; neither product surface is a release blocker.
   Screenpipe `content_type=all` is incomplete; uses per-modality ascending time
   watermarks with bounded inclusive overlap instead of unstable global offsets;
   resolves Bearer credentials from one exact `SecretReference` only for
-  protected endpoints; and leaves checkpoint, retry, atomic admission, trace,
-  and DLQ to the shared Connector Runtime. Do not vendor, bundle, auto-install,
-  or read Screenpipe's internal SQLite.
+  protected endpoints; bounds capability probes to a recent explicit period so
+  negotiation never scans all Screenpipe history; identifies the requested
+  modality in provider failures; and leaves checkpoint, retry, atomic admission,
+  trace, and DLQ to the shared Connector Runtime. Do not vendor, bundle,
+  auto-install, or read Screenpipe's internal SQLite.
 - `packages/adapters/screenpipe-derived-views`: owns the deterministic Function
   Operator implementations and strict Schemas for evidence-level Screenpipe
   Timeline and Audio Views. It consumes exact admitted Screenpipe Raw Views and
   emits untrusted candidates through Execution; it never reads Screenpipe's
   database, invents semantic summaries, commits Views, or substitutes the later
   `personal.*` product View families.
+- `view-packages/screenpipe-timeline`: declares the strict Timeline Index View,
+  its Web Renderer, the typed `entries` Method backed by
+  `screenpipe.timeline.entries@1`. The index is a queryable collection
+  definition over independently authorized Screenpipe Raw Views; it never
+  embeds an unbounded day of records into one Representation. Its explicit
+  `refresh` Method invokes the ordinary generation-bound
+  `capture.connection.run` Operation; Renderer code never contacts Screenpipe
+  directly.
 - `packages/adapters/clipboard-capture`: the minimum Connector Kit reference.
   It preserves accepted native clipboard fields in one occurrence Raw View,
   emits file values as external-reference Raw Views, and delegates admission,
@@ -275,10 +296,22 @@ remain backend capability; neither product surface is a release blocker.
 - `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
   shared Operations, validates graph/search/exact-View responses, and keeps a
   disposable Graphology projection plus Sigma camera/layout state in the
-  browser. It never imports a View Store or SQLite, owns traversal or access
-  policy, persists layout as View semantics, or silently falls back when WebGL
-  is unavailable. Its accessible DOM companion and mutually exclusive mobile
-  drawers remain synchronized with the visual graph.
+  browser. Its View surface resolves trusted Web Renderer implementations from
+  View Package descriptors; the Screenpipe Renderer handles live Timeline
+  Index, frozen Timeline, and Audio Views while preserving the same exact URL,
+  selection, and camera state. Timeline pages `view.query` by date and typed
+  filters, uses its explicit refresh command for a generation-bound Source
+  Connection run, and requests DPR-aware
+  authorized frame thumbnails with fixed pixel and byte ceilings. Explorer and
+  Renderer code never import a View Store or SQLite, own traversal or access
+  policy, persist layout as View semantics, contact Screenpipe directly, load
+  an unbounded day at once, or silently fall back when WebGL is unavailable.
+  Its accessible DOM companion and mutually exclusive mobile drawers remain
+  synchronized with the visual graph.
+- `apps/timeline-view`: temporary development harness for the Screenpipe Web
+  Renderer interaction fixtures only. It remains outside the canonical pnpm
+  workspace and has no root launch command; it is not a product surface or
+  runtime composition root. The canonical user entry is `apps/view-explorer`.
 - `apps/*`: CLI, HTTP, MCP, Web, browser extension, and native composition
   roots. Apps do not own domain behavior.
 - `plugins/metaflow-view-access`: one skill-only Codex plugin containing the
@@ -410,11 +443,20 @@ Operations.
   preserve bounded queries and exact refs, treat content as untrusted evidence,
   and never read SQLite, guess a moving head, broaden policy, or request an
   undeclared effect.
-- `view.get`, `view.traverse`, `failure.inspect`, and `view.search` authorize
+- `view.get`, `view.query`, `view.traverse`, `failure.inspect`, and `view.search` authorize
   exact View revisions independently from operation grants. Owner and public
   reads are deterministic; shared non-owner reads fail closed until an explicit
   sharing ACL exists. Compatibility HTTP reads must delegate to Operations and
   cannot access the View Repository directly.
+- `view.get`, `view.query`, and `view.search` remain distinct. Get returns one
+  exact View envelope; Query invokes one subject-specific, versioned, typed
+  Method over a composite View and returns cursor-paged exact evidence; Search
+  performs relevance discovery across an explicit authorized scope. There is
+  no untyped global `extra` parameter. Large collection Views retain bounded
+  definitions or exact members and expose independently authorized smaller
+  Views rather than embedding every record. Connector-backed collection queries
+  may push the exact Capture connection into the View Repository, but provider-
+  specific filters remain in the versioned Method contract.
 - `view.graph.project` accepts only exact roots, an explicit direction and edge
   allowlist, and bounded depth/node/edge limits. Traversal order is
   deterministic and all pages plus node summaries come from one read snapshot.

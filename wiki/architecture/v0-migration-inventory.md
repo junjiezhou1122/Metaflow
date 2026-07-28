@@ -26,10 +26,14 @@ canonical_workspace:
   - packages/execution
   - packages/automation
   - packages/capture
+  - packages/search
   - packages/operations
+  - packages/screenpipe-contracts
   - packages/adapters/*
   - view-packages/*
   - apps/ambient-daemon
+  - apps/view-explorer
+  - apps/timeline-view
   - apps/website
 
 capability_paths:
@@ -101,6 +105,12 @@ application_paths:
   - path: apps/website
     disposition: migrate
     state: retained_non_runtime_surface
+  - path: apps/view-explorer
+    disposition: canonical
+    state: v1_graph_work_surface
+  - path: apps/timeline-view
+    disposition: canonical
+    state: v1_screenpipe_timeline_work_surface
 
 archived_support_paths:
   - path: archive/v0/scripts

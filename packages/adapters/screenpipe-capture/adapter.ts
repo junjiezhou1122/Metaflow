@@ -249,6 +249,8 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
     signal?: AbortSignal,
   ): Promise<string[]> {
     const capabilities: string[] = [];
+    const probeEnd = this.now();
+    const probeStart = new Date(Date.parse(probeEnd) - 60_000).toISOString();
     for (const capability of required) {
       if (capability === "pull" || capability === "external_media_reference") {
         capabilities.push(capability);
@@ -263,7 +265,17 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
         const body = await this.requestJson(
           connection,
           endpoint,
-          `/search?${queryString({ content_type: contentType, order: "ascending", limit: 1, offset: 0, include_frames: false, include_cloud: false, format: "json" })}`,
+          `/search?${queryString({
+            content_type: contentType,
+            start_time: probeStart,
+            end_time: probeEnd,
+            order: "ascending",
+            limit: 1,
+            offset: 0,
+            include_frames: false,
+            include_cloud: false,
+            format: "json",
+          })}`,
           true,
           signal,
         );
@@ -494,6 +506,7 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
     signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(new Error("Screenpipe request timed out")), this.timeoutMs);
     const url = new URL(path, `${endpoint}/`).toString();
+    const requestDetails = screenpipeRequestDetails(url);
     try {
       const authorization = protectedEndpoint ? await this.resolveAuthorization(connection) : undefined;
       const response = await this.fetch(url, {
@@ -511,7 +524,7 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
           "connector",
           response.status === 408 || response.status === 503 || response.status === 504,
           {
-            path: new URL(url).pathname,
+            ...requestDetails,
             status: response.status,
             ...(retryAfter ? { retry_after: retryAfter } : {}),
           },
@@ -526,7 +539,7 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
           "screenpipe_invalid_json",
           "connector",
           false,
-          { path: new URL(url).pathname },
+          requestDetails,
           { cause: error },
         );
       }
@@ -541,7 +554,7 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
           "screenpipe_timeout",
           "connector",
           true,
-          { path: new URL(url).pathname, timeout_ms: this.timeoutMs },
+          { ...requestDetails, timeout_ms: this.timeoutMs },
           { cause: error },
         );
       }
@@ -550,7 +563,7 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
         "screenpipe_unavailable",
         "connector",
         true,
-        { path: new URL(url).pathname },
+        requestDetails,
         { cause: error },
       );
     } finally {
@@ -588,6 +601,15 @@ export class ScreenpipeCaptureConnector implements ConnectorPort {
     if (/\r|\n/.test(value)) throw authConfigurationError("Screenpipe API key contains invalid header characters");
     return `Bearer ${value.trim()}`;
   }
+}
+
+function screenpipeRequestDetails(url: string): { path: string; content_type?: string } {
+  const parsed = new URL(url);
+  const contentType = parsed.searchParams.get("content_type")?.trim();
+  return {
+    path: parsed.pathname,
+    ...(contentType ? { content_type: contentType } : {}),
+  };
 }
 
 export function screenpipeSourceConnection(input: {

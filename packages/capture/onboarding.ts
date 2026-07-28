@@ -137,7 +137,7 @@ export class SourceConnectionOnboardingService {
     const replay = await this.replay(input.idempotency_key, "check", input);
     if (replay) return replay;
     const state = await this.requireExpected(input.connection_id, input.expected_generation);
-    await this.ensureLoaded(state.connection);
+    await this.ensureRuntimeConnector(state.connection);
     const health = await this.dependencies.runtime.check(state.connection.id);
     if (state.status !== "draft") {
       return this.commitReceipt("check", input.idempotency_key, input, state, { lifecycle: state, health });
@@ -243,7 +243,7 @@ export class SourceConnectionOnboardingService {
     if (replay) return replay;
     const state = await this.requireExpected(input.connection_id, input.expected_generation);
     if (state.status !== "active") throw new SourceConnectionOnboardingError("Connection must be active before run", "connection_state_conflict", { status: state.status });
-    await this.ensureLoaded(state.connection);
+    await this.ensureRuntimeConnector(state.connection);
     const results = await this.dependencies.runtime.run(state.connection.id, input.delivery, input.parameters ?? {});
     return this.commitReceipt("run", input.idempotency_key, input, state, { lifecycle: state, results: summarizeResults(results) });
   }
@@ -268,6 +268,11 @@ export class SourceConnectionOnboardingService {
   private async ensureLoaded(connection: SourceConnection): Promise<ConnectorPackageImplementation> {
     if (!connection.connector_package) throw new SourceConnectionOnboardingError("Connection has no exact Connector Package", "connection_package_required", { connection_id: connection.id });
     return this.load(connection.connector_package);
+  }
+
+  private async ensureRuntimeConnector(connection: SourceConnection): Promise<void> {
+    if (this.dependencies.runtime.hasConnector(connection.connector_id, connection.connector_version)) return;
+    await this.ensureLoaded(connection);
   }
 
   private async requireState(id: string): Promise<SourceConnectionLifecycle> {

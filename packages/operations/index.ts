@@ -3,3 +3,4 @@ export * from "./catalog.js";
 export * from "./service.js";
 export * from "./view-read.js";
 export * from "./graph-project.js";
+export * from "./view-query.js";

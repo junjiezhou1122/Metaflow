@@ -169,6 +169,88 @@ test("time ranges preserve latest and all revision selection", () => withReposit
   );
 }));
 
+test("View query cursor ordering is stable by observed time, id, and revision", () => withRepository(async repository => {
+  for (const [id, observedAt] of [
+    ["view:event:c", "2026-07-28T08:03:00.000Z"],
+    ["view:event:a", "2026-07-28T08:02:00.000Z"],
+    ["view:event:b", "2026-07-28T08:02:00.000Z"],
+    ["view:event:d", "2026-07-28T08:01:00.000Z"],
+  ] as const) {
+    await repository.commit({
+      draft: draft({ id, schema: "capture.timeline.event", observedAt, createdAt: "2026-07-28T09:00:00.000Z" }),
+      expected_revision: 0,
+    });
+  }
+  const base = {
+    schema_name: "capture.timeline.event",
+    order: { basis: "observed_at" as const, direction: "descending" as const },
+    limit: 2,
+  };
+  const first = await repository.query(base);
+  assert.deepEqual(first.map(view => view.id), ["view:event:c", "view:event:a"]);
+  const boundary = first.at(-1)!;
+  const second = await repository.query({
+    ...base,
+    after: {
+      timestamp: boundary.time.observed_at!,
+      view_id: boundary.id,
+      revision: boundary.revision,
+    },
+  });
+  assert.deepEqual(second.map(view => view.id), ["view:event:b", "view:event:d"]);
+}));
+
+test("View query snapshots retain the then-latest revision and exclude later backfills", () => withRepository(async repository => {
+  await repository.commit({
+    draft: draft({
+      id: "view:snapshot:evolving",
+      schema: "capture.timeline.event",
+      observedAt: "2026-07-28T08:02:00.000Z",
+      createdAt: "2026-07-28T09:00:00.000Z",
+    }),
+    expected_revision: 0,
+  });
+  const snapshot = await repository.getQuerySnapshot();
+
+  await repository.commit({
+    draft: draft({
+      id: "view:snapshot:evolving",
+      schema: "capture.timeline.event",
+      observedAt: "2026-07-28T08:03:00.000Z",
+      createdAt: "2020-01-01T00:00:00.000Z",
+      supersedes: 1,
+    }),
+    expected_revision: 1,
+  });
+  await repository.commit({
+    draft: draft({
+      id: "view:snapshot:backfill",
+      schema: "capture.timeline.event",
+      observedAt: "2026-07-28T08:04:00.000Z",
+      createdAt: "2019-01-01T00:00:00.000Z",
+    }),
+    expected_revision: 0,
+  });
+
+  const frozen = await repository.query({
+    schema_name: "capture.timeline.event",
+    revisions: "latest",
+    snapshot,
+    order: { basis: "observed_at", direction: "descending" },
+  });
+  assert.deepEqual(frozen.map(view => [view.id, view.revision]), [["view:snapshot:evolving", 1]]);
+
+  const current = await repository.query({
+    schema_name: "capture.timeline.event",
+    revisions: "latest",
+    order: { basis: "observed_at", direction: "descending" },
+  });
+  assert.deepEqual(current.map(view => [view.id, view.revision]), [
+    ["view:snapshot:backfill", 1],
+    ["view:snapshot:evolving", 2],
+  ]);
+}));
+
 test("View query rejects ambiguous filters and invalid time ranges", () => withRepository(async repository => {
   const invalidQueries = [
     { schema_names: [] },
@@ -177,6 +259,8 @@ test("View query rejects ambiguous filters and invalid time ranges", () => withR
     { time_range: { basis: "observed_at", start: "not-a-time", end: "2026-07-26T09:00:00.000Z" } },
     { time_range: { basis: "created_at", start: "2026-07-26T09:00:00.000Z", end: "2026-07-26T09:00:00.000Z" } },
     { time_range: { basis: "created_at", start: "2026-07-26T10:00:00.000Z", end: "2026-07-26T09:00:00.000Z" } },
+    { after: { timestamp: "2026-07-26T09:00:00.000Z", view_id: "view:event", revision: 1 } },
+    { order: { basis: "observed_at", direction: "sideways" } },
   ];
   for (const query of invalidQueries) {
     await assert.rejects(

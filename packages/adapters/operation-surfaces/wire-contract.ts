@@ -9,7 +9,7 @@ export const METAFLOW_AMBIENT_SERVER_NAME = "ambient-daemon" as const;
 export const METAFLOW_AMBIENT_SERVER_VERSION = "0.1.0" as const;
 export const METAFLOW_OPERATION_CATALOG_VERSION = 1 as const;
 // SHA-256 of canonicalJson(OPERATION_CATALOG); the conformance test fails on any catalog drift.
-export const METAFLOW_OPERATION_CATALOG_FINGERPRINT = "sha256:848d837bc51def904f31e2c546ecce93d286b8140f70ead30d863f37d276d51a" as const;
+export const METAFLOW_OPERATION_CATALOG_FINGERPRINT = "sha256:397bb3defe5e6938efdfbd03f091170389f0b2f10c92adc409dead83f6aba1a5" as const;
 export const DEFAULT_DAEMON_TIMEOUT_MS = 10_000;
 export const OPERATION_HTTP_STATUS_BY_CATEGORY = {
   invalid_request: 400,

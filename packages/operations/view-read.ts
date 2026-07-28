@@ -11,7 +11,7 @@ export class RepositoryViewReadAuthorizer implements ViewReadAuthorizationPort {
   async authorize(input: {
     principal: SearchPrincipal;
     refs: ExactViewRef[];
-    purpose: "read" | "search" | "traverse" | "graph_project";
+    purpose: "read" | "query" | "search" | "traverse" | "graph_project";
   }): Promise<ViewReadAuthorizationDecision[]> {
     return Promise.all(input.refs.map(async ref => {
       const view = await this.views.get(ref);

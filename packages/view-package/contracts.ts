@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   IdentifierSchema,
+  JsonValueSchema,
   ViewRelationTargetSchema,
   ViewRepresentationSchema,
   ViewSchemaRefSchema,
@@ -60,6 +61,15 @@ export const ViewPackageMethodEffectSchema = z.enum([
   "destructive",
 ]);
 
+export const ViewPackageMethodParametersSchema = z.object({
+  dialect: z.literal("https://json-schema.org/draft/2020-12/schema"),
+  json_schema: JsonValueSchema,
+  pagination: z.object({
+    kind: z.literal("cursor"),
+    max_page_size: z.number().int().positive().max(1_000),
+  }).strict().optional(),
+}).strict();
+
 export const ViewPackageMethodTargetSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("operation"),
@@ -77,6 +87,7 @@ export const ViewPackageMethodSchema = z.object({
   schema: ViewPackageSchemaKeySchema,
   effect: ViewPackageMethodEffectSchema,
   target: ViewPackageMethodTargetSchema,
+  parameters: ViewPackageMethodParametersSchema.optional(),
 }).strict();
 
 export const ViewPackageEvolutionSchema = z.object({

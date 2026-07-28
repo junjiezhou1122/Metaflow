@@ -50,6 +50,7 @@ import {
   TimestampSchema,
   VIEW_SEARCH_PROJECTION_IMPLEMENTATION_VERSION,
   ViewMaterializationSchema,
+  ViewQuerySchema,
   ViewRelationSchema,
   ViewRevisionTransitionError,
   assertViewRevisionTransition,
@@ -208,7 +209,7 @@ type ViewCommitOutboxRow = {
   event_json: string;
 };
 
-const VIEW_STORE_MIGRATION_VERSION = 8;
+const VIEW_STORE_MIGRATION_VERSION = 9;
 const VIEW_SEARCH_INDEX_MIGRATION_VERSION = 2;
 
 type TransactionContext = {
@@ -302,9 +303,10 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       const plans = this.planCommits(normalized, transaction);
       transaction.phase = "validate_references";
       this.validatePlannedReferences(plans, transaction);
+      const commitSequence = this.reserveViewCommitSequence(plans, transaction);
       transaction.phase = "persist";
       for (const plan of plans) {
-        if (plan.created) this.persistPlan(plan, transaction);
+        if (plan.created) this.persistPlan(plan, transaction, commitSequence!);
       }
       transaction.phase = "persist_semantic_search";
       const plannedViews = new Map(
@@ -688,8 +690,9 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       const plans = this.planCommits(normalized, transaction);
       transaction.phase = "validate_references";
       this.validatePlannedReferences(plans, transaction);
+      const commitSequence = this.reserveViewCommitSequence(plans, transaction);
       transaction.phase = "persist_views";
-      for (const plan of plans) if (plan.created) this.persistPlan(plan, transaction);
+      for (const plan of plans) if (plan.created) this.persistPlan(plan, transaction, commitSequence!);
       transaction.phase = "persist_view_committed_event";
       this.persistViewCommittedEvent(plans, transaction, {
         batch_id: input.run_id,
@@ -747,8 +750,9 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       const plans = this.planCommits(normalized, transaction);
       transaction.phase = "validate_references";
       this.validatePlannedReferences(plans, transaction);
+      const commitSequence = this.reserveViewCommitSequence(plans, transaction);
       transaction.phase = "persist_failure_view";
-      for (const plan of plans) if (plan.created) this.persistPlan(plan, transaction);
+      for (const plan of plans) if (plan.created) this.persistPlan(plan, transaction, commitSequence!);
       transaction.phase = "persist_view_committed_event";
       this.persistViewCommittedEvent(plans, transaction, {
         batch_id: input.run_id,
@@ -1017,8 +1021,21 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
     });
   }
 
+  async getQuerySnapshot(): Promise<{ commit_sequence: number }> {
+    return this.read("query_snapshot", () => {
+      const row = this.db.prepare("select coalesce(max(sequence), 0) as sequence from view_commit_sequences_v1")
+        .get() as { sequence: number };
+      return { commit_sequence: Number(row.sequence) };
+    });
+  }
+
   async query(query: ViewQuery = {}): Promise<View[]> {
     return this.read("query", () => {
+      const parsedQuery = ViewQuerySchema.safeParse(query);
+      if (!parsedQuery.success) {
+        throw invalidRequest("query failed ViewQuery validation", "query");
+      }
+      query = parsedQuery.data;
       if (query.revisions !== undefined && query.revisions !== "latest" && query.revisions !== "all") {
         throw invalidRequest("query revisions must be latest or all", "query");
       }
@@ -1040,8 +1057,14 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       const timestampRange = query.time_range === undefined
         ? undefined
         : parseQueryTimeRange(query.time_range);
+      const queryOrder = parseQueryOrder(query.order);
+      const queryAfter = query.after === undefined ? undefined : parseQueryAfter(query.after);
+      if (queryAfter && query.order === undefined) {
+        throw invalidRequest("query after requires an explicit order", "query");
+      }
       const limit = boundedLimit(query.limit, 100, 10_000, "query");
       const clauses: string[] = [];
+      const fromValues: Array<string | number> = [];
       const values: Array<string | number> = [];
       if (query.schema_name) {
         clauses.push("r.schema_name = ?");
@@ -1054,6 +1077,10 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       if (query.role) {
         clauses.push("r.role = ?");
         values.push(query.role);
+      }
+      if (query.capture_connection_id) {
+        clauses.push("json_extract(r.view_json, '$.provenance.capture.connection_id') = ?");
+        values.push(query.capture_connection_id);
       }
       let searchExpression: string | undefined;
       if (query.text) {
@@ -1078,26 +1105,54 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         clauses.push(`${timestampExpression} < ?`);
         values.push(timestampRange.startEpochSeconds, timestampRange.endEpochSeconds);
       }
+      const orderTimestampExpression = queryOrder.basis === "created_at"
+        ? "unixepoch(r.created_at, 'subsec')"
+        : "unixepoch(json_extract(r.view_json, '$.time.observed_at'), 'subsec')";
+      if (queryAfter) {
+        const comparison = queryOrder.direction === "descending" ? "<" : ">";
+        const revisionComparison = queryOrder.direction === "descending" ? "<" : ">";
+        clauses.push(`(${orderTimestampExpression} ${comparison} ? or (${orderTimestampExpression} = ? and (r.id > ? or (r.id = ? and r.revision ${revisionComparison} ?))))`);
+        const epoch = queryAfter.timestampEpochMilliseconds / 1_000;
+        values.push(epoch, epoch, queryAfter.viewId, queryAfter.viewId, queryAfter.revision);
+      }
+      let revisionFrom: string;
+      if (query.snapshot) {
+        if (query.revisions === "all") {
+          revisionFrom = `view_revision_commits_v1 c
+            join view_revisions_v1 r on r.id = c.view_id and r.revision = c.revision`;
+          clauses.push("c.commit_sequence <= ?");
+          values.push(query.snapshot.commit_sequence);
+        } else {
+          revisionFrom = `(select c.view_id, max(c.revision) as revision
+            from view_revision_commits_v1 c
+            where c.commit_sequence <= ?
+            group by c.view_id) h
+            join view_revisions_v1 r on r.id = h.view_id and r.revision = h.revision`;
+          fromValues.push(query.snapshot.commit_sequence);
+        }
+      } else {
+        revisionFrom = query.revisions === "all"
+          ? "view_revisions_v1 r"
+          : "view_heads_v1 h join view_revisions_v1 r on r.id = h.id and r.revision = h.revision";
+      }
       const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
-      const revisionFrom = query.revisions === "all"
-        ? "view_revisions_v1 r"
-        : "view_heads_v1 h join view_revisions_v1 r on r.id = h.id and r.revision = h.revision";
       const from = searchExpression
         ? `${revisionFrom}
            join view_search_projection_v1 sp on sp.view_id = r.id and sp.revision = r.revision
            join view_search_fts_v1 on view_search_fts_v1.rowid = sp.search_rowid`
         : revisionFrom;
+      const orderedDirection = queryOrder.direction === "descending" ? "desc" : "asc";
       const order = searchExpression
         ? `bm25(view_search_fts_v1, 12.0, 6.0, 4.0, 3.0, 2.0, 1.0) asc,
            unixepoch(r.created_at, 'subsec') desc, r.id asc, r.revision desc`
-        : "unixepoch(r.created_at, 'subsec') desc, r.id asc, r.revision desc";
+        : `${orderTimestampExpression} ${orderedDirection}, r.id asc, r.revision ${orderedDirection}`;
       const rows = this.db.prepare(`
         select r.view_json
         from ${from}
         ${where}
         order by ${order}
         limit ?
-      `).all(...values, limit) as ViewRow[];
+      `).all(...fromValues, ...values, limit) as ViewRow[];
       return rows.map(row => this.parseStoredJson(row.view_json));
     });
   }
@@ -1667,7 +1722,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         : [];
       const plans = normalized.length > 0 ? this.planCommits(normalized, transaction) : [];
       if (plans.length > 0) this.validatePlannedReferences(plans, transaction);
-      for (const plan of plans) if (plan.created) this.persistPlan(plan, transaction);
+      const commitSequence = this.reserveViewCommitSequence(plans, transaction);
+      for (const plan of plans) if (plan.created) this.persistPlan(plan, transaction, commitSequence!);
       transaction.phase = "persist_view_committed_event";
       this.persistViewCommittedEvent(plans, transaction, {
         batch_id: batch.id,
@@ -2468,7 +2524,19 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
     }
   }
 
-  private persistPlan(plan: PlannedCommit, transaction: TransactionContext): void {
+  private reserveViewCommitSequence(plans: PlannedCommit[], transaction: TransactionContext): number | undefined {
+    if (!plans.some(plan => plan.created)) return undefined;
+    const inserted = this.db.prepare(`
+      insert into view_commit_sequences_v1 (transaction_id) values (?)
+    `).run(transaction.id);
+    const sequence = Number(inserted.lastInsertRowid);
+    if (!Number.isInteger(sequence) || sequence < 1) {
+      throw this.problem("storage_failure", "SQLite did not assign a View commit sequence", transaction);
+    }
+    return sequence;
+  }
+
+  private persistPlan(plan: PlannedCommit, transaction: TransactionContext, commitSequence: number): void {
     const view = plan.view;
     this.db.prepare(`
       insert into view_revisions_v1 (
@@ -2484,6 +2552,9 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       view.time.created_at,
       JSON.stringify(view),
     );
+    this.db.prepare(`
+      insert into view_revision_commits_v1 (view_id, revision, commit_sequence) values (?, ?, ?)
+    `).run(view.id, view.revision, commitSequence);
 
     if (view.revision === 1) {
       this.db.prepare(`
@@ -2969,6 +3040,10 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         this.ensureColumn("capture_connections_v1", "created_at", "text not null default '1970-01-01T00:00:00.000Z'");
         this.normalizeLegacyCaptureConnections();
       }
+      if (version < 9) {
+        transaction.phase = "backfill_view_commit_sequences";
+        this.backfillViewCommitSequences();
+      }
       if (version < VIEW_STORE_MIGRATION_VERSION) {
         transaction.phase = "create_capture_runtime_schema";
         this.createIndexes();
@@ -3025,6 +3100,20 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         revision integer not null check(revision > 0),
         updated_at text not null,
         foreign key (id, revision) references view_revisions_v1(id, revision)
+          deferrable initially deferred
+      );
+
+      create table if not exists view_commit_sequences_v1 (
+        sequence integer primary key autoincrement,
+        transaction_id text not null unique
+      );
+
+      create table if not exists view_revision_commits_v1 (
+        view_id text not null,
+        revision integer not null check(revision > 0),
+        commit_sequence integer not null references view_commit_sequences_v1(sequence),
+        primary key (view_id, revision),
+        foreign key (view_id, revision) references view_revisions_v1(id, revision) on delete cascade
           deferrable initially deferred
       );
 
@@ -3327,7 +3416,11 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       create index if not exists idx_view_revisions_v1_representation_kind
         on view_revisions_v1(json_extract(view_json, '$.representation.kind'));
       create index if not exists idx_view_revisions_v1_role on view_revisions_v1(role);
+      create index if not exists idx_view_revisions_v1_capture_connection
+        on view_revisions_v1(json_extract(view_json, '$.provenance.capture.connection_id'));
       create index if not exists idx_view_heads_v1_updated on view_heads_v1(updated_at);
+      create index if not exists idx_view_revision_commits_v1_snapshot
+        on view_revision_commits_v1(commit_sequence, view_id, revision);
       create index if not exists idx_view_relations_v1_source on view_relations_v1(source_view_id, source_revision, type);
       create index if not exists idx_view_relations_v1_target on view_relations_v1(target_view_id, target_revision, type);
       create index if not exists idx_view_capture_identities_v1_view on view_capture_identities_v1(view_id);
@@ -3514,6 +3607,27 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
     }
   }
 
+  private backfillViewCommitSequences(): void {
+    const rows = this.db.prepare(`
+      select r.id, r.revision
+      from view_revisions_v1 r
+      left join view_revision_commits_v1 c on c.view_id = r.id and c.revision = r.revision
+      where c.view_id is null
+      order by r.rowid
+    `).all() as Array<{ id: string; revision: number }>;
+    const insertSequence = this.db.prepare(`
+      insert into view_commit_sequences_v1 (transaction_id) values (?)
+    `);
+    const insertRevision = this.db.prepare(`
+      insert into view_revision_commits_v1 (view_id, revision, commit_sequence) values (?, ?, ?)
+    `);
+    for (const row of rows) {
+      const transactionId = `migration:view-commit:${createHash("sha256").update(`${row.id}@${row.revision}`).digest("hex")}`;
+      const inserted = insertSequence.run(transactionId);
+      insertRevision.run(row.id, Number(row.revision), Number(inserted.lastInsertRowid));
+    }
+  }
+
   private rebuildConstraintTables(): void {
     this.db.exec(`
       drop table if exists view_heads_v1_next;
@@ -3575,6 +3689,8 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
       "view_search_reindex_runs_v1",
       "view_commit_outbox_v1",
       "view_commit_outbox_refs_v1",
+      "view_commit_sequences_v1",
+      "view_revision_commits_v1",
     ];
     const missingRequiredTable = requiredTables.find(table => !(this.db.prepare(`select name from sqlite_master where type = 'table' and name = ?`).get(table)));
     if (!fingerprint || fingerprint.notnull !== 1 || !captureColumnsValid || missingRequiredTable || !headForeignKeys.some(key => key.table === "view_revisions_v1")
@@ -4008,6 +4124,47 @@ function parseQueryTimeRange(value: unknown): {
     basis: range.basis,
     startEpochSeconds: start / 1_000,
     endEpochSeconds: end / 1_000,
+  };
+}
+
+function parseQueryOrder(value: unknown): {
+  basis: "observed_at" | "created_at";
+  direction: "ascending" | "descending";
+} {
+  if (value === undefined) return { basis: "created_at", direction: "descending" };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("query order must be an object", "query");
+  }
+  const order = value as { basis?: unknown; direction?: unknown };
+  if (order.basis !== "observed_at" && order.basis !== "created_at") {
+    throw invalidRequest("query order basis must be observed_at or created_at", "query");
+  }
+  if (order.direction !== "ascending" && order.direction !== "descending") {
+    throw invalidRequest("query order direction must be ascending or descending", "query");
+  }
+  return { basis: order.basis, direction: order.direction };
+}
+
+function parseQueryAfter(value: unknown): {
+  timestampEpochMilliseconds: number;
+  viewId: string;
+  revision: number;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("query after must be an object", "query");
+  }
+  const after = value as { timestamp?: unknown; view_id?: unknown; revision?: unknown };
+  const timestampEpochMilliseconds = parseQueryTimestamp(after.timestamp, "after.timestamp");
+  if (typeof after.view_id !== "string" || !after.view_id.trim()) {
+    throw invalidRequest("query after.view_id must be a non-empty string", "query");
+  }
+  if (!Number.isInteger(after.revision) || Number(after.revision) < 1) {
+    throw invalidRequest("query after.revision must be a positive integer", "query");
+  }
+  return {
+    timestampEpochMilliseconds,
+    viewId: after.view_id,
+    revision: Number(after.revision),
   };
 }
 

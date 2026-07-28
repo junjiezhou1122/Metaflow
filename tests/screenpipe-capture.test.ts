@@ -11,6 +11,8 @@ import {
 } from "@info/capture";
 import {
   ScreenpipeCaptureConnector,
+  ScreenpipeAssetError,
+  ScreenpipeFrameAssetResolver,
   configureScreenpipeCapture,
   screenpipeSourceConnection,
   type ScreenpipeSecretResolver,
@@ -55,6 +57,7 @@ async function setup(input: {
   repository?: SqliteViewRepository;
   retry_policy?: CaptureRetryPolicy;
   secret_resolver?: ScreenpipeSecretResolver | null;
+  timeout_ms?: number;
 }) {
   const repository = input.repository ?? new SqliteViewRepository(":memory:");
   const runtime = new ConnectorRuntime(repository, new CaptureIngress({ repository }), {
@@ -64,6 +67,7 @@ async function setup(input: {
   const connector = new ScreenpipeCaptureConnector({
     fetch: input.fetch,
     now: deterministicClock(),
+    ...(input.timeout_ms ? { timeout_ms: input.timeout_ms } : {}),
     ...(input.secret_resolver === null
       ? {}
       : { secret_resolver: input.secret_resolver ?? { resolve: async () => "local-test-key" } }),
@@ -228,7 +232,12 @@ test("recorded Screenpipe REST fixtures retain source-native modalities through 
     ]);
 
     const searchRequests = calls.filter(value => new URL(value).pathname === "/search");
+    const capabilityRequests = searchRequests.filter(value => !new URL(value).searchParams.has("max_content_length"));
     assert.ok(searchRequests.length >= 4);
+    assert.equal(capabilityRequests.length >= 4, true);
+    assert.equal(capabilityRequests.length % 4, 0);
+    assert.equal(capabilityRequests.every(value => new URL(value).searchParams.has("start_time")), true);
+    assert.equal(capabilityRequests.every(value => new URL(value).searchParams.has("end_time")), true);
     assert.equal(searchRequests.some(value => new URL(value).searchParams.get("content_type") === "all"), false);
     assert.deepEqual(new Set(searchRequests.map(value => new URL(value).searchParams.get("content_type"))), new Set([
       "ocr", "audio", "input", "accessibility",
@@ -236,6 +245,62 @@ test("recorded Screenpipe REST fixtures retain source-native modalities through 
     assert.equal(searchRequests.every(value => new URL(value).searchParams.get("include_frames") === "false"), true);
     assert.equal(searchRequests.every(value => new URL(value).searchParams.get("order") === "ascending"), true);
     assert.equal((await harness.runtime.health(harness.connection.id)).status, "healthy");
+  } finally {
+    harness.repository.close();
+  }
+});
+
+test("Screenpipe timeout evidence identifies the exact bounded modality request", async () => {
+  const harness = await setup({
+    required_capabilities: ["frame_ocr"],
+    timeout_ms: 10,
+    fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/health") return jsonResponse(fixture("health-0.4.30.json"));
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    }) as typeof fetch,
+  });
+  try {
+    await assert.rejects(
+      harness.runtime.run(harness.connection.id, "pull", {
+        resource: "search",
+        query: { content_types: ["ocr"], limit: 1 },
+      }),
+      (error: unknown) => error instanceof CaptureRuntimeError
+        && error.code === "screenpipe_timeout"
+        && error.details.path === "/search"
+        && error.details.content_type === "ocr",
+    );
+  } finally {
+    harness.repository.close();
+  }
+});
+
+test("nullable Screenpipe browser URLs remain Raw evidence without creating invalid search units", async () => {
+  const calls: string[] = [];
+  const baseFetch = recordedFixtureFetch(calls);
+  const harness = await setup({
+    required_capabilities: ["frame_ocr"],
+    fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+      const response = await baseFetch(input, init);
+      const url = new URL(String(input));
+      if (url.pathname !== "/search") return response;
+      const body = await response.json() as { data: Array<{ content: { browser_url: string | null } }> };
+      for (const item of body.data) item.content.browser_url = null;
+      return jsonResponse(body);
+    }) as typeof fetch,
+  });
+  try {
+    const result = await harness.runtime.run(harness.connection.id, "pull", {
+      resource: "search",
+      query: { content_types: ["ocr"], limit: 1 },
+    });
+    assert.equal(result[0]?.receipts.length, 1);
+    const views = await harness.repository.query({ schema_name: "capture.screenpipe.frame_ocr", limit: 10 });
+    assert.equal(views.length, 1);
+    assert.deepEqual((await harness.repository.query({ text: "exact Raw View evidence" })).map(view => view.id), [views[0]?.id]);
   } finally {
     harness.repository.close();
   }
@@ -751,6 +816,73 @@ test("connection-scoped idempotency isolates identical rows and Input enrichment
     assert.notEqual(firstViews[0]?.id, secondViews[0]?.id);
   } finally {
     repository.close();
+  }
+});
+
+test("Screenpipe frame assets resolve exact authorized logical refs without exposing credentials", async () => {
+  const harness = await setup({
+    required_capabilities: ["frame_ocr"],
+    fetch: recordedFixtureFetch([]),
+  });
+  try {
+    await harness.runtime.run(harness.connection.id, "pull", {
+      resource: "search",
+      query: { content_types: ["ocr"], limit: 1 },
+    });
+    const frame = (await harness.repository.query({ schema_name: "capture.screenpipe.frame_ocr", limit: 1 }))[0];
+    assert.ok(frame);
+    const resolver = new ScreenpipeFrameAssetResolver({
+      connection: harness.connection,
+      secret_resolver: { resolve: async () => "asset-secret" },
+      fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+        const url = new URL(String(input));
+        assert.equal(url.pathname, "/frames/42/thumbnail");
+        assert.equal(url.searchParams.get("width"), "1440");
+        assert.equal(url.searchParams.get("quality"), "90");
+        assert.equal(new Headers(init?.headers).get("authorization"), "Bearer asset-secret");
+        return new Response(Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]), {
+          headers: { "content-type": "image/jpeg", "content-length": "4", etag: "frame-42" },
+        });
+      }) as typeof fetch,
+    });
+    const asset = await resolver.thumbnail(frame);
+    assert.equal(asset.media_type, "image/jpeg");
+    assert.equal(asset.body.byteLength, 4);
+    assert.equal(asset.etag, "frame-42");
+    await assert.rejects(
+      resolver.thumbnail(frame, { width: 1921 }),
+      (error: unknown) => error instanceof ScreenpipeAssetError
+        && error.code === "screenpipe_asset_reference_invalid"
+        && error.status === 400,
+    );
+
+    const wrongConnection = structuredClone(frame);
+    if (wrongConnection.representation.form === "inline") {
+      wrongConnection.representation.metadata.external_media = {
+        kind: "screenpipe_frame",
+        uri: "screenpipe://screenpipe%3Aother/frame/42",
+      };
+    }
+    await assert.rejects(
+      resolver.thumbnail(wrongConnection),
+      (error: unknown) => error instanceof ScreenpipeAssetError && error.code === "screenpipe_asset_reference_invalid",
+    );
+
+    const unsupportedMediaResolver = new ScreenpipeFrameAssetResolver({
+      connection: harness.connection,
+      secret_resolver: { resolve: async () => "asset-secret" },
+      fetch: (async () => new Response("<svg/>", {
+        headers: { "content-type": "image/svg+xml" },
+      })) as typeof fetch,
+    });
+    await assert.rejects(
+      unsupportedMediaResolver.thumbnail(frame),
+      (error: unknown) => error instanceof ScreenpipeAssetError
+        && error.code === "screenpipe_asset_media_type_invalid"
+        && error.status === 502,
+    );
+  } finally {
+    harness.repository.close();
   }
 });
 

@@ -19,6 +19,11 @@ import {
   obsidianDocumentSchemaKey,
   obsidianDocumentViewPackage,
 } from "../view-packages/obsidian-document/index.ts";
+import {
+  SCREENPIPE_TIMELINE_INDEX_SCHEMA,
+  screenpipeTimelineFixtures,
+  screenpipeTimelineViewPackage,
+} from "@info/view-package-screenpipe-timeline";
 
 const environment = {
   operations: new Set(["view.get", "view.traverse", "run.execute"]),
@@ -71,6 +76,39 @@ test("one View Package binds Schema, Materialization, human Renderer, and Agent 
     "renderer.github.repository-summary");
   assert.equal(githubRepositorySummaryViewPackage.renderers(githubRepositorySummarySchemaKey, "web")[0]?.abi_version, 1);
   assert.equal(githubRepositorySummaryViewPackage.method("regenerate")?.effect, "creates_view");
+});
+
+test("Screenpipe Timeline Package declares a strict cursor-paged typed query Method", () => {
+  const report = runViewPackageConformance({
+    package: screenpipeTimelineViewPackage,
+    fixtures: screenpipeTimelineFixtures,
+    operations: new Set(["view.get", "view.query", "capture.connection.run"]),
+    renderers: new Set(["renderer.screenpipe.timeline@1@1"]),
+    transformations: new Map(),
+  });
+  assert.deepEqual(report, {
+    package_id: "view-package.screenpipe-timeline",
+    package_version: 1,
+    schemas: 1,
+    fixtures: 1,
+    methods: 3,
+    renderers: 1,
+    parsers: 0,
+    processors: 0,
+    evolutions: 0,
+  });
+  assert.equal(screenpipeTimelineViewPackage.schema({
+    name: SCREENPIPE_TIMELINE_INDEX_SCHEMA.name,
+    version: SCREENPIPE_TIMELINE_INDEX_SCHEMA.version,
+  }).mode, "strict");
+  const entries = screenpipeTimelineViewPackage.method("entries");
+  assert.deepEqual(entries?.target, { kind: "operation", operation: "view.query" });
+  assert.equal(entries?.parameters?.dialect, "https://json-schema.org/draft/2020-12/schema");
+  assert.deepEqual(entries?.parameters?.pagination, { kind: "cursor", max_page_size: 100 });
+  assert.deepEqual(screenpipeTimelineViewPackage.method("refresh")?.target, {
+    kind: "operation",
+    operation: "capture.connection.run",
+  });
 });
 
 test("View Package catalog discovers Schema owners and rejects duplicate registration", () => {

@@ -6,6 +6,12 @@ export default defineConfig({
   optimizeDeps: {
     include: ["graphology", "graphology-layout-forceatlas2", "graphology-layout-noverlap"],
   },
+  server: {
+    proxy: {
+      "/ambient": "http://127.0.0.1:3111",
+      "/metaflow": "http://127.0.0.1:3111",
+    },
+  },
   build: {
     target: "es2022",
     sourcemap: true,

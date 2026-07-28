@@ -67,6 +67,8 @@ button { color: inherit; }
 .search-box input { width: 100%; min-width: 0; height: 100%; border: 0; outline: 0; color: #1b211e; background: transparent; font-size: 13px; }
 .search-box input::placeholder { color: #89908b; }
 .topbar-actions { justify-self: end; display: flex; gap: 4px; padding-right: 10px; }
+.surface-switch { display: grid; grid-template-columns: 1fr 1fr; width: 132px; }
+.surface-switch button { display: flex; align-items: center; justify-content: center; gap: 5px; }
 
 .icon-button {
   display: inline-grid;
@@ -145,7 +147,44 @@ button { color: inherit; }
 .edge-line.reference { background: #7b6d61; }
 .edge-line.application { background: #2d8b72; }
 
-.graph-stage { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; background: #fafbfa; }
+.graph-stage, .view-renderer-stage { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; background: #fafbfa; }
+.explorer-shell[data-surface="view"] .left-panel { display: none; }
+.view-renderer-container { width: 100%; height: 100%; overflow: auto; }
+.renderer-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: #5d655f; background: #fafbfa; font-size: 12px; }
+.renderer-overlay.error { color: var(--red); }
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.screenpipe-renderer { min-height: 100%; color: #202521; background: #f4f5f1; }
+.screenpipe-toolbar { position: sticky; z-index: 5; top: 0; display: grid; grid-template-columns: minmax(150px, 1fr) auto minmax(180px, 320px) 34px; align-items: center; gap: 10px; min-height: 58px; padding: 8px 18px; border-bottom: 1px solid #c9cec7; background: #fafbf8; }
+.screenpipe-toolbar > div:first-child { display: grid; gap: 2px; }
+.screenpipe-toolbar strong { font-size: 15px; }
+.screenpipe-toolbar span { color: #6e7670; font-size: 10px; }
+.screenpipe-toolbar label, .screenpipe-search { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 8px; border: 1px solid #c7ccc5; border-radius: 4px; background: #fff; }
+.screenpipe-toolbar input { min-width: 0; border: 0; outline: 0; background: transparent; font-size: 11px; }
+.screenpipe-filters { position: sticky; z-index: 4; top: 58px; display: flex; gap: 4px; padding: 7px 18px; overflow-x: auto; border-bottom: 1px solid #d9ddd6; background: #f4f5f1; }
+.screenpipe-filters label { display: flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 8px; border: 1px solid #cdd2cb; border-radius: 4px; background: #fff; font-size: 10px; white-space: nowrap; cursor: pointer; }
+.screenpipe-filters input { accent-color: var(--green); }
+.screenpipe-stream, .audio-stream { width: min(960px, calc(100% - 36px)); margin: 0 auto; padding: 16px 0 60px; list-style: none; }
+.screenpipe-stream > li { position: relative; display: grid; grid-template-columns: 50px 28px minmax(0, 1fr); padding-bottom: 20px; }
+.screenpipe-stream > li::before { position: absolute; top: 0; bottom: 0; left: 63px; width: 1px; background: #cfd4cd; content: ""; }
+.screenpipe-hour { grid-column: 1 / -1; display: grid; grid-template-columns: 78px 1fr; align-items: center; height: 32px; color: #717a73; font-size: 9px; font-weight: 750; }
+.screenpipe-hour::after { height: 1px; background: #b7beb7; content: ""; }
+.screenpipe-stream > li > time { padding-top: 5px; color: #555e58; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.screenpipe-stream > li > i { z-index: 1; display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid #59635d; border-radius: 50%; background: #f4f5f1; color: var(--green); font-style: normal; }
+.screenpipe-stream article { min-width: 0; padding: 2px 0 20px 10px; border-bottom: 1px solid #d9ddd7; }
+.screenpipe-stream article > header, .audio-stream header { display: flex; align-items: baseline; gap: 8px; }
+.screenpipe-stream article > header strong, .audio-stream header strong { font-size: 12px; }
+.screenpipe-stream article > header span, .audio-stream header span { overflow: hidden; color: #747c76; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.screenpipe-stream p, .audio-stream p { margin: 7px 0 0; color: #303631; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.screenpipe-frame { display: grid; width: min(100%, 760px); aspect-ratio: 16 / 9; place-items: center; margin-top: 10px; overflow: hidden; border: 1px solid #cbd0ca; background: #dde1da; color: #747c76; }
+.screenpipe-frame img { display: block; width: 100%; height: 100%; object-fit: contain; background: #111; }
+.screenpipe-state { display: flex; min-height: 260px; align-items: center; justify-content: center; gap: 8px; color: #68706a; font-size: 12px; }
+.screenpipe-state.error { color: var(--red); }
+.screenpipe-load { display: grid; height: 60px; place-items: center; color: var(--green); }
+.audio-surface .screenpipe-toolbar { grid-template-columns: 1fr; }
+.audio-stream > li { display: grid; grid-template-columns: 48px 24px minmax(0, 1fr); gap: 8px; padding: 14px 0; border-bottom: 1px solid #d7dcd5; }
+.audio-stream > li > time { color: #616a64; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .sigma-container { position: absolute; inset: 0; }
 .sigma-container canvas { display: block; }
 .graph-loading, .graph-failure { position: absolute; inset: 0; display: grid; place-content: center; gap: 6px; text-align: center; color: #5d655f; background: #fafbfa; }
@@ -342,6 +381,13 @@ button { color: inherit; }
   .panel, .companion { top: 64px; bottom: 8px; width: calc(100vw - 16px); }
   .left-panel { left: 8px; }
   .companion { right: 8px; }
+  .surface-switch { width: 70px; }
+  .surface-switch button { font-size: 0; }
+  .screenpipe-toolbar { grid-template-columns: 1fr auto 34px; padding: 7px 10px; }
+  .screenpipe-toolbar > div:first-child { grid-column: 1; }
+  .screenpipe-search { grid-column: 1 / -1; grid-row: 2; }
+  .screenpipe-filters { top: 98px; padding-inline: 10px; }
+  .screenpipe-stream, .audio-stream { width: calc(100% - 20px); }
   .canvas-stats { bottom: 8px; left: 8px; }
   .view-dialog-backdrop { padding: 0; }
   .view-dialog { width: 100%; height: 100%; border: 0; border-radius: 0; }

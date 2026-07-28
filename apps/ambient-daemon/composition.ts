@@ -66,15 +66,24 @@ import {
 } from "@info/obsidian-capture-adapter";
 import {
   ScreenpipeCaptureConnector,
+  ScreenpipeFrameAssetResolver,
   ScreenpipeOpenParametersSchema,
   configureScreenpipeCapture,
 } from "@info/screenpipe-capture-adapter";
 import {
   SCREENPIPE_AUDIO_FUNCTION,
   SCREENPIPE_TIMELINE_FUNCTION,
+  ScreenpipeTimelineQueryMethod,
+  createScreenpipeTimelineIndexDraft,
   executeScreenpipeAudio,
   executeScreenpipeTimeline,
 } from "@info/screenpipe-derived-views";
+import {
+  SCREENPIPE_TIMELINE_INDEX_SCHEMA,
+  SCREENPIPE_TIMELINE_QUERY_METHOD_PARAMETERS,
+  SCREENPIPE_TIMELINE_QUERY_PROFILE,
+  screenpipeTimelineViewPackage,
+} from "@info/view-package-screenpipe-timeline";
 import {
   BrowserDomRequestBroker,
   MacAutomationController,
@@ -95,6 +104,7 @@ import {
   JsonConsoleOperationObserver,
   OperationService,
   RepositoryViewReadAuthorizer,
+  ViewQueryRegistry,
 } from "@info/operations";
 import { SearchService, type QueryEmbeddingPort } from "@info/search";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
@@ -148,6 +158,7 @@ export type AmbientDaemonCompositionOptions = {
     screenpipe?: {
       connector?: ScreenpipeCaptureConnector;
       connection?: SourceConnection;
+      assets?: ScreenpipeFrameAssetResolver;
     };
   };
   connector_packages?: {
@@ -233,6 +244,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       applicationSpaceViewPackage,
       githubRepositorySummaryViewPackage,
       obsidianDocumentViewPackage,
+      screenpipeTimelineViewPackage,
     ]) {
       viewPackages.register(viewPackage);
     }
@@ -308,6 +320,15 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       now: () => now().toISOString(),
     });
     const captureSources = await configureExternalCaptureSources(connectorRuntime, options.capture_sources);
+    const screenpipeLifecycle = captureSources.screenpipe_connection_id
+      ? await views.getCaptureConnectionLifecycle(captureSources.screenpipe_connection_id)
+      : undefined;
+    if (captureSources.screenpipe_connection_id && !screenpipeLifecycle) {
+      throw new Error(`Configured Screenpipe Source Connection has no lifecycle state: ${captureSources.screenpipe_connection_id}`);
+    }
+    if (captureSources.screenpipe_connection_id) {
+      await seedScreenpipeTimelineIndex(views, captureSources.screenpipe_connection_id);
+    }
     const browserCapture = await configureBrowserCapture({ runtime: connectorRuntime });
     const browserController = new BrowserAutomationController({
       capture: browserCapture,
@@ -403,6 +424,16 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       graph: views.search,
       search,
       view_reads: viewReads,
+      view_queries: new ViewQueryRegistry([
+        new ScreenpipeTimelineQueryMethod(views, {
+          profile: SCREENPIPE_TIMELINE_QUERY_PROFILE,
+          subject_schema: {
+            name: SCREENPIPE_TIMELINE_INDEX_SCHEMA.name,
+            version: SCREENPIPE_TIMELINE_INDEX_SCHEMA.version,
+          },
+          parameters: SCREENPIPE_TIMELINE_QUERY_METHOD_PARAMETERS,
+        }),
+      ]),
       transformations,
       execution,
       runs: views,
@@ -428,6 +459,23 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       operations: operationHttp,
       operation_access: operationAccess,
       direct_assist: options.direct_assist,
+      ...(captureSources.screenpipe_connection_id ? {
+        timeline: {
+          connection_id: captureSources.screenpipe_connection_id,
+          generation: screenpipeLifecycle!.generation,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          index_view_id: createScreenpipeTimelineIndexDraft({
+            schema: SCREENPIPE_TIMELINE_INDEX_SCHEMA,
+            connection_id: captureSources.screenpipe_connection_id,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            owner: "user:local",
+            created_at: "2026-07-28T00:00:00.000Z",
+          }).id,
+        },
+      } : {}),
+      ...(options.capture_sources?.screenpipe?.assets ? {
+        screenpipe_assets: options.capture_sources.screenpipe.assets,
+      } : {}),
     });
     const mcpHandler = createAmbientMcpHttpHandler(operationService, operationAccess);
 
@@ -485,6 +533,7 @@ async function configureExternalCaptureSources(
 ) {
   const configured = new Set<string>();
   const explicitParametersRequired = new Set<string>();
+  let screenpipeConnectionId: string | undefined;
   if (sources?.codex_history) {
     const result = await configureCodexHistoryCapture({
       runtime,
@@ -514,10 +563,12 @@ async function configureExternalCaptureSources(
     });
     configured.add(result.connection.id);
     explicitParametersRequired.add(result.connection.id);
+    screenpipeConnectionId = result.connection.id;
   }
   const connectionIds = Object.freeze([...configured].sort());
   return Object.freeze({
     connection_ids: connectionIds,
+    ...(screenpipeConnectionId ? { screenpipe_connection_id: screenpipeConnectionId } : {}),
     async pull(connectionId: string, parameters?: Record<string, unknown>) {
       if (!configured.has(connectionId)) {
         throw new Error(`Capture Source Connection is not configured in this composition: ${connectionId}`);
@@ -527,6 +578,32 @@ async function configureExternalCaptureSources(
         : parameters ?? {};
       return runtime.run(connectionId, "pull", boundedParameters);
     },
+  });
+}
+
+async function seedScreenpipeTimelineIndex(
+  views: SqliteViewRepository,
+  connectionId: string,
+): Promise<void> {
+  const draft = createScreenpipeTimelineIndexDraft({
+    schema: SCREENPIPE_TIMELINE_INDEX_SCHEMA,
+    connection_id: connectionId,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    owner: "user:local",
+    created_at: "2026-07-28T00:00:00.000Z",
+  });
+  const existing = await views.get({ view_id: draft.id, revision: 1 });
+  if (existing) {
+    const expected = parseView({ ...draft, revision: 1 });
+    if (canonicalJson(existing) !== canonicalJson(expected)) {
+      throw new Error(`Seed Screenpipe Timeline index conflict: ${existing.id}@${existing.revision}`);
+    }
+    return;
+  }
+  await views.commit({
+    draft,
+    expected_revision: 0,
+    idempotency_key: `seed:${draft.id}@1`,
   });
 }
 

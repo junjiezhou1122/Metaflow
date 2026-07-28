@@ -127,6 +127,9 @@ importers:
       '@info/view-package-personal-activity':
         specifier: workspace:*
         version: link:view-packages/personal-activity
+      '@info/view-package-screenpipe-timeline':
+        specifier: workspace:*
+        version: link:view-packages/screenpipe-timeline
       '@info/web-view-renderers':
         specifier: workspace:*
         version: link:packages/adapters/web-view-renderers
@@ -248,6 +251,9 @@ importers:
       '@info/view-package-obsidian-document':
         specifier: workspace:*
         version: link:../../view-packages/obsidian-document
+      '@info/view-package-screenpipe-timeline':
+        specifier: workspace:*
+        version: link:../../view-packages/screenpipe-timeline
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -256,6 +262,46 @@ importers:
         version: 4.4.3
 
   apps/mf-cli: {}
+
+  apps/timeline-view:
+    dependencies:
+      '@vitejs/plugin-react':
+        specifier: 6.0.4
+        version: 6.0.4(vite@8.1.5(@types/node@22.19.15)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.8.3))
+      lucide-react:
+        specifier: 1.27.0
+        version: 1.27.0(react@19.2.8)
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
+      vite:
+        specifier: 8.1.5
+        version: 8.1.5(@types/node@22.19.15)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.8.3)
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.62.0
+        version: 1.62.0
+      '@types/node':
+        specifier: 22.19.15
+        version: 22.19.15
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: 19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      tsx:
+        specifier: 4.22.3
+        version: 4.22.3
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
 
   apps/view-explorer:
     dependencies:
@@ -268,6 +314,9 @@ importers:
       '@info/view-package-personal-activity':
         specifier: workspace:*
         version: link:../../view-packages/personal-activity
+      '@info/view-package-screenpipe-timeline':
+        specifier: workspace:*
+        version: link:../../view-packages/screenpipe-timeline
       '@info/web-view-renderers':
         specifier: workspace:*
         version: link:../../packages/adapters/web-view-renderers
@@ -311,6 +360,9 @@ importers:
       '@info/operations':
         specifier: workspace:*
         version: link:../../packages/operations
+      '@info/screenpipe-derived-views':
+        specifier: workspace:*
+        version: link:../../packages/adapters/screenpipe-derived-views
       '@info/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/adapters/storage-sqlite
@@ -675,6 +727,9 @@ importers:
       '@info/execution':
         specifier: workspace:*
         version: link:../../execution
+      '@info/operations':
+        specifier: workspace:*
+        version: link:../../operations
       '@info/screenpipe-contracts':
         specifier: workspace:*
         version: link:../../screenpipe-contracts
@@ -744,6 +799,9 @@ importers:
       '@tanstack/react-table':
         specifier: 8.21.3
         version: 8.21.3(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      lucide-react:
+        specifier: 1.27.0
+        version: 1.27.0(react@19.2.8)
       react-markdown:
         specifier: 10.1.0
         version: 10.1.0(@types/react@19.2.17)(react@19.2.8)
@@ -841,6 +899,9 @@ importers:
       '@info/view':
         specifier: workspace:*
         version: link:../view
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -922,6 +983,15 @@ importers:
       '@info/transformation':
         specifier: workspace:*
         version: link:../../packages/transformation
+      '@info/view-package':
+        specifier: workspace:*
+        version: link:../../packages/view-package
+
+  view-packages/screenpipe-timeline:
+    dependencies:
+      '@info/view':
+        specifier: workspace:*
+        version: link:../../packages/view
       '@info/view-package':
         specifier: workspace:*
         version: link:../../packages/view-package

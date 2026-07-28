@@ -1,7 +1,14 @@
 import { createServer, type Server } from "node:http";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AcpStdioAgentRuntimeAdapter } from "@info/agent-runtime-adapter";
 import { DEFAULT_BROWSER_CAPTURE_DAEMON_PORT } from "@info/browser-capture-adapter/wire";
+import {
+  ScreenpipeCaptureConnector,
+  ScreenpipeFrameAssetResolver,
+  screenpipeSourceConnection,
+  type ScreenpipeSecretResolver,
+} from "@info/screenpipe-capture-adapter";
 import { createAmbientDaemonComposition } from "./composition.js";
 import { createDirectAssistHttpHandler, DirectAssistService } from "./direct-assist.js";
 import { createNativeAgentPermissionBroker, DirectAssistRuntimeRouter } from "./direct-assist-runtime.js";
@@ -47,6 +54,7 @@ export async function startAmbientDaemon() {
     },
   });
   const directAssist = createDirectAssistHttpHandler(new DirectAssistService(directConversation));
+  const screenpipeSource = localScreenpipeCaptureSource();
   let composition: Awaited<ReturnType<typeof createAmbientDaemonComposition>>;
   try {
     composition = await createAmbientDaemonComposition({
@@ -57,6 +65,7 @@ export async function startAmbientDaemon() {
       agent_aliases: parseAgentAliases(process.env.METAFLOW_AGENT_ALIASES),
       agent_mcp_servers: [],
       direct_assist: directAssist,
+      ...(screenpipeSource ? { capture_sources: { screenpipe: screenpipeSource } } : {}),
     });
   } catch (error) {
     await directConversation.close();
@@ -131,6 +140,64 @@ export async function listenAmbientDaemon(server: Server, port: number): Promise
     server.once("listening", onListening);
     server.listen(port, AMBIENT_DAEMON_HOST);
   });
+}
+
+let cachedScreenpipeSource: ReturnType<typeof createLocalScreenpipeCaptureSource> | undefined;
+
+function localScreenpipeCaptureSource() {
+  if (process.env.METAFLOW_SCREENPIPE_ENABLED !== "1") return undefined;
+  cachedScreenpipeSource ??= createLocalScreenpipeCaptureSource();
+  return cachedScreenpipeSource;
+}
+
+function createLocalScreenpipeCaptureSource() {
+  const secretRef = { provider: "custom" as const, key: "screenpipe-local-api" };
+  const resolver = localScreenpipeSecretResolver(secretRef);
+  const connection = screenpipeSourceConnection({
+    id: process.env.METAFLOW_SCREENPIPE_CONNECTION_ID ?? "screenpipe:local",
+    endpoint: process.env.METAFLOW_SCREENPIPE_ENDPOINT ?? "http://127.0.0.1:3030",
+    required_capabilities: ["frame_ocr", "audio", "input", "ui_accessibility"],
+    secret_refs: { screenpipe_api_key: secretRef },
+    authentication: "bearer",
+  });
+  return {
+    connection,
+    connector: new ScreenpipeCaptureConnector({ secret_resolver: resolver }),
+    assets: new ScreenpipeFrameAssetResolver({ connection, secret_resolver: resolver }),
+  };
+}
+
+function localScreenpipeSecretResolver(
+  expected: { provider: "custom"; key: string },
+): ScreenpipeSecretResolver {
+  let cached: string | undefined;
+  return {
+    async resolve(ref) {
+      if (ref.provider !== expected.provider || ref.key !== expected.key || ref.version !== undefined) {
+        throw new Error("Screenpipe requested an undeclared local secret reference");
+      }
+      if (cached) return cached;
+      const fromEnvironment = process.env.SCREENPIPE_API_TOKEN?.trim();
+      if (fromEnvironment) {
+        if (/[\r\n]/u.test(fromEnvironment)) throw new Error("SCREENPIPE_API_TOKEN contains invalid header characters");
+        cached = fromEnvironment;
+        return cached;
+      }
+      const command = process.env.SCREENPIPE_CLI ?? "screenpipe";
+      const result = spawnSync(command, ["auth", "token"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+      });
+      if (result.error || result.signal || result.status !== 0) {
+        throw new Error("Unable to obtain the local Screenpipe API token");
+      }
+      const token = result.stdout.trim();
+      if (!token || /[\r\n]/u.test(token)) throw new Error("Screenpipe returned an invalid local API token");
+      cached = token;
+      return cached;
+    },
+  };
 }
 
 function parsePiThinking(value: string | undefined): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {

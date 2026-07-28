@@ -11,8 +11,15 @@ import {
   GrantOperationAuthorizer,
   OperationService,
   RepositoryViewReadAuthorizer,
+  ViewQueryRegistry,
 } from "@info/operations";
+import { ScreenpipeTimelineQueryMethod } from "@info/screenpipe-derived-views";
 import { SqliteViewRepository } from "@info/storage-sqlite";
+import {
+  SCREENPIPE_TIMELINE_INDEX_SCHEMA,
+  SCREENPIPE_TIMELINE_QUERY_METHOD_PARAMETERS,
+  SCREENPIPE_TIMELINE_QUERY_PROFILE,
+} from "@info/view-package-screenpipe-timeline";
 import { SearchService } from "@info/search";
 import { createServer as createViteServer } from "vite";
 
@@ -72,6 +79,16 @@ const operations = new OperationService({
   graph: views.search,
   search,
   view_reads: reads,
+  view_queries: new ViewQueryRegistry([
+    new ScreenpipeTimelineQueryMethod(views, {
+      profile: SCREENPIPE_TIMELINE_QUERY_PROFILE,
+      subject_schema: {
+        name: SCREENPIPE_TIMELINE_INDEX_SCHEMA.name,
+        version: SCREENPIPE_TIMELINE_INDEX_SCHEMA.version,
+      },
+      parameters: SCREENPIPE_TIMELINE_QUERY_METHOD_PARAMETERS,
+    }),
+  ]),
   transformations: unavailable,
   execution: unavailable,
   runs: unavailable,

@@ -6,7 +6,7 @@ export const BROWSER_OPERATION_WIRE_CONTRACT = Object.freeze({
   authentication: { source: "METAFLOW_AUTH_TOKEN", required: true, scheme: "Bearer", challenge_scheme: "HMAC-SHA256" },
   catalog: {
     version: 1,
-    fingerprint: "sha256:848d837bc51def904f31e2c546ecce93d286b8140f70ead30d863f37d276d51a",
+    fingerprint: "sha256:397bb3defe5e6938efdfbd03f091170389f0b2f10c92adc409dead83f6aba1a5",
     operations: [
       "catalog.list",
       "connector.list",
@@ -23,6 +23,8 @@ export const BROWSER_OPERATION_WIRE_CONTRACT = Object.freeze({
       "capture.dlq.list",
       "capture.dlq.replay",
       "view.get",
+      "view.resolve.latest",
+      "view.query",
       "view.graph.project",
       "view.search",
       "view.search.reindex",

@@ -14,6 +14,7 @@ packages:
   - "packages/adapters/*"
   - "view-packages/*"
   - "apps/ambient-daemon"
+  - "apps/timeline-view"
   - "apps/view-explorer"
   - "apps/mf-cli"
   - "apps/website"

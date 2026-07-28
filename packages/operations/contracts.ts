@@ -40,6 +40,7 @@ import {
 } from "@info/authoring";
 import { CaptureBatchSchema } from "@info/capture";
 import { OPERATION_NAMES, type OperationName } from "./names.js";
+import { ViewQueryRequestSchema } from "./view-query.js";
 
 export { OPERATION_NAMES } from "./names.js";
 
@@ -86,6 +87,8 @@ export const OperationInputSchemas = {
   }).strict(),
   "capture.dlq.replay": z.object({ id: CaptureIdentifierSchema }).strict(),
   "view.get": z.object({ ref: ExactViewRefSchema }).strict(),
+  "view.resolve.latest": z.object({ view_id: IdentifierSchema }).strict(),
+  "view.query": z.object({ request: ViewQueryRequestSchema }).strict(),
   "view.graph.project": z.object({ request: ViewGraphProjectionRequestSchema }).strict(),
   "view.search": z.object({ request: SearchRequestV1Schema }).strict(),
   "view.search.reindex": ReindexViewSearchInputSchema,
@@ -138,6 +141,8 @@ export const OPERATION_DESCRIPTIONS: Record<OperationName, string> = {
   "capture.dlq.list": "Inspect durable Capture dead letters for one Source Connection.",
   "capture.dlq.replay": "Explicitly replay one durable Capture dead letter through Capture Runtime.",
   "view.get": "Read one exact immutable View revision.",
+  "view.resolve.latest": "Explicitly resolve and authorize the latest revision of one View identity.",
+  "view.query": "Query one exact View through a versioned typed Method profile with authorized cursor pagination.",
   "view.graph.project": "Project one bounded authorized exact-revision View graph without returning full View content.",
   "view.search": "Search one authorized exact View scope with declared keyword, semantic, or relation modes.",
   "view.search.reindex": "Explicitly rebuild the deterministic local View Search projection.",

@@ -69,6 +69,10 @@ export class ConnectorRuntime {
     this.connectors.set(key, input);
   }
 
+  hasConnector(id: string, version: string): boolean {
+    return this.connectors.has(connectorKey(id, version));
+  }
+
   async registerConnection(input: SourceConnection): Promise<SourceConnection> {
     const connection = SourceConnectionSchema.parse(input);
     const connector = this.requireConnector(connection.connector_id, connection.connector_version);

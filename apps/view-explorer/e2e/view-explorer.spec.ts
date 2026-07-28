@@ -2,12 +2,14 @@ import { expect, test, type Page } from "@playwright/test";
 import { PNG } from "pngjs";
 import {
   createFixtureTransport,
+  makeFixtureProjection,
+  makeFixtureView,
   PERSONALIZED_FIXTURE_ID,
   PERSONALIZED_VIEW_REFS,
   PRODUCT_VIEWS_FIXTURE_ID,
   type FixtureTransport,
 } from "../src/fixtures.js";
-import { refKey, type ExplorerOperation } from "../src/contracts.js";
+import { refKey, type ExplorerOperation, type OperationEnvelope, type View } from "../src/contracts.js";
 
 const viewports = [
   { name: "desktop", width: 1_440, height: 900 },
@@ -442,6 +444,48 @@ test("daemon-shaped Search atomically loads, focuses, persists, and reloads one 
   expect(errors).toEqual([]);
 });
 
+test("Screenpipe Timeline queries lazily and requests DPR-sharp frame thumbnails", async ({ page }) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await page.addInitScript(() => Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 }));
+  const transport = createTimelineTransport();
+  await installOperationRoute(page, transport);
+  const errors = watchErrors(page);
+  let requestedWidth = 0;
+  await page.route("**/metaflow/v1/assets/screenpipe-frame-thumbnail?*", async route => {
+    requestedWidth = Number(new URL(route.request().url()).searchParams.get("width"));
+    await route.fulfill({
+      status: 200,
+      contentType: "image/svg+xml",
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="${requestedWidth}" height="${Math.round(requestedWidth * 9 / 16)}"><rect width="100%" height="100%" fill="#26362f"/></svg>`,
+    });
+  });
+
+  const selected = "view:screenpipe:timeline-index:test@1";
+  await page.goto(`/?root=${encodeURIComponent(selected)}&selected=${encodeURIComponent(selected)}`);
+  await expect(page.locator('[data-renderer="renderer.screenpipe.timeline@1@1"]')).toBeVisible();
+  const frame = page.locator(".screenpipe-frame img").first();
+  await expect(frame).toBeVisible();
+  const dimensions = await frame.evaluate(image => ({
+    cssWidth: image.getBoundingClientRect().width,
+    naturalWidth: (image as HTMLImageElement).naturalWidth,
+  }));
+  expect(requestedWidth).toBeGreaterThanOrEqual(Math.ceil(dimensions.cssWidth * 2));
+  expect(requestedWidth).toBeLessThanOrEqual(1_920);
+  expect(dimensions.naturalWidth).toBe(requestedWidth);
+  const query = transport.calls.find(call => call.operation === "view.query");
+  expect(query?.input).toMatchObject({ request: {
+    subject: { view_id: "view:screenpipe:timeline-index:test", revision: 1 },
+    profile: { id: "screenpipe.timeline.entries", version: 1 },
+    page: { limit: 50 },
+  } });
+
+  await page.getByRole("button", { name: "Graph", exact: true }).click();
+  await ready(page, 1);
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await expect(page.locator('[data-renderer="renderer.screenpipe.timeline@1@1"]')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("new Search supersedes stale Search, expansion, and projection responses", async ({ page }) => {
   const base = createFixtureTransport(10);
   const slowSearch = deferred();
@@ -512,6 +556,75 @@ function watchErrors(page: Page): string[] {
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   page.on("pageerror", error => errors.push(error.message));
   return errors;
+}
+
+function createTimelineTransport(): FixtureTransport {
+  const base = makeFixtureProjection(1);
+  const ref = { view_id: "view:screenpipe:timeline-index:test", revision: 1 };
+  const node = {
+    ...base.nodes[0]!,
+    ref,
+    name: "Screenpipe Timeline",
+    purpose: "Browse authorized Screenpipe evidence by time",
+    schema: { name: "metaflow.screenpipe.timeline-index", version: 1 },
+    role: "derived" as const,
+    representation: { kind: "screenpipe_timeline_index", media_type: "application/json" },
+  };
+  const projection = { ...base, roots: [ref], nodes: [node] };
+  const fixtureView = makeFixtureView(node);
+  const view: View = {
+    ...fixtureView,
+    representation: {
+      form: "inline",
+      kind: "screenpipe_timeline_index",
+      media_type: "application/json",
+      value: {
+        contract_version: 1,
+        connection_id: "screenpipe:local",
+        timezone: "Asia/Shanghai",
+        modalities: ["screen", "audio", "input", "accessibility", "element", "activity"],
+      },
+      metadata: {},
+    },
+  };
+  const calls: FixtureTransport["calls"] = [];
+  return {
+    calls,
+    async call(operation, input, signal): Promise<OperationEnvelope> {
+      if (signal.aborted) throw signal.reason;
+      calls.push({ operation, input: structuredClone(input) });
+      const request_id = `timeline-request-${calls.length}`;
+      if (operation === "view.graph.project") return { ok: true, request_id, operation, data: projection };
+      if (operation === "view.get") return { ok: true, request_id, operation, data: view };
+      if (operation === "view.query") return {
+        ok: true,
+        request_id,
+        operation,
+        data: {
+          items: [{
+            key: "screen:42",
+            evidence: [{ view_id: "view:screenpipe:frame:42", revision: 1 }],
+            value: {
+              at: "2026-07-28T06:30:00.000Z",
+              modality: "screen",
+              title: "Captured screen",
+              text: "View Explorer Timeline",
+              app: "Google Chrome",
+              window: "Metaflow View Explorer",
+              focused: true,
+              image: {
+                kind: "screenpipe_frame",
+                frame_id: 42,
+                view: { view_id: "view:screenpipe:frame:42", revision: 1 },
+              },
+            },
+          }],
+          redacted_boundary: false,
+        },
+      };
+      return { ok: true, request_id, operation, data: {} };
+    },
+  };
 }
 
 async function ready(page: Page, size: number): Promise<void> {

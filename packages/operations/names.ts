@@ -14,6 +14,8 @@ export const OPERATION_NAMES = [
   "capture.dlq.list",
   "capture.dlq.replay",
   "view.get",
+  "view.resolve.latest",
+  "view.query",
   "view.graph.project",
   "view.search",
   "view.search.reindex",

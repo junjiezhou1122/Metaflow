@@ -16,6 +16,16 @@ observer evidence. Domain errors become one structured envelope with a stable
 code and category. Unexpected errors are not returned as raw implementation
 details; the complete cause is sent to the required observer.
 
+View access has three separate contracts. `view.get` returns one exact View.
+`view.query` invokes a registered versioned Method profile over one exact
+subject with typed parameters and a request-bound cursor, then reauthorizes
+every returned evidence ref. The Registry compiles and enforces the Method's
+declared JSON Schema before dispatch; collection adapters may additionally bind
+their cursor to a durable repository commit sequence. `view.search` performs relevance discovery across
+an explicit authorized scope. `view.resolve.latest` is the only moving-head
+resolution operation. Connector refresh remains the generation-bound
+`capture.connection.run` lifecycle operation.
+
 `run.execute` accepts an exact committed Transformation reference. The service
 loads that immutable revision before calling Execution Runtime, so no transport
 can smuggle a second Transformation definition. Active Run cancellation is

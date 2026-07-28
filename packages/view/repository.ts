@@ -43,15 +43,39 @@ export const ViewQueryTimeRangeSchema = z.object({
   path: ["end"],
 });
 
+export const ViewQueryOrderSchema = z.object({
+  basis: z.enum(["observed_at", "created_at"]),
+  direction: z.enum(["ascending", "descending"]),
+}).strict();
+
+export const ViewQueryAfterSchema = z.object({
+  timestamp: TimestampSchema,
+  view_id: IdentifierSchema,
+  revision: z.number().int().positive(),
+}).strict();
+
+export const ViewQuerySnapshotSchema = z.object({
+  /** Monotonic repository commit boundary. Zero represents an empty repository. */
+  commit_sequence: z.number().int().nonnegative(),
+}).strict();
+
 export const ViewQuerySchema = z.object({
   /** Legacy singular Schema filter. Do not combine with schema_names. */
   schema_name: IdentifierSchema.optional(),
   /** Schema categories to match with OR semantics. */
   schema_names: z.array(IdentifierSchema).min(1).optional(),
   role: z.enum(["raw", "derived"]).optional(),
+  /** Exact Capture provenance boundary shared by Connector-backed collection queries. */
+  capture_connection_id: IdentifierSchema.optional(),
   text: z.string().trim().min(1).optional(),
   /** Exact half-open timestamp range: start <= timestamp < end. */
   time_range: ViewQueryTimeRangeSchema.optional(),
+  /** Stable deterministic time ordering for cursor-based collection reads. */
+  order: ViewQueryOrderSchema.optional(),
+  /** Exclusive position in the declared order. */
+  after: ViewQueryAfterSchema.optional(),
+  /** Resolve revisions exactly as they existed at this repository commit boundary. */
+  snapshot: ViewQuerySnapshotSchema.optional(),
   revisions: z.enum(["latest", "all"]).optional(),
   limit: z.number().int().positive().max(10_000).optional(),
 }).strict().superRefine((query, context) => {
@@ -60,6 +84,13 @@ export const ViewQuerySchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["schema_names"],
       message: "View query cannot combine schema_name and schema_names",
+    });
+  }
+  if (query.after && !query.order) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["after"],
+      message: "View query after requires an explicit order",
     });
   }
 });
@@ -72,6 +103,9 @@ export const RelationTraversalQuerySchema = z.object({
 }).strict();
 
 export type ViewQueryTimeRange = z.infer<typeof ViewQueryTimeRangeSchema>;
+export type ViewQueryOrder = z.infer<typeof ViewQueryOrderSchema>;
+export type ViewQueryAfter = z.infer<typeof ViewQueryAfterSchema>;
+export type ViewQuerySnapshot = z.infer<typeof ViewQuerySnapshotSchema>;
 export type ViewQuery = z.infer<typeof ViewQuerySchema>;
 export type RelationTraversalQuery = z.infer<typeof RelationTraversalQuerySchema>;
 
@@ -130,6 +164,7 @@ export interface ViewRepository {
   get(ref: ExactViewRef): Promise<View | undefined>;
   getLatest(viewId: string): Promise<View | undefined>;
   resolveLatest(viewId: string): Promise<ExactViewRef | undefined>;
+  getQuerySnapshot(): Promise<ViewQuerySnapshot>;
   query(query?: ViewQuery): Promise<View[]>;
   reindexSearch(input: ReindexViewSearchInput): Promise<ReindexViewSearchReport>;
   getRepresentation(ref: ExactViewRef): Promise<ViewRepresentation | undefined>;

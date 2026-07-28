@@ -29,7 +29,7 @@ export function createScreenpipeWebRendererRegistrations(): WebRendererRegistrat
     },
     {
       descriptor: SCREENPIPE_TIMELINE_RENDERER_ID,
-      load: async () => (await import("./renderers/screenpipe-timeline.js")).screenpipeTimelineRendererFactory,
+      load: async () => (await import("./renderers/screenpipe.js")).screenpipeViewRendererFactory,
     },
   ];
 }

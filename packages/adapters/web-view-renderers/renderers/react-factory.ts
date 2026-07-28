@@ -25,8 +25,11 @@ export function createReactRendererFactory(render: RendererElementFactory): WebR
         throw error;
       }
       return {
-        dispose() {
-          flushSync(() => root.unmount());
+        async dispose() {
+          // A host may abort this renderer from its own React cleanup phase.
+          // Leave that commit before unmounting this independently owned root.
+          await new Promise<void>(resolve => queueMicrotask(resolve));
+          root.unmount();
         },
       };
     },

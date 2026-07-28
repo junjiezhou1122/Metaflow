@@ -147,8 +147,30 @@ Search may target independently:
 - recursively related descendant Views;
 - every eligible target above.
 
-Searching a View and searching inside it are different operations. "Inside"
-also has two meanings that must remain visible:
+Structured querying and relevance Search are different operations:
+
+```text
+view.get(exact_ref)
+  -> one exact View envelope
+
+view.query(exact_subject, versioned_profile, typed_parameters, cursor)
+  -> one subject-specific collection or internal projection
+  -> independently authorized exact evidence refs
+
+view.search(query, scope, target, modes)
+  -> relevance discovery across authorized Views
+```
+
+Data-specific query parameters belong to versioned View Package Method JSON
+Schemas and are enforced by the shared Registry before Method dispatch. There
+is no global untyped `extra` bag. Collection cursors freeze a durable monotonic
+View commit sequence, not a semantic `created_at`, so later revisions and
+backfilled evidence cannot reorder an active traversal. A large collection View should
+usually freeze a bounded definition or exact membership and let `view.query`
+page smaller Views; it should not embed ten thousand mutable records in one
+Representation.
+
+Searching inside a View still has two meanings that must remain visible:
 
 ```text
 internal Representation location

@@ -71,12 +71,14 @@ import {
   ViewGraphProjectionOperationError,
   projectAuthorizedViewGraph,
 } from "./graph-project.js";
+import { ViewQueryError, type ViewQueryRegistry } from "./view-query.js";
 
 export type OperationServiceDependencies = {
   views: ViewRepository;
   graph: ViewGraphProjectionSource;
   search: Pick<SearchService, "search">;
   view_reads: ViewReadAuthorizationPort;
+  view_queries?: Pick<ViewQueryRegistry, "query">;
   transformations: TransformationRepository;
   execution: ExecutionRuntime;
   runs: Pick<ExecutionRepository, "getRun" | "getTrace">;
@@ -261,6 +263,26 @@ export class OperationService {
         if (!view) throw new OperationServiceError("Exact View revision does not exist", "view_not_found", "not_found", { ref: input.ref });
         return view;
       }
+      case "view.resolve.latest": {
+        const ref = await this.dependencies.views.resolveLatest(input.view_id);
+        if (!ref) throw new OperationServiceError("View identity does not exist", "view_not_found", "not_found", { view_id: input.view_id });
+        await this.requireViewRead(context, [ref], "read");
+        return ref;
+      }
+      case "view.query": {
+        await this.requireViewRead(context, [input.request.subject], "query");
+        const subject = await this.dependencies.views.get(input.request.subject);
+        if (!subject) throw new OperationServiceError("Exact View revision does not exist", "view_not_found", "not_found", { ref: input.request.subject });
+        if (!this.dependencies.view_queries) {
+          throw new OperationServiceError("View query runtime is not configured", "view_query_unavailable", "failed_dependency");
+        }
+        return this.dependencies.view_queries.query({
+          request: input.request,
+          subject,
+          principal: { id: context.principal.id },
+          authorization: this.dependencies.view_reads,
+        });
+      }
       case "view.graph.project":
         return projectAuthorizedViewGraph({
           request: input.request,
@@ -420,7 +442,7 @@ export class OperationService {
   private async requireViewRead(
     context: OperationContext,
     refs: Array<{ view_id: string; revision: number }>,
-    purpose: "read" | "traverse",
+    purpose: "read" | "query" | "traverse",
   ): Promise<void> {
     if (refs.length === 0) return;
     const decisions = await this.dependencies.view_reads.authorize({
@@ -533,6 +555,14 @@ function operationError(cause: unknown): OperationError {
       message: cause.message,
       category: "internal",
       details: cause.details,
+    });
+  }
+  if (cause instanceof ViewQueryError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: cause.code.includes("unknown") ? "not_found" : cause.code.includes("cursor_mismatch") ? "conflict" : "invalid_request",
+      details: {},
     });
   }
   if (cause instanceof z.ZodError) {

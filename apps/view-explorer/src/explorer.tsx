@@ -6,6 +6,7 @@ import {
   Focus,
   GitBranch,
   History,
+  Eye,
   ListTree,
   Network,
   Search,
@@ -28,6 +29,7 @@ import { type CameraState, mergeProjection } from "./graph-projection.js";
 import { ExplorerClientError, ViewExplorerOperationClient } from "./operation-client.js";
 import { ExplorerRequestCoordinator } from "./request-coordinator.js";
 import { VirtualNodeList } from "./node-list.js";
+import { supportsViewRenderer, supportsViewSchema, ViewRendererSurface } from "./renderer-surface.js";
 
 const SigmaSurface = lazy(() => import("./sigma-surface.js"));
 const ViewContentDialog = lazy(async () => ({
@@ -57,6 +59,7 @@ export function ViewExplorer() {
   const [projection, setProjection] = useState<ViewGraphProjectionResult>();
   const [selectedKey, setSelectedKey] = useState(initial.selected);
   const [view, setView] = useState<View>();
+  const [surface, setSurface] = useState<"graph" | "view">("graph");
   const [direction, setDirection] = useState<Direction>(initial.direction);
   const [depth, setDepth] = useState(initial.depth);
   const [edgeTypes, setEdgeTypes] = useState<string[]>(initial.edgeTypes);
@@ -143,7 +146,9 @@ export function ViewExplorer() {
     setEdgeTypes(options.edgeTypes);
     setPendingEdgeTypes(options.edgeTypes);
     setSelectedKey(nextSelected);
-    setContentOpen(Boolean(nextSelected));
+    const hasRendererSurface = Boolean(selectedNode && supportsViewSchema(selectedNode.schema.name));
+    setSurface(hasRendererSurface ? "view" : "graph");
+    setContentOpen(Boolean(nextSelected) && !hasRendererSurface);
     if (nextSelected) {
       if (cameraTargetRef.current) {
         setFocusKey(undefined);
@@ -217,7 +222,6 @@ export function ViewExplorer() {
         || state.depth !== depth
         || !sameStrings(state.edgeTypes, edgeTypes);
       setSelectedKey(state.selected);
-      setContentOpen(Boolean(state.selected));
       setDirection(state.direction);
       setDepth(state.depth);
       setEdgeTypes(state.edgeTypes);
@@ -251,6 +255,10 @@ export function ViewExplorer() {
         setFocusKey(state.selected);
         setFocusNonce(value => value + 1);
       }
+      const historyNode = projection.nodes.find(node => refKey(node.ref) === state.selected);
+      const hasRendererSurface = Boolean(historyNode && supportsViewSchema(historyNode.schema.name));
+      setSurface(hasRendererSurface ? "view" : "graph");
+      setContentOpen(Boolean(state.selected) && !hasRendererSurface);
     };
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
@@ -275,7 +283,9 @@ export function ViewExplorer() {
     recordVisit(key, node.name, camera);
     if (cameraMode === "restore") restoreCamera(camera); else releaseRestoredCamera();
     setSelectedKey(key);
-    setContentOpen(true);
+    const hasRendererSurface = supportsViewSchema(node.schema.name);
+    setSurface(hasRendererSurface ? "view" : "graph");
+    setContentOpen(!hasRendererSurface);
     selectedKeyRef.current = key;
     if (cameraMode === "restore") {
       setFocusKey(undefined);
@@ -384,7 +394,7 @@ export function ViewExplorer() {
   }
 
   return (
-    <main className="explorer-shell" data-layout-state={layout} data-node-count={projection?.nodes.length ?? 0}>
+    <main className="explorer-shell" data-layout-state={layout} data-node-count={projection?.nodes.length ?? 0} data-surface={surface}>
       <header className="topbar">
         <div className="brand"><Network size={19} strokeWidth={2.2} /><span>Metaflow</span><strong>Views</strong></div>
         <form className="search-box" role="search" onSubmit={searchNodes}>
@@ -393,6 +403,10 @@ export function ViewExplorer() {
           <button type="submit" className="icon-button" title="Focus search result" aria-label="Focus search result"><Focus size={16} /></button>
         </form>
         <div className="topbar-actions">
+          <div className="surface-switch segmented" role="group" aria-label="Explorer surface">
+            <button type="button" aria-pressed={surface === "graph"} onClick={() => setSurface("graph")}><Network size={15} />Graph</button>
+            <button type="button" aria-pressed={surface === "view"} disabled={!supportsViewRenderer(view)} onClick={() => setSurface("view")}><Eye size={15} />View</button>
+          </div>
           {selectedNode && <button type="button" className="icon-button" onClick={() => setContentOpen(true)} aria-label="Open selected View" title="Open selected View"><BookOpen size={18} /></button>}
           <button type="button" className={`icon-button ${drawer === "list" ? "active" : ""}`} onClick={() => setDrawer(current => current === "list" ? undefined : "list")} aria-label="Browse Views" title="Browse Views"><ListTree size={18} /></button>
           <button type="button" className={`icon-button ${drawer === "filters" ? "active" : ""}`} onClick={() => setDrawer(current => current === "filters" ? undefined : "filters")} aria-label="Graph settings" title="Graph settings"><SlidersHorizontal size={18} /></button>
@@ -410,7 +424,7 @@ export function ViewExplorer() {
         </div>
       </aside>
 
-      <section className="graph-stage" aria-label="View graph visualization">
+      {surface === "view" && view && supportsViewRenderer(view) ? <ViewRendererSurface view={view} client={client} /> : <section className="graph-stage" aria-label="View graph visualization">
         {projection ? (
           <Suspense fallback={<div className="graph-loading" role="status">Loading graph engine</div>}>
             <SigmaSurface
@@ -440,7 +454,7 @@ export function ViewExplorer() {
         {loading && <div className="busy-indicator" role="status">Updating</div>}
         {failure && <FailureBanner failure={failure} dismiss={() => setFailure(undefined)} />}
         {layout === "failed" && <FailureBanner failure={{ code: layoutFailureCode, message: layoutMessage ?? "Layout worker failed" }} dismiss={() => setLayout("idle")} />}
-      </section>
+      </section>}
 
       <aside className={`companion ${drawer === "list" ? "drawer-open" : ""}`} aria-label="Browse Views">
         <PanelHeader icon={<ListTree size={16} />} title="Views" close={() => setDrawer(undefined)} />

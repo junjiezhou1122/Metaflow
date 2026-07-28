@@ -60,6 +60,7 @@
     "smoke:personalized-sources": "node --experimental-sqlite --import tsx scripts/v1/personalized-source-smoke.ts",
     "test:view-operators": "node --experimental-sqlite --import tsx --test tests/view-operators.test.ts",
     "test:view-store": "node --experimental-sqlite --import tsx --test tests/view-store.test.ts",
+    "test:view-query": "node --experimental-sqlite --import tsx --test tests/view-query-time-range.test.ts tests/view-query-method.test.ts",
     "test:view-search": "node --experimental-sqlite --import tsx --test tests/view-search-projection.test.ts tests/view-search-service.test.ts tests/view-search-semantic.test.ts",
     "test:view-search-semantic": "node --no-warnings --experimental-sqlite --import tsx --test tests/view-search-semantic.test.ts tests/operation-surfaces.test.ts",
     "test:markdown-parser": "node --experimental-sqlite --import tsx --test tests/markdown-parser.test.ts",
@@ -107,6 +108,7 @@
     "@info/view": "workspace:*",
     "@info/view-package": "workspace:*",
     "@info/view-package-personal-activity": "workspace:*",
+    "@info/view-package-screenpipe-timeline": "workspace:*",
     "@info/web-view-renderers": "workspace:*",
     "iii-sdk": "0.22.0"
   },

@@ -376,6 +376,37 @@ test("Source Connection onboarding is CAS-versioned, observable, idempotent, and
   }
 });
 
+test("generation-bound run accepts a Connector explicitly registered by the composition root", async () => {
+  const h = harness();
+  try {
+    h.runtime.registerConnector({
+      manifest: SCREENPIPE_CONNECTOR_MANIFEST,
+      async health() {
+        return { capabilities: [...SCREENPIPE_CONNECTOR_MANIFEST.capabilities] };
+      },
+      async *open() {
+        return;
+      },
+    });
+    const connection = screenpipeSourceConnection({ id: "screenpipe:preloaded" });
+    await h.runtime.registerConnection(connection);
+
+    const receipt = await h.service.run({
+      connection_id: connection.id,
+      expected_generation: 1,
+      idempotency_key: "screenpipe:preloaded:run",
+      delivery: "pull",
+      parameters: {},
+    });
+
+    assert.equal(receipt.action, "run");
+    assert.equal(receipt.generation, 1);
+    assert.deepEqual((receipt.result as { results: unknown[] }).results, []);
+  } finally {
+    h.repository.close();
+  }
+});
+
 test("Notion rejects partial or malformed source objects and binds page idempotency to every result", async () => {
   const connection = notionSourceConnection({
     secret_ref: { provider: "env", key: "NOTION_TOKEN" },

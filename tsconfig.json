@@ -8,6 +8,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "jsx": "react-jsx",
     "outDir": "dist"
   },
   "include": [
@@ -18,6 +19,7 @@
     "packages/capture/**/*.ts",
     "packages/operations/**/*.ts",
     "packages/adapters/**/*.ts",
+    "packages/adapters/**/*.tsx",
     "apps/ambient-daemon/**/*.ts",
     "scripts/v1/**/*.ts"
   ],

@@ -279,6 +279,9 @@ test("legacy SQLite upgrades rebuild constraints and normalize empty Materializa
     assert.equal(migrated?.id, draft.id);
     assert.equal("metadata" in (migrated?.materialization.primary ?? {}), false);
     assert.equal((await repository.getMaterializations({ view_id: draft.id, revision: 1 }))[0]?.materialization.id, "canonical-json");
+    const snapshot = await repository.getQuerySnapshot();
+    assert.equal(snapshot.commit_sequence, 1);
+    assert.deepEqual((await repository.query({ snapshot })).map(view => [view.id, view.revision]), [[draft.id, 1]]);
     const replay = await repository.commit({
       draft,
       expected_revision: 0,
@@ -297,8 +300,9 @@ test("legacy SQLite upgrades rebuild constraints and normalize empty Materializa
     assert.equal(db.prepare("pragma foreign_key_list(view_heads_v1)").all().length, 2);
     assert.equal(db.prepare("pragma foreign_key_list(view_idempotency_v1)").all().length, 2);
     assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'view_commit_outbox_v1'").get());
-    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 8);
+    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 9);
     assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'capture_connection_lifecycle_receipts_v1'").get());
+    assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'view_revision_commits_v1'").get());
     assert.deepEqual(db.prepare("pragma foreign_key_check").all(), []);
     assert.throws(
       () => db.prepare(`
@@ -340,10 +344,43 @@ test("v7 SQLite upgrades connector lifecycle invariants instead of trusting a re
       assert.equal(columns.find(column => column.name === name)?.notnull, 1);
     }
     assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'capture_connection_lifecycle_receipts_v1'").get());
-    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 8);
+    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 9);
     assert.deepEqual(db.prepare("pragma foreign_key_check").all(), []);
   } finally {
     db.close();
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("v8 SQLite upgrades backfill stable View query snapshot sequences", async () => {
+  const temp = tempDatabase();
+  const repository = new SqliteViewRepository(temp.path);
+  const draft = derivedDraft("view:migration:v8-query-snapshot");
+  try {
+    await repository.commit({ draft, expected_revision: 0 });
+  } finally {
+    repository.close();
+  }
+  const legacy = new DatabaseSync(temp.path, { enableForeignKeyConstraints: false });
+  try {
+    legacy.exec(`
+      drop table view_revision_commits_v1;
+      drop table view_commit_sequences_v1;
+      update view_store_schema_versions_v1 set version = 8 where component = 'view-store';
+    `);
+  } finally {
+    legacy.close();
+  }
+
+  const upgraded = new SqliteViewRepository(temp.path);
+  try {
+    assert.deepEqual(await upgraded.getQuerySnapshot(), { commit_sequence: 1 });
+    assert.deepEqual(
+      (await upgraded.query({ snapshot: { commit_sequence: 1 } })).map(view => [view.id, view.revision]),
+      [[draft.id, 1]],
+    );
+  } finally {
+    upgraded.close();
     rmSync(temp.directory, { recursive: true, force: true });
   }
 });

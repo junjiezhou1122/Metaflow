@@ -18,6 +18,8 @@ var OPERATION_NAMES = [
   "capture.dlq.list",
   "capture.dlq.replay",
   "view.get",
+  "view.resolve.latest",
+  "view.query",
   "view.graph.project",
   "view.search",
   "view.search.reindex",
@@ -50,7 +52,7 @@ var METAFLOW_HTTP_PROTOCOL_VERSION = 1;
 var METAFLOW_AMBIENT_SERVER_NAME = "ambient-daemon";
 var METAFLOW_AMBIENT_SERVER_VERSION = "0.1.0";
 var METAFLOW_OPERATION_CATALOG_VERSION = 1;
-var METAFLOW_OPERATION_CATALOG_FINGERPRINT = "sha256:848d837bc51def904f31e2c546ecce93d286b8140f70ead30d863f37d276d51a";
+var METAFLOW_OPERATION_CATALOG_FINGERPRINT = "sha256:397bb3defe5e6938efdfbd03f091170389f0b2f10c92adc409dead83f6aba1a5";
 var DEFAULT_DAEMON_TIMEOUT_MS = 1e4;
 var OPERATION_HTTP_STATUS_BY_CATEGORY = {
   invalid_request: 400,

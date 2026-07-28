@@ -49,7 +49,7 @@ export const OperationEnvelopeSchema = z.union([
 ]);
 
 export type OperationEnvelope = z.infer<typeof OperationEnvelopeSchema>;
-export type ExplorerOperation = "view.graph.project" | "view.get" | "view.search";
+export type ExplorerOperation = "view.graph.project" | "view.get" | "view.search" | "view.query";
 export type { ExactViewRef, JsonValue, SearchRequestV1, SearchResponseV1, View, ViewGraphProjectionEdge, ViewGraphProjectionNode, ViewGraphProjectionRequest, ViewGraphProjectionResult };
 export { SearchRequestV1Schema, SearchResponseV1Schema, ViewGraphProjectionRequestSchema, ViewGraphProjectionResultSchema, ViewRevisionSchema };
 

@@ -34,6 +34,8 @@ export const OPERATION_EFFECTS: Record<OperationName, OperationEffect> = {
   "capture.dlq.list": "read",
   "capture.dlq.replay": "external_side_effect",
   "view.get": "read",
+  "view.resolve.latest": "read",
+  "view.query": "read",
   "view.graph.project": "read",
   "view.search": "read",
   "view.search.reindex": "write",

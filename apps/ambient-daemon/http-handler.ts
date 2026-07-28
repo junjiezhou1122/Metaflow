@@ -3,6 +3,7 @@ import {
   METAFLOW_HTTP_PROTOCOL_VERSION,
   type HttpOperationAdapter,
 } from "@info/operation-surfaces";
+import { ViewRevisionSchema, type View } from "@info/view";
 import type { AmbientOperationAccess } from "./operation-access.js";
 import { ambientRouteAccess } from "./http-route-security.js";
 
@@ -33,6 +34,19 @@ type InboxAutomationHttpPort = {
   interact(input: unknown): Promise<unknown>;
 };
 
+type ScreenpipeAssetHttpPort = {
+  thumbnail(
+    view: View,
+    request: { width: number; quality: number },
+    signal?: AbortSignal,
+  ): Promise<{ body: Uint8Array; media_type: string; etag?: string }>;
+};
+
+const SCREENPIPE_THUMBNAIL_MIN_WIDTH = 384;
+const SCREENPIPE_THUMBNAIL_MAX_WIDTH = 1920;
+const SCREENPIPE_THUMBNAIL_DEFAULT_WIDTH = 1440;
+const SCREENPIPE_THUMBNAIL_QUALITY = 90;
+
 export type AmbientV1HttpHandlerOptions = {
   browser_capture: BrowserCaptureHttpPort;
   browser_automation: AutomationHttpPort;
@@ -41,6 +55,8 @@ export type AmbientV1HttpHandlerOptions = {
   operations: Pick<HttpOperationAdapter, "handle">;
   operation_access: Pick<AmbientOperationAccess, "authorize" | "authorizePublic" | "authorizePreflight" | "doctor">;
   direct_assist?: DirectAssistHttpPort;
+  screenpipe_assets?: ScreenpipeAssetHttpPort;
+  timeline?: { connection_id: string; generation: number; index_view_id: string; timezone: string };
   observe?: (event: AmbientHttpEvent, cause?: unknown) => void | Promise<void>;
 };
 
@@ -80,7 +96,7 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
     try {
       const url = new URL(requestUrl, `http://${request.headers.host ?? "localhost"}`);
       path = url.pathname;
-      const routeAccess = ambientRouteAccess(path);
+      const routeAccess = ambientRouteAccess(path) ?? screenpipeRouteAccess(path);
       if (method === "OPTIONS" && routeAccess === "authenticated") {
         const access = options.operation_access.authorizePreflight(request.headers);
         status = access.allowed ? 204 : access.status;
@@ -136,6 +152,60 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
         await options.direct_assist(request, response);
         status = response.statusCode;
         return;
+      }
+      if (method === "GET" && path === "/ambient/v1/timeline") {
+        if (!options.timeline) {
+          status = 404;
+          code = "timeline_not_configured";
+          return sendForPath(response, path, status, problem(code, "Screenpipe Timeline is not configured"), authenticatedResponseHeaders);
+        }
+        status = 200;
+        return sendForPath(response, path, status, { ok: true, ...options.timeline }, authenticatedResponseHeaders);
+      }
+
+      if (method === "GET" && path === "/metaflow/v1/assets/screenpipe-frame-thumbnail") {
+        if (!options.screenpipe_assets) {
+          status = 404;
+          code = "screenpipe_assets_not_configured";
+          return sendForPath(response, path, status, problem(code, "Screenpipe frame assets are not configured"), authenticatedResponseHeaders);
+        }
+        const viewId = url.searchParams.get("view_id") ?? "";
+        const revision = Number(url.searchParams.get("revision"));
+        if (!viewId || !Number.isInteger(revision) || revision < 1) {
+          status = 400;
+          code = "screenpipe_asset_ref_invalid";
+          return sendForPath(response, path, status, problem(code, "An exact Screenpipe frame View ref is required"), authenticatedResponseHeaders);
+        }
+        const width = boundedIntegerQuery(
+          url.searchParams.get("width"),
+          SCREENPIPE_THUMBNAIL_DEFAULT_WIDTH,
+          SCREENPIPE_THUMBNAIL_MIN_WIDTH,
+          SCREENPIPE_THUMBNAIL_MAX_WIDTH,
+          "width",
+        );
+        const operation = await options.operations.handle({
+          method: "POST",
+          path: "/metaflow/v1/operations/view.get",
+          body: { ref: { view_id: viewId, revision } },
+        });
+        if (!operation.body.ok) {
+          status = operation.status;
+          code = operation.body.error.code;
+          return sendForPath(
+            response,
+            path,
+            status,
+            problem(code, operation.body.error.message, operation.body.error.details),
+            authenticatedResponseHeaders,
+          );
+        }
+        const asset = await options.screenpipe_assets.thumbnail(
+          ViewRevisionSchema.parse(operation.body.data),
+          { width, quality: SCREENPIPE_THUMBNAIL_QUALITY },
+          AbortSignal.timeout(15_000),
+        );
+        status = 200;
+        return sendBinary(response, asset.body, asset.media_type, asset.etag, authenticatedResponseHeaders);
       }
 
       const exactView = path.match(/^\/context\/v1\/views\/([^/]+)$/);
@@ -259,6 +329,30 @@ export function createAmbientV1HttpHandler(options: AmbientV1HttpHandlerOptions)
   };
 }
 
+function boundedIntegerQuery(
+  value: string | null,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  field: string,
+): number {
+  if (value === null) return fallback;
+  if (!/^\d+$/u.test(value)) {
+    throw Object.assign(new Error(`${field} must be an integer from ${minimum} through ${maximum}`), {
+      code: "screenpipe_asset_ref_invalid",
+      status: 400,
+    });
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw Object.assign(new Error(`${field} must be an integer from ${minimum} through ${maximum}`), {
+      code: "screenpipe_asset_ref_invalid",
+      status: 400,
+    });
+  }
+  return parsed;
+}
+
 function assertMethod(value: unknown, method: string, owner: string): void {
   if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>)[method] !== "function") {
     throw new TypeError(`${owner} composition requires ${method}()`);
@@ -331,6 +425,23 @@ function operationEndpointOrigin(request: HttpRequest): string {
   return new URL(`http://127.0.0.1:${port}`).origin;
 }
 
+function sendBinary(
+  response: HttpResponse,
+  body: Uint8Array,
+  mediaType: string,
+  etag?: string,
+  headers: Record<string, string> = {},
+): void {
+  response.writeHead(200, {
+    "content-type": mediaType,
+    "content-length": String(body.byteLength),
+    "cache-control": "private, max-age=31536000, immutable",
+    ...(etag ? { etag } : {}),
+    ...headers,
+  });
+  response.end(body);
+}
+
 function problem(code: string, error: string, details?: unknown) {
   return { ok: false, code, error, ...(details === undefined ? {} : { details }) };
 }
@@ -356,6 +467,8 @@ function routeFailure(path: string, cause: unknown): {
   const code = errorCode(cause);
   const message = cause instanceof Error ? cause.message : String(cause);
   const details = errorDetails(cause);
+  const explicitStatus = errorStatus(cause);
+  if (explicitStatus) return { status: explicitStatus, code, message, details };
   if (code === "request_body_too_large") return { status: 413, code, message, details };
   if (code === "invalid_json") return { status: 400, code, message, details };
   if (path === "/metaflow/v1/doctor" && code === "daemon_doctor_challenge_invalid") {
@@ -381,6 +494,18 @@ function routeFailure(path: string, cause: unknown): {
     return { status: 400, code: "browser_context_response_rejected", message, details };
   }
   return { status: 500, code, message, details };
+}
+
+function screenpipeRouteAccess(path: string): "authenticated" | undefined {
+  return path === "/ambient/v1/timeline" || path === "/metaflow/v1/assets/screenpipe-frame-thumbnail"
+    ? "authenticated"
+    : undefined;
+}
+
+function errorStatus(cause: unknown): number | undefined {
+  if (!cause || typeof cause !== "object") return undefined;
+  const status = (cause as { status?: unknown }).status;
+  return Number.isInteger(status) && Number(status) >= 400 && Number(status) <= 599 ? Number(status) : undefined;
 }
 
 function browserAutomationHttpStatus(code: string): 400 | 409 | 422 | 500 {

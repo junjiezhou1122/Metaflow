@@ -33,11 +33,13 @@ import {
   OperationEnvelopeSchema,
   OperationService,
   RepositoryViewReadAuthorizer,
+  ViewQueryRegistry,
   type OperationContext,
   type OperationEnvelope,
   type OperationName,
   type OperationObserver,
   type OperationTraceEvent,
+  type ViewQueryMethod,
 } from "@info/operations";
 import { SearchService } from "@info/search";
 import { PrivacyForgetService, canonicalJson, exactViewRef, parseViewDraft } from "@info/view";
@@ -396,6 +398,47 @@ test("Connector catalog and Source Connection lifecycle Operations have CLI, HTT
       }
     } finally {
       await Promise.all([...surfaces, ...otherOwnerSurfaces].map(surface => surface.close()));
+    }
+  });
+});
+
+test("view.resolve.latest and typed view.query stay equivalent across every operation surface", async () => {
+  await withHarness(async harness => {
+    const captured = await harness.service.execute(captureRequest("query-shared"), context("request:query-seed"));
+    assert.equal(captured.ok, true);
+    const ref = captureRef(captured);
+    const surfaces = await createSurfaces(harness, () => context("request:query-equivalent"));
+    try {
+      const latest = await Promise.all(surfaces.map(surface => surface.call("view.resolve.latest", { view_id: ref.view_id })));
+      for (const result of latest.slice(1)) assert.deepEqual(result, latest[0]);
+      assert.deepEqual((latest[0] as Extract<OperationEnvelope, { ok: true }>).data, ref);
+
+      const input = {
+        request: {
+          contract_version: 1,
+          subject: ref,
+          profile: { id: "operation.page.entries", version: 1 },
+          parameters: { section: "content", include_metadata: true },
+          page: { limit: 10 },
+        },
+      };
+      const queried = await Promise.all(surfaces.map(surface => surface.call("view.query", input)));
+      for (const result of queried.slice(1)) assert.deepEqual(result, queried[0]);
+      const data = (queried[0] as Extract<OperationEnvelope, { ok: true }>).data as any;
+      assert.deepEqual(data.subject, ref);
+      assert.deepEqual(data.items, [{
+        key: `entry:${ref.view_id}:${ref.revision}`,
+        evidence: [ref],
+        value: { parameters: input.request.parameters },
+      }]);
+
+      const unknown = await surfaces[0]!.call("view.query", {
+        request: { ...input.request, profile: { id: "operation.page.unknown", version: 1 } },
+      });
+      assert.equal(unknown.ok, false);
+      if (!unknown.ok) assert.equal(unknown.error.code, "view_query_profile_unknown");
+    } finally {
+      await Promise.all(surfaces.map(item => item.close()));
     }
   });
 });
@@ -797,6 +840,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     graph: views.search,
     search,
     view_reads: viewReads,
+    view_queries: new ViewQueryRegistry([new OperationPageQueryMethod()]),
     transformations,
     execution,
     runs: views,
@@ -908,6 +952,28 @@ function operationAuthoringViewCandidate() {
       expected_revision: 0,
     },
   };
+}
+
+class OperationPageQueryMethod implements ViewQueryMethod {
+  readonly profile = { id: "operation.page.entries", version: 1 } as const;
+  readonly subject_schema = { name: "capture.operation.page", version: 1 } as const;
+  readonly parameters = {
+    dialect: "https://json-schema.org/draft/2020-12/schema" as const,
+    json_schema: true,
+    pagination: { kind: "cursor" as const, max_page_size: 100 },
+  };
+
+  async query(input: Parameters<ViewQueryMethod["query"]>[0]) {
+    const ref = exactViewRef(input.subject);
+    return {
+      items: [{
+        key: `entry:${ref.view_id}:${ref.revision}`,
+        evidence: [ref],
+        value: { parameters: input.parameters },
+      }],
+      redacted_boundary: false,
+    };
+  }
 }
 
 function searchRequest(ref: { view_id: string; revision: number }, text: string) {
