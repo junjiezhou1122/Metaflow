@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { refKey, type ViewGraphProjectionResult } from "./contracts.js";
+import { EDGE_COLORS, reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
 import { deterministicPosition, type CameraState } from "./graph-projection.js";
 import {
   LAYOUT_PROTOCOL_VERSION,
@@ -10,14 +11,6 @@ import {
 } from "./layout-protocol.js";
 
 const SCHEMA_COLORS = ["#137a65", "#4263a9", "#a54835", "#9b6a17", "#7a4f91", "#39767d"];
-const EDGE_COLORS: Record<string, string> = {
-  derived_from: "#d86638",
-  member_of: "#4878b7",
-  references: "#7b6d61",
-  application_member: "#2d8b72",
-  application_composition: "#2d8b72",
-};
-
 type LayoutFailureCode = "graph_layout_worker_start_failed" | "graph_layout_worker_failed" | "graph_layout_protocol_failed";
 
 type SigmaSurfaceProps = {
@@ -45,6 +38,9 @@ type DebugState = {
   workersTerminated: number;
   camera?: CameraState;
   focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+  hoveredNeighborhood?: { key: string; neighborCount: number; incidentEdgeCount: number; unrelatedNodeCount: number; unrelatedEdgeCount: number } | undefined;
+  hoverEnterCount?: number;
+  hoverLeaveCount?: number;
   graph?: { nodes: number; edges: number; firstNode?: { x: number; y: number }; display?: unknown; dimensions?: unknown; graphDimensions?: unknown };
 };
 
@@ -56,6 +52,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
   const layoutGenerationRef = useRef(0);
   const hasRenderedProjectionRef = useRef(false);
   const selectedRef = useRef(props.selectedKey);
+  const hoveredRef = useRef<string | undefined>(undefined);
   const cameraTargetRef = useRef(props.cameraTarget);
   const onSelectRef = useRef(props.onSelect);
   const onCameraRef = useRef(props.onCameraChange);
@@ -92,21 +89,8 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         labelRenderedSizeThreshold: 9,
         defaultNodeColor: "#4263a9",
         defaultEdgeColor: "#a7aaa5",
-        nodeReducer: (key, attributes) => {
-          const selected = selectedRef.current;
-          if (!selected) return attributes;
-          if (key === selected) return { ...attributes, color: "#e9ad31", highlighted: true, zIndex: 2, size: Number(attributes.size) * 1.45 };
-          if (graph.hasNode(selected) && graph.areNeighbors(key, selected)) return { ...attributes, zIndex: 1 };
-          return { ...attributes, color: "#c8cbc6", label: "", zIndex: 0 };
-        },
-        edgeReducer: (key, attributes) => {
-          const selected = selectedRef.current;
-          if (!selected || !graph.hasEdge(key)) return attributes;
-          const [source, target] = graph.extremities(key);
-          return source === selected || target === selected
-            ? { ...attributes, color: EDGE_COLORS[String(attributes.relationType)] ?? "#594f46", size: 2.2, zIndex: 1 }
-            : { ...attributes, color: "#dedfda", hidden: false, size: 0.35, zIndex: 0 };
-        },
+        nodeReducer: (key, attributes) => reduceNodeAppearance(graph, key, attributes, { selectedKey: selectedRef.current, hoveredKey: hoveredRef.current }),
+        edgeReducer: (key, attributes) => reduceEdgeAppearance(graph, key, attributes, { selectedKey: selectedRef.current, hoveredKey: hoveredRef.current }),
       });
     } catch (error) {
       setFailure("graph_webgl_unavailable");
@@ -118,17 +102,46 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     debug().sigmaCreated += 1;
     const camera = renderer.getCamera();
     const click = ({ node }: { node: string }) => onSelectRef.current(node, camera.getState());
+    const enterNode = ({ node }: { node: string }) => {
+      if (!graph.hasNode(node)) return;
+      hoveredRef.current = node;
+      const incidentEdgeCount = graph.edges(node).length;
+      const neighborCount = graph.neighbors(node).length;
+      const state = debug();
+      state.hoverEnterCount = (state.hoverEnterCount ?? 0) + 1;
+      state.hoveredNeighborhood = {
+        key: node,
+        neighborCount,
+        incidentEdgeCount,
+        unrelatedNodeCount: Math.max(0, graph.order - neighborCount - 1),
+        unrelatedEdgeCount: Math.max(0, graph.size - incidentEdgeCount),
+      };
+      renderer.scheduleRefresh();
+    };
+    const leaveNode = ({ node }: { node: string }) => {
+      if (hoveredRef.current !== node) return;
+      hoveredRef.current = undefined;
+      const state = debug();
+      state.hoverLeaveCount = (state.hoverLeaveCount ?? 0) + 1;
+      state.hoveredNeighborhood = undefined;
+      renderer.scheduleRefresh();
+    };
     const cameraUpdated = () => {
       const state = camera.getState();
       debug().camera = state;
       if (validCamera(state)) onCameraRef.current(state);
     };
     renderer.on("clickNode", click);
+    renderer.on("enterNode", enterNode);
+    renderer.on("leaveNode", leaveNode);
     camera.on("updated", cameraUpdated);
     return () => {
       disposeWorker(workerRef);
       camera.off("updated", cameraUpdated);
       renderer.off("clickNode", click);
+      renderer.off("enterNode", enterNode);
+      renderer.off("leaveNode", leaveNode);
+      hoveredRef.current = undefined;
       renderer.kill();
       debug().sigmaKilled += 1;
       rendererRef.current = undefined;
@@ -141,6 +154,8 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     const renderer = rendererRef.current;
     if (!graph || !renderer) return;
     disposeWorker(workerRef);
+    hoveredRef.current = undefined;
+    debug().hoveredNeighborhood = undefined;
     graph.clear();
     const total = props.projection.nodes.length;
     props.projection.nodes.forEach((node, index) => {
