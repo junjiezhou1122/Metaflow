@@ -118,7 +118,13 @@ test("retained Chrome v0 records and canonical Browser Capture use separate rout
     "utf8",
   );
   const archivedServer = readFileSync(join(repositoryRoot, "packages/server/http-server.ts"), "utf8");
-  assert.match(extension, /endpoint: "http:\/\/localhost:3111"/);
+  const captureSettings = readFileSync(
+    join(repositoryRoot, "apps/chrome-acp/packages/chrome-extension/src/lib/info-capture-settings.ts"),
+    "utf8",
+  );
+  const ambientDaemon = readFileSync(join(repositoryRoot, "apps/ambient-daemon/index.ts"), "utf8");
+  assert.match(captureSettings, /DEFAULT_INFO_CAPTURE_ENDPOINT = "http:\/\/localhost:3112"/);
+  assert.match(ambientDaemon, /CONTEXT_HTTP_PORT \?\? 3112/);
   assert.match(extension, /url\.pathname = "\/context\/ingest"/);
   assert.match(transport, /url\.pathname = "\/capture\/v1\/browser-events"/);
   assert.equal(existsSync(join(repositoryRoot, "packages/adapters/browser-capture/legacy.ts")), false);

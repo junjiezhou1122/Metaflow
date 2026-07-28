@@ -24,30 +24,14 @@ import {
   resolveBrowserVisitState,
   type PersistedBrowserTabState,
 } from "./browser-capture-state";
+import {
+  DEFAULT_INFO_CAPTURE_SETTINGS,
+  resolveInfoCaptureSettings,
+  type InfoCaptureSettings,
+} from "./info-capture-settings";
 
-const LEGACY_DEFAULT_ENDPOINTS = new Set([
-  "http://localhost:3111/context/ingest",
-  "http://localhost:3111/context/v1/observations",
-]);
-const DEFAULT_SETTINGS = {
-  endpoint: "http://localhost:3111",
-  captureStream: true,
-  heartbeatSeconds: 15,
-  snapshotOnVisit: true,
-  allowExternalLlm: true,
-  snapshotTextLimit: 120000,
-  excludedDomains: [
-    "gmail.com",
-    "mail.google.com",
-    "icloud.com",
-    "1password.com",
-    "bitwarden.com",
-    "paypal.com",
-    "stripe.com",
-  ],
-};
-
-type InfoSettings = typeof DEFAULT_SETTINGS;
+const DEFAULT_SETTINGS = DEFAULT_INFO_CAPTURE_SETTINGS;
+type InfoSettings = InfoCaptureSettings;
 
 type PageContext = {
   title?: string;
@@ -86,10 +70,7 @@ let macBrowserContextPollRunning = false;
 export async function installInfoCaptureDefaults() {
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
   const existing = await chrome.storage.local.get(keys);
-  const migrated = typeof existing.endpoint === "string" && LEGACY_DEFAULT_ENDPOINTS.has(existing.endpoint)
-    ? { ...existing, endpoint: DEFAULT_SETTINGS.endpoint }
-    : existing;
-  await chrome.storage.local.set({ ...DEFAULT_SETTINGS, ...migrated });
+  await chrome.storage.local.set(resolveInfoCaptureSettings(existing));
 }
 
 export function startInfoCapture() {
@@ -1437,7 +1418,7 @@ function tabCaptureScore(tab: chrome.tabs.Tab): number {
 
 async function getSettings(): Promise<InfoSettings> {
   const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof InfoSettings>;
-  return { ...DEFAULT_SETTINGS, ...(await chrome.storage.local.get(keys)) };
+  return resolveInfoCaptureSettings(await chrome.storage.local.get(keys));
 }
 
 function getTabState(

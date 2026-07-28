@@ -28,7 +28,23 @@ import {
   parsePersistedBrowserTabStates,
   resolveBrowserVisitState,
 } from "../apps/chrome-acp/packages/chrome-extension/src/lib/browser-capture-state.ts";
+import {
+  DEFAULT_INFO_CAPTURE_ENDPOINT,
+  resolveInfoCaptureSettings,
+} from "../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture-settings.ts";
 import { createAmbientV1HttpHandler } from "../apps/ambient-daemon/http-handler.ts";
+
+test("Browser Capture settings migrate retired daemon endpoints without overriding custom endpoints", () => {
+  assert.equal(DEFAULT_INFO_CAPTURE_ENDPOINT, "http://localhost:3112");
+  for (const endpoint of [
+    "http://localhost:3111",
+    "http://localhost:3111/context/ingest",
+    "http://localhost:3111/context/v1/observations",
+  ]) {
+    assert.equal(resolveInfoCaptureSettings({ endpoint }).endpoint, DEFAULT_INFO_CAPTURE_ENDPOINT);
+  }
+  assert.equal(resolveInfoCaptureSettings({ endpoint: "http://127.0.0.1:43112" }).endpoint, "http://127.0.0.1:43112");
+});
 
 test("Browser Capture commits one atomic page/selection batch and advances stable page revisions", async () => {
   const repository = new SqliteViewRepository(":memory:");

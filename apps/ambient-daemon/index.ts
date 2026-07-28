@@ -7,7 +7,7 @@ import { createNativeAgentPermissionBroker, DirectAssistRuntimeRouter } from "./
 
 export async function startAmbientDaemon() {
   const runtimeCommand = resolveAmbientAcpCommand();
-  const port = Number(process.env.CONTEXT_HTTP_PORT ?? 3111);
+  const port = Number(process.env.CONTEXT_HTTP_PORT ?? 3112);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("CONTEXT_HTTP_PORT must be a valid TCP port");
   const agentRuntime = new AcpStdioAgentRuntimeAdapter({
     id: process.env.AGENT_TASK_ACP_RUNTIME_ID ?? runtimeCommand.id,

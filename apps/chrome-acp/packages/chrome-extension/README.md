@@ -67,6 +67,11 @@ The extension provides browser capabilities to connected agents:
 
 Default proxy server URL: `ws://localhost:9315/ws`
 
+Browser Capture sends canonical events to the Ambient daemon at
+`http://localhost:3112/capture/v1/browser-events` by default. Reloading an
+older unpacked extension migrates the retired `localhost:3111` defaults while
+preserving explicitly configured custom endpoints.
+
 ## Tech Stack
 
 - React 19
@@ -77,4 +82,3 @@ Default proxy server URL: `ws://localhost:9315/ws`
 ## License
 
 MIT
-
