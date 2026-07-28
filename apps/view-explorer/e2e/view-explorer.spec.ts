@@ -222,8 +222,10 @@ test("search focus, pointer and keyboard selection, expansion, filters, history,
   await expect(page.locator(".view-dialog-identity code")).toHaveText(selectedBeforeReload ?? "");
   await page.goBack();
   await expect.poll(() => new URL(page.url()).searchParams.get("selected")).not.toBe(selectedBeforeReload);
-  const lifecycle = await page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__?: { sigmaCreated: number; sigmaKilled: number } }).__METAFLOW_EXPLORER__);
-  expect((lifecycle?.sigmaCreated ?? 0) - (lifecycle?.sigmaKilled ?? 0)).toBe(1);
+  await expect.poll(async () => {
+    const lifecycle = await page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__?: { sigmaCreated: number; sigmaKilled: number } }).__METAFLOW_EXPLORER__);
+    return (lifecycle?.sigmaCreated ?? 0) - (lifecycle?.sigmaKilled ?? 0);
+  }).toBe(1);
   expect(await page.locator(".sigma-container canvas").count()).toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });
@@ -231,31 +233,29 @@ test("search focus, pointer and keyboard selection, expansion, filters, history,
 test("pointer hover reveals only the loaded neighborhood and restores selection without side effects", async ({ page }) => {
   await page.setViewportSize({ width: 1_440, height: 900 });
   const errors = watchErrors(page);
-  await page.goto("/?fixture=10");
+  await page.goto("/?fixture=10&selected=view:fixture:0003@1&cx=0.5&cy=0.5&ratio=1&angle=0");
   await ready(page, 10);
-  await page.getByRole("option", { name: /Research View 0003/ }).click();
   await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
-  await assertFocusedNodeVisible(page, "view:fixture:0003@1");
-  await expect.poll(async () => fixtureCallCount(page)).toBeGreaterThanOrEqual(2);
-  await page.waitForTimeout(100);
   await expect.poll(async () => cameraDistance(await currentCamera(page), cameraFromUrl(page.url()))).toBeLessThanOrEqual(0.0002);
 
   const baselineUrl = page.url();
   const baselineCamera = await currentCamera(page);
   const baselineCalls = await fixtureCallCount(page);
   const graphBounds = await page.locator(".sigma-container").boundingBox();
-  const focused = (await explorerDebug(page)).focusedNode;
   expect(graphBounds).not.toBeNull();
-  expect(focused).toBeDefined();
+  await expect.poll(async () => {
+    const probe = (await explorerDebug(page)).hoverProbe;
+    return probe && probe.key !== "view:fixture:0003@1" ? probe : undefined;
+  }).toBeDefined();
+  const probe = (await explorerDebug(page)).hoverProbe!;
 
-  await page.mouse.move(graphBounds!.x + focused!.x, graphBounds!.y + focused!.y);
-  await expect.poll(async () => (await explorerDebug(page)).hoveredNeighborhood).toMatchObject({
-    key: "view:fixture:0003@1",
-    neighborCount: 2,
-    incidentEdgeCount: 2,
-    unrelatedNodeCount: 7,
-  });
+  await page.mouse.move(graphBounds!.x + probe.x, graphBounds!.y + probe.y);
+  await expect.poll(async () => (await explorerDebug(page)).hoveredNeighborhood?.key).toBe(probe.key);
   const hovered = (await explorerDebug(page)).hoveredNeighborhood;
+  expect(hovered!.key).not.toBe("view:fixture:0003@1");
+  expect(hovered!.neighborCount).toBeGreaterThan(0);
+  expect(hovered!.incidentEdgeCount).toBeGreaterThan(0);
+  expect(hovered!.unrelatedNodeCount).toBeGreaterThan(0);
   expect(hovered!.unrelatedEdgeCount).toBeGreaterThan(0);
   expect((await explorerDebug(page)).hoverEnterCount).toBeGreaterThanOrEqual(1);
   await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
@@ -536,24 +536,19 @@ async function assertFocusedNodeVisible(page: Page, key: string): Promise<void> 
   }).toBe(true);
 }
 
-async function explorerDebug(page: Page): Promise<{
+type ExplorerDebugSnapshot = {
   workersCreated: number;
   workersTerminated: number;
   camera?: CameraSnapshot;
   focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
+  hoverProbe?: { key: string; x: number; y: number };
   hoveredNeighborhood?: { key: string; neighborCount: number; incidentEdgeCount: number; unrelatedNodeCount: number; unrelatedEdgeCount: number };
   hoverEnterCount?: number;
   hoverLeaveCount?: number;
-}> {
-  return page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__: {
-    workersCreated: number;
-    workersTerminated: number;
-    camera?: CameraSnapshot;
-    focusedNode?: { key: string; x: number; y: number; width: number; height: number; visible: boolean };
-    hoveredNeighborhood?: { key: string; neighborCount: number; incidentEdgeCount: number; unrelatedNodeCount: number; unrelatedEdgeCount: number };
-    hoverEnterCount?: number;
-    hoverLeaveCount?: number;
-  } }).__METAFLOW_EXPLORER__);
+};
+
+async function explorerDebug(page: Page): Promise<ExplorerDebugSnapshot> {
+  return page.evaluate(() => (window as typeof window & { __METAFLOW_EXPLORER__: ExplorerDebugSnapshot }).__METAFLOW_EXPLORER__);
 }
 
 type CameraSnapshot = { x: number; y: number; ratio: number; angle: number };

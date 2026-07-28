@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Graph from "graphology";
-import { reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
+import { assertGraphNodeLoaded, reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
+
+test("missing Sigma hover nodes fail with observable graph identity", () => {
+  const graph = new Graph();
+  assert.throws(() => assertGraphNodeLoaded(graph, "view:missing@1"), /Sigma entered missing graph node view:missing@1/);
+});
 
 test("hovered neighborhood temporarily overrides and restores selected appearance", () => {
   const graph = new Graph({ multi: true, type: "directed" });
