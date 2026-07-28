@@ -208,7 +208,7 @@ type ViewCommitOutboxRow = {
   event_json: string;
 };
 
-const VIEW_STORE_MIGRATION_VERSION = 7;
+const VIEW_STORE_MIGRATION_VERSION = 8;
 const VIEW_SEARCH_INDEX_MIGRATION_VERSION = 2;
 
 type TransactionContext = {
@@ -2962,7 +2962,7 @@ export class SqliteViewRepository implements ViewRepository, ExecutionRepository
         transaction.phase = "rebuild_search_projection";
         this.resetSearchProjection(normalizeTimestamp(this.now()));
       }
-      if (version < 7) {
+      if (version < 8) {
         transaction.phase = "migrate_connector_onboarding";
         this.ensureColumn("capture_connections_v1", "generation", "integer not null default 1 check(generation > 0)");
         this.ensureColumn("capture_connections_v1", "lifecycle_status", "text not null default 'active' check(lifecycle_status in ('draft', 'checked', 'active', 'paused'))");
