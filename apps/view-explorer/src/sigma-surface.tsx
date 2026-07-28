@@ -103,6 +103,14 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     rendererRef.current = renderer;
     debug().sigmaCreated += 1;
     const camera = renderer.getCamera();
+    let hoverProbeTimer: number | undefined;
+    const scheduleHoverProbe = () => {
+      if (hoverProbeTimer !== undefined) window.clearTimeout(hoverProbeTimer);
+      hoverProbeTimer = window.setTimeout(() => {
+        hoverProbeTimer = undefined;
+        updateHoverProbe(renderer, graph, selectedRef.current);
+      }, 50);
+    };
     const click = ({ node }: { node: string }) => onSelectRef.current(node, camera.getState());
     const enterNode = ({ node }: { node: string }) => {
       assertGraphNodeLoaded(graph, node);
@@ -131,6 +139,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     const cameraUpdated = () => {
       const state = camera.getState();
       debug().camera = state;
+      scheduleHoverProbe();
       if (validCamera(state)) onCameraRef.current(state);
     };
     renderer.on("clickNode", click);
@@ -139,6 +148,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     camera.on("updated", cameraUpdated);
     return () => {
       disposeWorker(workerRef);
+      if (hoverProbeTimer !== undefined) window.clearTimeout(hoverProbeTimer);
       camera.off("updated", cameraUpdated);
       renderer.off("clickNode", click);
       renderer.off("enterNode", enterNode);
@@ -328,10 +338,12 @@ function applyAuthoritativeCamera(renderer: Sigma, target: CameraState): void {
 
 function updateHoverProbe(renderer: Sigma, graph: Graph, selectedKey?: string): void {
   const dimensions = renderer.getDimensions();
-  let inspected = 0;
+  const container = renderer.getContainer();
+  const containerBounds = container.getBoundingClientRect();
+  const blockers = [...document.querySelectorAll<HTMLElement>(".topbar, .left-panel.mobile-open, .companion.drawer-open, .failure-banner")]
+    .map(element => element.getBoundingClientRect());
   let probe: DebugState["hoverProbe"];
   graph.someNode(key => {
-    if (inspected++ >= 32) return true;
     const neighborCount = graph.neighbors(key).length;
     const incidentEdgeCount = graph.edges(key).length;
     if (key === selectedKey || neighborCount === 0 || neighborCount >= graph.order - 1 || incidentEdgeCount >= graph.size) return false;
@@ -340,6 +352,9 @@ function updateHoverProbe(renderer: Sigma, graph: Graph, selectedKey?: string): 
     const viewport = renderer.framedGraphToViewport(display, { cameraState: renderer.getCamera().getState() });
     if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y)) return false;
     if (viewport.x < 0 || viewport.x > dimensions.width || viewport.y < 0 || viewport.y > dimensions.height) return false;
+    const pageX = containerBounds.left + viewport.x;
+    const pageY = containerBounds.top + viewport.y;
+    if (blockers.some(bounds => pageX >= bounds.left && pageX <= bounds.right && pageY >= bounds.top && pageY <= bounds.bottom)) return false;
     probe = { key, x: viewport.x, y: viewport.y };
     return true;
   });
