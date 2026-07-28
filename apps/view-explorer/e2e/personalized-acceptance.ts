@@ -146,15 +146,19 @@ export async function runPersonalizedViewExplorerAcceptance(
     }
   } finally {
     try {
-      await browser?.close();
+      await vite?.waitForRequestsIdle();
     } finally {
       try {
-        await closeHttpServer(http);
+        await browser?.close();
       } finally {
         try {
-          await vite?.close();
+          await closeHttpServer(http);
         } finally {
-          await rm(cacheDirectory, { recursive: true, force: true });
+          try {
+            await vite?.close();
+          } finally {
+            await rm(cacheDirectory, { recursive: true, force: true });
+          }
         }
       }
     }
