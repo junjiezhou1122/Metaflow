@@ -26,7 +26,8 @@ test("hovered neighborhood temporarily overrides and restores selected appearanc
   assert.equal(hovered.color, "#0d594b");
   assert.equal(hovered.size, 6.2);
   assert.equal(hovered.highlighted, true);
-  assert.equal(neighbor.forceLabel, true);
+  assert.equal(hovered.forceLabel, true);
+  assert.equal(neighbor.forceLabel, undefined);
   assert.equal(neighbor.size, 4.48);
   assert.equal(unrelated.color, "#c8cbc6");
   assert.equal(unrelated.label, "");
