@@ -15,13 +15,21 @@ runtime implementation or host. Automation decides when that contract is
 invoked and freezes exact View evidence; it does not execute or commit the
 result.
 
-The adapter pins `iii-sdk` and the expected engine to `0.19.2`, registers strict
+The adapter pins `iii-sdk@0.22.0` and the expected engine to `0.19.2`, registers strict
 versioned Automation, Operator, and cancellation Functions, and uses the named
 `metaflow-automation-v1` queue. The checked-in builtin file-backed queue config
 sets concurrency 4, three retries, 1 second backoff, 100 millisecond polling,
 and DLQ inspection. Startup introspects the live engine version, queue
 concurrency, and registered Function metadata and fails on incompatibility. No
 in-process fallback exists.
+
+The production dependency graph pins the coherent OpenTelemetry 2.9.0 family
+(and matching 0.220.0 logging/instrumentation packages) to resolve
+GHSA-8988-4f7v-96qf. A narrow checked-in `@iii-dev/helpers` patch migrates its
+removed `Resource` constructor call to `resourceFromAttributes` and supplies
+log processors through the current `LoggerProvider` constructor; the III suite
+initializes that production telemetry path as the executable compatibility gate
+for this package-level bridge.
 
 Durable Automation messages contain the exact Automation revision, exact
 trigger evidence, and bounded match descriptors. Raw text, transcript, HTML,
@@ -38,11 +46,12 @@ connection so authorized View contents are not copied into OpenTelemetry spans.
 
 ## Real III probe
 
-The checked-in `iii-config.yaml` started the local III 0.19.2 engine and a real
-`IiiRuntimeWorker.start()` connected at `ws://127.0.0.1:49134`. Startup emitted
-`iii.worker.registration_started`, `iii.worker.compatibility_verified`,
-`iii.worker.function_registered`, and `iii.worker.registered`. The engine was
-then stopped and no listener remained.
+`pnpm test:iii-runtime:live` starts the checked-in III 0.19.2 engine and a real
+`IiiRuntimeWorker.start()` at `ws://127.0.0.1:49134`. It executes the exact
+Markdown Parser through Execution, stops and restarts the engine, waits for the
+official SDK to reconnect and re-register Functions, verifies exact Function
+metadata through engine introspection, and executes a second successful Run.
+The probe then stops the engine and verifies that no listener remains.
 
 III 0.19.2 exposes live named-queue concurrency, but its inspection surface
 does not expose retry and backoff configuration. Those values are therefore
@@ -60,13 +69,15 @@ observable facts.
 
 ## Verification
 
-- `corepack pnpm test:iii-runtime`: 6/6 passed.
+- `pnpm test:iii-runtime`: 11/11 passed.
+- `pnpm test:iii-runtime:live`: two successful Parser Runs with startup and
+  restart readiness evidence against the installed III 0.19.2 binary.
 - `corepack pnpm verify:v1:boundaries`: typecheck and dependency checks passed;
   package boundary tests 23/23 passed.
 - `corepack pnpm test:committed-view-trigger`: 6/6 passed.
 - `corepack pnpm test:execution-runtime`: 12/12 passed.
 - `corepack pnpm test:v1-vertical`: 1/1 passed.
-- `corepack pnpm test`: 277 total, 276 passed, one opt-in live Screenpipe smoke
+- `pnpm test:v1`: 437 total, 436 passed, one opt-in live Screenpipe smoke
   skipped, zero failed.
 - `git diff --check`: passed.
 - A real Derived View is committed by routing the existing Agent adapter through

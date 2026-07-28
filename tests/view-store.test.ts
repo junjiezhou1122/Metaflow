@@ -297,7 +297,8 @@ test("legacy SQLite upgrades rebuild constraints and normalize empty Materializa
     assert.equal(db.prepare("pragma foreign_key_list(view_heads_v1)").all().length, 2);
     assert.equal(db.prepare("pragma foreign_key_list(view_idempotency_v1)").all().length, 2);
     assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'view_commit_outbox_v1'").get());
-    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 6);
+    assert.equal((db.prepare("select version from view_store_schema_versions_v1 where component = 'view-store'").get() as { version: number }).version, 7);
+    assert.ok(db.prepare("select name from sqlite_master where type = 'table' and name = 'capture_connection_lifecycle_receipts_v1'").get());
     assert.deepEqual(db.prepare("pragma foreign_key_check").all(), []);
     assert.throws(
       () => db.prepare(`

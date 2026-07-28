@@ -16,6 +16,8 @@ updated: 2026-07-27T12:49:27+08:00
 
 [[architecture/observation-ingestion|[design-draft] observation-ingestion]]: A design draft for connecting external information to Metaflow through replaceable Connectors and one policy-governed Observation Ingress.
 
+[[architecture/connector-package-onboarding|[canonical-decision] connector-package-onboarding]]: Exact trusted Connector Packages and CAS-versioned Source Connection onboarding from create through run.
+
 [[architecture/representation-derivation|[design-draft] representation-derivation]]: A design draft for one traversable representation space, open derivation actors, and thin external Agent references.
 
 [[architecture/view-model|[canonical-working-decision] view-model]]: Raw Views, Derived Views, View Type schemas, physical representations, and one closed View Algebra.

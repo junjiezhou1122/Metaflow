@@ -1,6 +1,12 @@
 import { handleInfoCaptureMessage, installInfoCaptureDefaults, startInfoCapture } from "./lib/info-capture";
+import { ensureTrustedOperationStorageAccess } from "./lib/operation-auth-storage";
+import {
+  TRUSTED_BACKGROUND_RUNTIME_SENDER,
+  authorizeRuntimeMessageSender,
+} from "./lib/runtime-sender-policy";
+import { SidepanelPromptQueue } from "./lib/sidepanel-prompt-queue";
 
-let pendingSidepanelPrompt: any = null;
+const sidepanelPromptQueue = new SidepanelPromptQueue();
 const RECENT_CAPTION_GAPS_KEY = "language.recent_caption_gaps";
 const SAVED_CAPTION_GAPS_BY_VIDEO_KEY = "language.caption_gaps.by_video";
 const MAX_RECENT_CAPTION_GAPS = 12;
@@ -50,7 +56,7 @@ type SavedCaptionVideo = {
   segments: CaptionGap[];
 };
 
-const backgroundCaptionSender: chrome.runtime.MessageSender = {};
+const backgroundCaptionSender = TRUSTED_BACKGROUND_RUNTIME_SENDER;
 
 async function injectContentScript(tabId: number) {
   await chrome.scripting.executeScript({
@@ -267,6 +273,20 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    const authorization = authorizeRuntimeMessageSender(message, sender);
+    if (!authorization.ok) {
+      sendResponse(authorization);
+      return;
+    }
+    if (message?.type === "selection-actions.get") {
+      await ensureTrustedOperationStorageAccess();
+      const stored = await chrome.storage.local.get("selectionActions");
+      sendResponse({
+        ok: true,
+        selectionActions: Array.isArray(stored.selectionActions) ? stored.selectionActions : [],
+      });
+      return;
+    }
     if (message?.type === "language.caption_gap.recent") {
       const gap = message.gap ?? {};
       const status = message.status === "sent" ? "sent" : "active";
@@ -319,28 +339,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    if (message?.type === "sidepanel.explain.selection" || message?.type === "sidepanel.run.selection_action") {
-      const tab = sender.tab;
-      pendingSidepanelPrompt = {
-        type: "selection-action",
-        id: crypto.randomUUID(),
-        created_at: new Date().toISOString(),
-        action: message.action ?? {
-          id: "explain",
-          label: "Explain",
-          prompt: "Explain this selected text in plain language. Keep it concise, and mention the page context if it matters.",
-        },
-        payload: message.payload,
-      };
-      if (tab?.id) await chrome.sidePanel.open({ tabId: tab.id }).catch(() => undefined);
-      sendResponse({ ok: true, pending: pendingSidepanelPrompt });
-      return;
-    }
-
-    if (message?.type === "sidepanel.consume-pending-prompt") {
-      const pending = pendingSidepanelPrompt;
-      pendingSidepanelPrompt = null;
-      sendResponse({ ok: true, pending });
+    const sidepanelPromptResult = await sidepanelPromptQueue.handle(
+      message,
+      authorization,
+      sender,
+      async tabId => chrome.sidePanel.open({ tabId }).catch(() => undefined),
+    );
+    if (sidepanelPromptResult !== undefined) {
+      sendResponse(sidepanelPromptResult);
       return;
     }
 

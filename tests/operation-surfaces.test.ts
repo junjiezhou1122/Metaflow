@@ -1,16 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import {
   CaptureIngress,
+  ConnectorPackageCatalog,
   ConnectorRuntime,
+  SourceConnectionOnboardingService,
+  TrustedConnectorPackageLoader,
   type ConnectorPort,
 } from "@info/capture";
+import { AuthoringService, lifecycleValue } from "@info/authoring";
 import {
   DeterministicViewAccessAuthorizer,
   ExecutionRuntime,
@@ -20,6 +28,7 @@ import {
 } from "@info/execution";
 import {
   GrantOperationAuthorizer,
+  OPERATION_CATALOG,
   OPERATION_NAMES,
   OperationEnvelopeSchema,
   OperationService,
@@ -31,10 +40,12 @@ import {
   type OperationTraceEvent,
 } from "@info/operations";
 import { SearchService } from "@info/search";
-import { PrivacyForgetService, exactViewRef, parseViewDraft } from "@info/view";
+import { PrivacyForgetService, canonicalJson, exactViewRef, parseViewDraft } from "@info/view";
 import {
   CliOperationAdapter,
   HttpOperationAdapter,
+  OperationMcpOutputJsonSchema,
+  METAFLOW_OPERATION_CATALOG_FINGERPRINT,
   createOperationMcpServer,
   operationMcpToolName,
 } from "@info/operation-surfaces";
@@ -44,6 +55,8 @@ import {
   sqliteVecSourceDigest,
 } from "@info/storage-sqlite";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
+import { exactTransformationRef } from "@info/transformation";
+import { ViewPackageCatalog } from "@info/view-package";
 
 type Surface = {
   name: "in-process" | "cli" | "http" | "mcp";
@@ -60,6 +73,58 @@ const policy = {
   allow_embedding: true,
   labels: ["operation-conformance"],
 };
+
+test("catalog schemas cover every Operation while examples remain limited to bounded Agent access", () => {
+  const validator = new AjvJsonSchemaValidator();
+  assert.equal(OPERATION_CATALOG.length, OPERATION_NAMES.length);
+  assert.ok(OPERATION_CATALOG.every(entry => entry.input_schema.type === "object"));
+  for (const entry of OPERATION_CATALOG) {
+    const validate = validator.getValidator(entry.input_schema as any);
+    if (entry.input_example !== undefined) assert.equal(validate(entry.input_example).valid, true, entry.name);
+  }
+  assert.deepEqual(
+    OPERATION_CATALOG.filter(entry => entry.input_example !== undefined).map(entry => entry.name),
+    ["catalog.list", "view.get", "view.graph.project", "view.search"],
+  );
+  assert.equal(
+    `sha256:${createHash("sha256").update(canonicalJson(OPERATION_CATALOG)).digest("hex")}`,
+    METAFLOW_OPERATION_CATALOG_FINGERPRINT,
+  );
+});
+
+test("official MCP client rejects structured content outside the advertised discriminated envelope", async () => {
+  const server = new Server({ name: "invalid-output-fixture", version: "0.1.0" }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [{
+      name: "invalid_envelope",
+      inputSchema: { type: "object" },
+      outputSchema: OperationMcpOutputJsonSchema as any,
+    }],
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async () => ({
+    content: [{ type: "text" as const, text: "invalid" }],
+    structuredContent: { ok: true, request_id: "request:missing-data", operation: "catalog.list" },
+  }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "output-schema-regression", version: "0.1.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const listed = await client.listTools();
+    const schema = listed.tools[0]!.outputSchema as { type: string; oneOf?: unknown[] };
+    assert.equal(schema.type, "object");
+    assert.equal(schema.oneOf?.length, 2);
+    const failure = schema.oneOf?.[1] as { required?: string[] };
+    assert.deepEqual(failure.required, ["ok", "request_id", "operation", "error"]);
+    await assert.rejects(
+      client.callTool({ name: "invalid_envelope", arguments: {} }),
+      /Structured content does not match the tool's output schema/u,
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 test("in-process, CLI, HTTP, and real MCP return the same structured success and failure", async () => {
   await withHarness(async harness => {
@@ -125,6 +190,212 @@ test("in-process, CLI, HTTP, and real MCP return the same structured success and
       assert.deepEqual(new Set(mcp.toolNames), new Set(OPERATION_NAMES.map(operationMcpToolName)));
     } finally {
       await Promise.all([...surfaces, ...forbiddenGraphSurfaces].map(surface => surface.close()));
+    }
+  });
+});
+
+test("natural-language View authoring has one exact lifecycle across in-process, CLI, HTTP, and official MCP", async () => {
+  await withHarness(async harness => {
+    const surfaces = await createSurfaces(harness, () => context("request:authoring-equivalent"));
+    try {
+      const requested = await callEquivalent(surfaces, "view.authoring.request", authoringRequest());
+      const requestRef = exactViewRef(requested.data as any);
+      const proposed = await callEquivalent(surfaces, "view.authoring.propose", authoringPropose(requestRef));
+      const proposal = proposed.data as any;
+      const proposalValue = lifecycleValue(proposal) as any;
+      const stale = await surfaces[0]!.call("view.authoring.approve", authoringDecision(exactViewRef(proposal), "0".repeat(64)));
+      assert.equal(stale.ok, false);
+      if (!stale.ok) assert.equal(stale.error.code, "authoring_digest_mismatch");
+      const approved = await callEquivalent(surfaces, "view.authoring.approve", authoringDecision(exactViewRef(proposal), proposalValue.artifact_digest));
+      const receipt = await callEquivalent(surfaces, "view.authoring.apply", authoringApply(exactViewRef(approved.data as any)));
+      assert.equal((lifecycleValue(receipt.data as any) as any).status, "applied");
+      const inspected = await callEquivalent(surfaces, "view.authoring.inspect", { ref: exactViewRef(receipt.data as any) });
+      assert.deepEqual((inspected.data as any).view, receipt.data);
+      const mcp = surfaces.find(surface => surface.name === "mcp") as Surface & { toolNames?: string[] };
+      assert.equal(mcp.toolNames?.includes(operationMcpToolName("view.authoring.apply")), true);
+    } finally {
+      await Promise.all(surfaces.map(surface => surface.close()));
+    }
+  });
+});
+
+test("Feedback evolution has one exact lifecycle across in-process, CLI, HTTP, and official MCP", async () => {
+  await withHarness(async harness => {
+    const captured = await harness.service.execute(captureRequest("feedback-parity"), context("request:feedback-seed"));
+    const source = captureRef(captured);
+    const transformation = transformationFor(source);
+    const committed = await harness.transformations.commit({
+      transformation,
+      expected_revision: 0,
+      idempotency_key: "transformation:feedback-parity",
+    });
+    const execution = await harness.service.execute({
+      operation: "run.execute",
+      input: runRequest(transformation.id, source, "run:feedback-parity"),
+    }, context("request:feedback-run"));
+    assert.equal(execution.ok, true);
+    const output = (execution as Extract<OperationEnvelope, { ok: true }>).data as any;
+    const recorded = await harness.service.execute({
+      operation: "feedback.submit",
+      input: {
+        feedback: {
+          feedback_id: "feedback:operation-parity",
+          sentiment: "correction",
+          message: "Focus the summary on decisions and contradictions.",
+          actor: "user:local",
+          occurred_at: "2026-07-26T14:10:00.000Z",
+          target_view: exactViewRef(output.outputs[0]),
+          target_run_id: "run:feedback-parity",
+          requested_changes: ["instruction"],
+          metadata: {},
+        },
+      },
+    }, context("request:feedback-record"));
+    assert.equal(recorded.ok, true);
+    const feedbackRef = exactViewRef(((recorded as Extract<OperationEnvelope, { ok: true }>).data as any).view);
+    const surfaces = await createSurfaces(harness, () => context("request:feedback-apply-equivalent"));
+    try {
+      const evolved = await callEquivalent(surfaces, "feedback.apply", {
+        feedback: feedbackRef,
+        base_transformation: exactTransformationRef(committed.transformation),
+        change: {
+          instruction: {
+            ...transformation.instruction,
+            text: "Summarize the exact captured page, emphasizing decisions and contradictions.",
+          },
+        },
+        actor: "user:local",
+        resolution: "Applied the requested focus explicitly.",
+        created_at: "2026-07-26T14:11:00.000Z",
+      });
+      assert.equal((evolved.data as any).revision, 2);
+      assert.deepEqual((evolved.data as any).supersedes, exactTransformationRef(committed.transformation));
+      assert.equal(
+        (surfaces.find(surface => surface.name === "mcp") as Surface & { toolNames?: string[] }).toolNames
+          ?.includes(operationMcpToolName("feedback.apply")),
+        true,
+      );
+      const missing = await surfaces[0]!.call("feedback.apply", {
+        feedback: { view_id: "view:feedback:missing", revision: 1 },
+        base_transformation: exactTransformationRef(committed.transformation),
+        change: {
+          instruction: {
+            ...transformation.instruction,
+            text: "This request must fail before Transformation evolution.",
+          },
+        },
+        actor: "user:local",
+        resolution: "Missing evidence cannot be applied.",
+        created_at: "2026-07-26T14:12:00.000Z",
+      });
+      assert.equal(missing.ok, false);
+      if (!missing.ok) assert.equal(missing.error.code, "view_not_found");
+
+      const denied = await harness.service.execute({
+        operation: "feedback.apply",
+        input: {
+          feedback: feedbackRef,
+          base_transformation: { transformation_id: transformation.id, revision: 2 },
+          change: {
+            instruction: {
+              ...transformation.instruction,
+              text: "A different principal must not inspect or apply this feedback.",
+            },
+          },
+          actor: "user:other",
+          resolution: "This request must be denied before reading Feedback evidence.",
+          created_at: "2026-07-26T14:13:00.000Z",
+        },
+      }, {
+        request_id: "request:feedback-apply-denied",
+        principal: { id: "user:other", grants: ["feedback.apply"] },
+      });
+      assert.equal(denied.ok, false);
+      if (!denied.ok) assert.equal(denied.error.code, "view_read_forbidden");
+    } finally {
+      await Promise.all(surfaces.map(surface => surface.close()));
+    }
+  });
+});
+
+test("Connector catalog and Source Connection lifecycle Operations have CLI, HTTP, and MCP parity", async () => {
+  await withHarness(async harness => {
+    const surfaces = await createSurfaces(harness, () => context("request:connector-parity"));
+    const otherOwnerSurfaces = await createSurfaces(harness, () => ({
+      request_id: "request:connector-other-owner",
+      principal: { id: "user:other", grants: ["*"] },
+    }));
+    try {
+      for (const [operation, input] of [
+        ["connector.list", {}],
+        ["capture.connection.list", {}],
+        ["connector.inspect", { package: { id: "missing", version: "1.0.0", digest: "a".repeat(64) } }],
+      ] as const) {
+        const responses = await Promise.all(surfaces.map(surface => surface.call(operation, input)));
+        for (const response of responses.slice(1)) assert.deepEqual(response, responses[0], operation);
+      }
+      for (const [operation, input] of [
+        ["capture.connection.create", {
+          idempotency_key: "connector-parity:create",
+          package: { id: "missing", version: "1.0.0", digest: "a".repeat(64) },
+          connection: {
+            id: "connection:missing",
+            display_name: "Missing package",
+            delivery_kinds: ["pull"],
+            secret_refs: {},
+            configuration: {},
+          },
+        }],
+        ["capture.connection.check", lifecycleMissingInput("check")],
+        ["capture.connection.discover", lifecycleMissingInput("discover")],
+        ["capture.connection.activate", lifecycleMissingInput("activate")],
+        ["capture.connection.update", lifecycleMissingInput("update")],
+        ["capture.connection.pause", lifecycleMissingInput("pause")],
+        ["capture.connection.run", { ...lifecycleMissingInput("run"), delivery: "pull", parameters: {} }],
+        ["capture.dlq.list", { connection_id: "connection:missing", status: "pending" }],
+        ["capture.dlq.replay", { id: "dead-letter:missing" }],
+      ] as const) {
+        const responses = await Promise.all(surfaces.map(surface => surface.call(operation, input)));
+        assert.equal(responses[0]?.ok, false, operation);
+        for (const response of responses.slice(1)) assert.deepEqual(response, responses[0], operation);
+      }
+      const connections = await surfaces[0]!.call("capture.connection.list", {});
+      assert.equal(connections.ok, true);
+      if (connections.ok) {
+        const lifecycle = (connections.data as Array<{ generation: number; status: string }>)[0];
+        assert.deepEqual(lifecycle, {
+          connection: {
+            id: "connection:operations",
+            connector_id: "connector:operation-manual",
+            connector_version: "1.0.0",
+            display_name: "Operation conformance manual source",
+            enabled: true,
+            delivery_kinds: ["manual_import"],
+            secret_refs: {},
+            configuration: {},
+            privacy: policy,
+          },
+          generation: 1,
+          status: "active",
+          created_at: lifecycle?.created_at,
+          updated_at: lifecycle?.updated_at,
+        });
+      }
+      const hiddenConnections = await Promise.all(otherOwnerSurfaces.map(surface => surface.call("capture.connection.list", {})));
+      for (const response of hiddenConnections) {
+        assert.equal(response.ok, true);
+        if (response.ok) assert.deepEqual(response.data, []);
+      }
+      const deniedTraces = await Promise.all(otherOwnerSurfaces.map(surface => surface.call("trace.read", {
+        scope: "capture",
+        connection_id: "connection:operations",
+      })));
+      for (const response of deniedTraces) {
+        assert.equal(response.ok, false);
+        if (!response.ok) assert.equal(response.error.code, "connection_owner_mismatch");
+      }
+    } finally {
+      await Promise.all([...surfaces, ...otherOwnerSurfaces].map(surface => surface.close()));
     }
   });
 });
@@ -384,6 +655,14 @@ for (const surfaceName of ["in-process", "cli", "http", "mcp"] as const) {
   });
 }
 
+function lifecycleMissingInput(action: string) {
+  return {
+    connection_id: "connection:missing",
+    expected_generation: 1,
+    idempotency_key: `connector-parity:${action}`,
+  };
+}
+
 async function createSurfaces(
   harness: Harness,
   contextProvider: (input: { transport: "cli" | "http" | "mcp"; operation?: string }) => OperationContext,
@@ -467,7 +746,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     display_name: "Operation conformance manual source",
     enabled: true,
     delivery_kinds: ["manual_import"],
-    secret_refs: [],
+    secret_refs: {},
     configuration: {},
     privacy: policy,
   });
@@ -499,6 +778,20 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     observer: { async record() {} },
     now: clock,
   });
+  const authoring = new AuthoringService({
+    views,
+    transformations,
+    execution,
+    packages: new ViewPackageCatalog(),
+    agent: {
+      async propose() {
+        return operationAuthoringViewCandidate();
+      },
+    },
+    observer: { async record() {} },
+    now: clock,
+  });
+  const connectorCatalog = new ConnectorPackageCatalog();
   const service = new OperationService({
     views,
     graph: views.search,
@@ -510,7 +803,24 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     feedback,
     privacy,
     capture,
+    connector_onboarding: new SourceConnectionOnboardingService({
+      catalog: connectorCatalog,
+      loader: new TrustedConnectorPackageLoader({
+        catalog: connectorCatalog,
+        artifacts: {
+          async inspect() { return undefined; },
+          async instantiate() { throw new Error("No Connector Packages are installed"); },
+        },
+        publisher_keys: { async publicKey() { return undefined; } },
+        allowed_permissions: [],
+        supported_abi_version: 1,
+      }),
+      runtime: capture,
+      repository: views,
+      now: clock,
+    }),
     capture_traces: views,
+    authoring,
     authorization: new GrantOperationAuthorizer(),
     observer,
     now: clock,
@@ -524,6 +834,80 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     views.close();
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+async function callEquivalent(surfaces: Surface[], operation: OperationName, input: unknown) {
+  const responses = await Promise.all(surfaces.map(surface => surface.call(operation, input)));
+  for (const response of responses.slice(1)) assert.deepEqual(response, responses[0]);
+  assert.equal(responses[0]?.ok, true, responses[0]?.ok ? undefined : JSON.stringify(responses[0]?.error));
+  return responses[0] as Extract<OperationEnvelope, { ok: true }>;
+}
+
+function authoringRequest() {
+  return {
+    view_id: "view:operation:authoring:request",
+    expected_revision: 0,
+    artifact_kind: "view",
+    prompt: "Create an English learning View from my saved material",
+    source_views: [],
+    policy,
+    trace_id: "trace:operation:authoring",
+    idempotency_key: "operation:authoring:request",
+    created_at: "2026-07-26T14:10:00.000Z",
+  };
+}
+
+function authoringPropose(request: { view_id: string; revision: number }) {
+  return {
+    request,
+    proposal_view_id: "view:operation:authoring:proposal",
+    expected_revision: 0,
+    idempotency_key: "operation:authoring:proposal",
+    failure_receipt_view_id: "view:operation:authoring:proposal-failure",
+    created_at: "2026-07-26T14:10:01.000Z",
+  };
+}
+
+function authoringDecision(proposal: { view_id: string; revision: number }, proposalDigest: string) {
+  return {
+    proposal,
+    proposal_digest: proposalDigest,
+    decision_view_id: "view:operation:authoring:decision",
+    expected_revision: 0,
+    idempotency_key: "operation:authoring:decision",
+    created_at: "2026-07-26T14:10:02.000Z",
+  };
+}
+
+function authoringApply(decision: { view_id: string; revision: number }) {
+  return {
+    decision,
+    receipt_view_id: "view:operation:authoring:receipt",
+    expected_revision: 0,
+    idempotency_key: "operation:authoring:apply",
+    created_at: "2026-07-26T14:10:03.000Z",
+  };
+}
+
+function operationAuthoringViewCandidate() {
+  return {
+    kind: "view",
+    view: {
+      id: "view:operation:authored:learning",
+      name: "Authored English learning View",
+      purpose: "Prove one authoring lifecycle across every shared surface",
+      aliases: [],
+      schema: { name: "learning.operation.authored", version: 1, mode: "freeform" },
+      representation: { form: "inline", kind: "markdown", media_type: "text/markdown", value: "# Learning", metadata: {} },
+      materialization: {
+        primary: { id: "canonical", format: "markdown", media_type: "text/markdown", location: { kind: "inline" } },
+        alternatives: [],
+      },
+      relations: [],
+      metadata: {},
+      expected_revision: 0,
+    },
+  };
 }
 
 function searchRequest(ref: { view_id: string; revision: number }, text: string) {

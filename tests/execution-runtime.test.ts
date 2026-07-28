@@ -634,6 +634,42 @@ test("strict Schema rejection commits a Failure View and no invalid output", asy
   });
 });
 
+test("non-scalar deterministic search projection fails validation before success commit", async () => {
+  await withHarness(async harness => {
+    const transformation = transform(harness.input, {
+      id: "transformation:invalid-search-projection",
+      output: {
+        schema: {
+          ...outputSchema,
+          search_projection: {
+            version: 1,
+            fields: [{ path: "/representation/value", category: "text" }],
+          },
+        },
+        schema_origin: "declared",
+        cardinality: { min: 1, max: 1 },
+      },
+    });
+    harness.operator.behavior = async invocation => {
+      const draft = outputDraft(invocation, "view:summary:invalid-search-projection");
+      draft.schema = transformation.output.schema;
+      return {
+        status: "succeeded",
+        candidate: { outputs: [{ draft, expected_revision: 0 }] },
+      };
+    };
+
+    const result = await harness.runtime.execute(request(harness.input, "run:invalid-search-projection", { transformation }));
+
+    assert.equal(result.run.status, "failed");
+    assert.equal(result.run.error?.code, "candidate_invalid");
+    assert.equal(result.run.error?.stage, "validation");
+    assert.match(String(result.run.error?.details.projection_error), /non-scalar/);
+    assert.equal(await harness.repository.getLatest("view:summary:invalid-search-projection"), undefined);
+    assert.ok(result.failure);
+  });
+});
+
 test("a base changed during Operator execution is reported as stale and never overwritten", async () => {
   await withHarness(async harness => {
     harness.operator.behavior = async invocation => {
@@ -878,6 +914,15 @@ class SchemaValueAgentRuntime implements AgentRuntimeAdapter {
   async submit(task: AgentTaskRequest, _context: AgentRuntimeContext): Promise<AgentTaskResult> {
     assert.equal(task.outputContract.mode, "schema_value");
     assert.equal(task.outputContract.viewType, "learning.daily_plan");
+    assert.deepEqual(task.outputContract.schema, {
+      type: "object",
+      required: ["headline", "tags"],
+      additionalProperties: false,
+      properties: {
+        headline: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+      },
+    });
     this.sawSchemaValueContract = true;
     return {
       ok: true,

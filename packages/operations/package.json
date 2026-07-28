@@ -4,14 +4,17 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./names": "./names.ts"
   },
   "dependencies": {
+    "@info/authoring": "workspace:*",
     "@info/capture": "workspace:*",
     "@info/execution": "workspace:*",
     "@info/search": "workspace:*",
     "@info/transformation": "workspace:*",
     "@info/view": "workspace:*",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

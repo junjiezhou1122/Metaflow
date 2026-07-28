@@ -270,6 +270,22 @@ request keyword, semantic, structured, relation, or hybrid retrieval.
 Search is read-only. Missing Parser, embedding, or reranker capability is an
 explicit outcome; it never silently substitutes a weaker mode.
 
+The implemented structured suite resolves this without query-time parsing:
+
+    content.json.document@1 -------> parser.json@1@1
+    content.table@1 ---------------> parser.table@1@1
+    content.property_graph@1 ------> parser.graph@1@1
+    content.external_reference@1 --> parser.external-reference@1@1
+                                      |
+                                      v
+                         metaflow.view.fragment-set@2
+
+Each Parser is an ordinary exact Function Operator Transformation. Execution
+freezes the source, limits, output Schema, policy, and budget, then validates
+and commits the untrusted fragment candidate. Search sees only that committed
+projection. An internal-only query over a scope with no committed internal
+projection returns `parser_capability_missing`.
+
 The transferable open-source pattern is:
 
     Unstructured       Parser implementations for heterogeneous content
@@ -331,17 +347,26 @@ Already reusable:
 - View Package declarations and conformance;
 - CLI, HTTP, MCP, Renderer, Application Space, and Graph Explorer surfaces.
 
-Still required for this accepted slice:
+Implemented in the accepted Parser/Search slice:
+
+- exact View Package descriptors for Markdown, JSON, table, graph, and
+  external-reference Representations;
+- deterministic bounded Parser Workers behind Function Operator and Execution;
+- strict location-aware fragment-set Derived Views committed before Search;
+- internal Search for one projection View, selected projection Views, and an
+  incoming `derived_from` bounded subgraph;
+- explicit unsupported Representation, missing Materialization, malformed
+  result, implementation crash, timeout, cancellation, and missing capability
+  behavior.
+
+Still required beyond this slice:
 
 - make Processor Worker the simple public View[] -> View authoring boundary;
 - move from III-as-one-runtime-adapter toward discoverable sibling Workers;
-- add Parser Worker descriptors and a strict Parser Registry;
-- implement Markdown, JSON/table, graph, and external-reference Parsers;
-- project normalized ViewFragments into the existing Search modes;
 - build one deterministic and one live Agent vertical for semantic
   include/exclude processing;
-- test Search within one View, across selected Views, and across a bounded
-  composed subgraph.
+- add future PDF/image/audio parsers only behind explicit materialization,
+  policy, provenance, and budget contracts.
 
 ## First acceptance scenario
 

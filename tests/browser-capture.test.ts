@@ -36,6 +36,7 @@ import {
   resolveInfoCaptureSettingsUpdate,
 } from "../apps/chrome-acp/packages/chrome-extension/src/lib/info-capture-settings.ts";
 import { createAmbientV1HttpHandler } from "../apps/ambient-daemon/http-handler.ts";
+import { AmbientOperationAccess } from "../apps/ambient-daemon/operation-access.ts";
 
 test("Browser Capture settings migrate retired daemon endpoints without overriding custom endpoints", () => {
   assert.equal(DEFAULT_INFO_CAPTURE_ENDPOINT, `http://localhost:${DEFAULT_BROWSER_CAPTURE_DAEMON_PORT}`);
@@ -628,6 +629,7 @@ function captureHttpHandler(
         throw new Error("Operation route is outside this Browser Capture smoke");
       },
     },
+    operation_access: new AmbientOperationAccess("test-operation-auth-token-32-bytes"),
     observe() {},
   });
 }
@@ -657,7 +659,11 @@ async function httpRequest(
   const req = Readable.from([JSON.stringify(body)]) as any;
   req.method = "POST";
   req.url = "/capture/v1/browser-events";
-  req.headers = { host: "localhost", "content-type": "application/json" };
+  req.headers = {
+    host: "localhost",
+    "content-type": "application/json",
+    authorization: "Bearer test-operation-auth-token-32-bytes",
+  };
   let status = 0;
   let raw = "";
   const res = {

@@ -19,6 +19,8 @@ import { WebRendererRegistry } from "./registry.js";
 import { renderJsonView } from "./renderers/json.js";
 import { openMarkdownLink, renderMarkdownView } from "./renderers/markdown.js";
 import { parseSchemaDrivenTable, renderTableView } from "./renderers/table.js";
+import { renderScreenpipeAudioView } from "./renderers/screenpipe-audio.js";
+import { renderScreenpipeTimelineView } from "./renderers/screenpipe-timeline.js";
 
 const exactDescriptor: WebRendererDescriptor = {
   id: "renderer.fixture",
@@ -593,6 +595,64 @@ test("JSON, Markdown, and table security fixtures escape content without raw HTM
   const tableHtml = renderToStaticMarkup(renderTableView(tableInput));
   assert.doesNotMatch(tableHtml, /<script|<img/i);
   assert.match(tableHtml, /&lt;script&gt;/);
+});
+
+test("Screenpipe evidence Renderers expose exact source counts and transcript content", () => {
+  const source = { view_id: "view:raw:screenpipe:1", revision: 1 };
+  const period = { start: "2026-07-27T14:24:28.506Z", end: "2026-07-27T14:54:28.506Z", timezone: "Asia/Shanghai" };
+  const timelineHtml = renderToStaticMarkup(renderScreenpipeTimelineView(rendererInput({
+    envelope: {
+      contract_version: 1,
+      name: "Screenpipe Timeline View",
+      purpose: "Exact Screenpipe evidence",
+      schema: { name: "metaflow.screenpipe.timeline", version: 1, mode: "freeform" },
+      role: "derived",
+      time: { created_at: "2026-07-27T14:54:28.506Z" },
+    },
+    representation: {
+      form: "inline",
+      kind: "screenpipe_timeline",
+      media_type: "application/json",
+      value: {
+        contract_version: 1,
+        period,
+        sources: [{ relation: "derived_from", view: source }],
+        entries: [{ at: "2026-07-27T14:30:00.000Z", modality: "screen", source, label: "Orca", text: "Exact captured text" }],
+        stats: { source_count: 1, counts_by_modality: { screen: 1 } },
+      },
+    },
+  })));
+  assert.match(timelineHtml, /renderer\.screenpipe\.timeline@1@1/);
+  assert.match(timelineHtml, /1 exact sources/);
+  assert.match(timelineHtml, /Exact captured text/);
+  assert.match(timelineHtml, /view:raw:screenpipe:1@1/);
+
+  const audioHtml = renderToStaticMarkup(renderScreenpipeAudioView(rendererInput({
+    envelope: {
+      contract_version: 1,
+      name: "Screenpipe Audio View",
+      purpose: "Exact Screenpipe audio evidence",
+      schema: { name: "metaflow.screenpipe.audio", version: 1, mode: "freeform" },
+      role: "derived",
+      time: { created_at: "2026-07-27T14:54:28.506Z" },
+    },
+    representation: {
+      form: "inline",
+      kind: "screenpipe_audio",
+      media_type: "application/json",
+      value: {
+        contract_version: 1,
+        period,
+        sources: [{ relation: "derived_from", view: source }],
+        segments: [{ at: "2026-07-27T14:30:00.000Z", source, text: "Real transcript sentence", device_type: "Input", speaker: "Local speaker" }],
+        transcript: "Real transcript sentence",
+        stats: { source_count: 1, segment_count: 1, input_segments: 1, output_segments: 0 },
+      },
+    },
+  })));
+  assert.match(audioHtml, /renderer\.screenpipe\.audio@1@1/);
+  assert.match(audioHtml, /Real transcript sentence/);
+  assert.match(audioHtml, /Local speaker/);
 });
 
 function mountRequest(events: RendererLifecycleEvent[], descriptors: readonly unknown[]) {

@@ -1,6 +1,17 @@
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { CaptureIngress, ConnectorRuntime, type SourceConnection } from "@info/capture";
+import {
+  CaptureIngress,
+  ConnectorPackageCatalog,
+  SourceConnectionOnboardingService,
+  TrustedConnectorPackageLoader,
+  type ConnectorPackageArtifactPort,
+  type ConnectorPackageDescriptor,
+  type ConnectorPermission,
+  type ConnectorPublisherKeyPort,
+  type SourceConnection,
+} from "@info/capture";
+import { ConnectorRuntime } from "@info/capture";
 import {
   AutomationContextResolver,
   AutomationDeliveryCoordinator,
@@ -17,7 +28,17 @@ import {
   OperatorExecutionRouter,
   parseViewAccessPolicySnapshot,
 } from "@info/execution";
-import { AgentExecutionAdapter, type AgentRuntimeAdapter } from "@info/agent-runtime-adapter";
+import {
+  AgentExecutionAdapter,
+  AgentRuntimeAuthoringProposalAdapter,
+  type AgentRuntimeAdapter,
+} from "@info/agent-runtime-adapter";
+import { AuthoringService } from "@info/authoring";
+import { FunctionOperatorAdapter } from "@info/function-operator-adapter";
+import {
+  MARKDOWN_PARSER_FUNCTION,
+  executeMarkdownParser,
+} from "@info/markdown-parser-adapter";
 import {
   AutomationExecutionCommandHandler,
   AutomationExecutionTarget,
@@ -44,13 +65,24 @@ import {
   configureObsidianCapture,
 } from "@info/obsidian-capture-adapter";
 import {
+  ScreenpipeCaptureConnector,
+  ScreenpipeOpenParametersSchema,
+  configureScreenpipeCapture,
+} from "@info/screenpipe-capture-adapter";
+import {
+  SCREENPIPE_AUDIO_FUNCTION,
+  SCREENPIPE_TIMELINE_FUNCTION,
+  executeScreenpipeAudio,
+  executeScreenpipeTimeline,
+} from "@info/screenpipe-derived-views";
+import {
   BrowserDomRequestBroker,
   MacAutomationController,
   MacAutomationHttpBridge,
   MacDeliveryMailbox,
   ViewMacAutomationCatalog,
 } from "@info/macos-automation-adapter";
-import { SqliteViewRepository } from "@info/storage-sqlite";
+import { SqliteViewRepository, type SqliteViewRepositoryOptions } from "@info/storage-sqlite";
 import {
   SchedulerAutomationController,
   SqliteScheduleCursorRepository,
@@ -64,9 +96,13 @@ import {
   OperationService,
   RepositoryViewReadAuthorizer,
 } from "@info/operations";
-import { SearchService } from "@info/search";
+import { SearchService, type QueryEmbeddingPort } from "@info/search";
 import { SqliteTransformationRepository } from "@info/transformation-sqlite";
 import { exactTransformationRef, type Transformation } from "@info/transformation";
+import { ViewPackageCatalog } from "@info/view-package";
+import { applicationSpaceViewPackage } from "@info/view-package-application-space";
+import { githubRepositorySummaryViewPackage } from "@info/view-package-github-repository-summary";
+import { obsidianDocumentViewPackage } from "@info/view-package-obsidian-document";
 import {
   PrivacyForgetService,
   canonicalJson,
@@ -81,15 +117,24 @@ import {
   dailySummaryTransformation,
   macVoiceAssistAutomationDraft,
   macVoiceAssistTransformation,
+  obsidianMarkdownParserTransformation,
 } from "./definitions.js";
 import { createAmbientV1HttpHandler } from "./http-handler.js";
 import { createAmbientMcpHttpHandler } from "./mcp-handler.js";
+import { AmbientOperationAccess } from "./operation-access.js";
 
 export type AmbientDaemonCompositionOptions = {
   data_directory: string;
+  operation_auth_token: string;
+  view_store?: SqliteViewRepositoryOptions;
+  semantic_search?: {
+    query_embedding: QueryEmbeddingPort;
+  };
+  trusted_operation_origins?: readonly string[];
   agent_runtime: AgentRuntimeAdapter;
   agent_aliases?: Record<string, string>;
   agent_mcp_servers?: import("@info/agent-runtime-adapter").AgentMcpServerConfig[];
+  direct_assist?: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => Promise<void>;
   mac_delivery_mailbox?: MacDeliveryMailbox;
   capture_sources?: {
     codex_history?: {
@@ -100,6 +145,17 @@ export type AmbientDaemonCompositionOptions = {
       connector?: ObsidianCaptureAdapter;
       connections: readonly SourceConnection[];
     };
+    screenpipe?: {
+      connector?: ScreenpipeCaptureConnector;
+      connection?: SourceConnection;
+    };
+  };
+  connector_packages?: {
+    descriptors: readonly ConnectorPackageDescriptor[];
+    artifacts: ConnectorPackageArtifactPort;
+    publisher_keys: ConnectorPublisherKeyPort;
+    allowed_permissions: readonly ConnectorPermission[];
+    supported_abi_version?: number;
   };
   now?: () => Date;
 };
@@ -119,10 +175,18 @@ export const AMBIENT_REACTIVE_CASCADE_POLICY: ReactiveCascadePolicySnapshot = {
 };
 
 export async function createAmbientDaemonComposition(options: AmbientDaemonCompositionOptions) {
+  const hasSemanticStore = options.view_store?.semantic_search !== undefined;
+  if (hasSemanticStore !== (options.semantic_search !== undefined)) {
+    throw new TypeError("Ambient semantic Search requires both a SQLite semantic profile and a query embedding port");
+  }
   const now = options.now ?? (() => new Date());
+  const operationAccess = new AmbientOperationAccess(
+    options.operation_auth_token,
+    options.trusted_operation_origins,
+  );
   const databasePath = join(options.data_directory, "metaflow.sqlite");
   const automationPath = join(options.data_directory, "automation.sqlite");
-  const views = new SqliteViewRepository(databasePath);
+  const views = new SqliteViewRepository(databasePath, options.view_store);
   const transformations = new SqliteTransformationRepository(databasePath);
   const occurrences = new SqliteAutomationOccurrenceRepository(automationPath);
   const cascades = new SqliteReactiveCascadeLedger(automationPath);
@@ -131,6 +195,7 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
   const schedulerCursors = new SqliteScheduleCursorRepository(automationPath);
   try {
     await seedTransformation(transformations, githubSummaryTransformation, "seed:transformation.github.repository_summary@1");
+    await seedTransformation(transformations, obsidianMarkdownParserTransformation, "seed:transformation.parser.markdown@1");
     await seedTransformation(transformations, macVoiceAssistTransformation, "seed:transformation.macos.voice_assist@1");
     await seedTransformation(transformations, dailySummaryTransformation, "seed:transformation.ambient.daily_summary@1");
     await seedAutomation(views, githubSummaryAutomationDraft, "seed:automation.browser.github_repository_summary@1");
@@ -146,6 +211,14 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
     });
     const operators = new OperatorExecutionRouter([
       { kind: "agent", port: new AgentOperatorExecutionBridge(agent, { now: () => now().toISOString() }) },
+      {
+        kind: "function",
+        port: new FunctionOperatorAdapter([
+          { reference: MARKDOWN_PARSER_FUNCTION, execute: executeMarkdownParser },
+          { reference: SCREENPIPE_TIMELINE_FUNCTION, execute: executeScreenpipeTimeline },
+          { reference: SCREENPIPE_AUDIO_FUNCTION, execute: executeScreenpipeAudio },
+        ]),
+      },
     ]);
     const execution = new ExecutionRuntime(
       views,
@@ -155,6 +228,34 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       undefined,
       { now: () => now().toISOString() },
     );
+    const viewPackages = new ViewPackageCatalog();
+    for (const viewPackage of [
+      applicationSpaceViewPackage,
+      githubRepositorySummaryViewPackage,
+      obsidianDocumentViewPackage,
+    ]) {
+      viewPackages.register(viewPackage);
+    }
+    const authoring = new AuthoringService({
+      views,
+      transformations,
+      execution,
+      packages: viewPackages,
+      agent: new AgentRuntimeAuthoringProposalAdapter([options.agent_runtime], options.agent_runtime.id),
+      observer: {
+        async record(event, cause) {
+          console.info(JSON.stringify({
+            component: "metaflow-authoring",
+            ...event,
+            ...(cause instanceof Error ? {
+              cause_name: cause.name,
+              cause_message_digest: createHash("sha256").update(cause.message).digest("hex"),
+            } : {}),
+          }));
+        },
+      },
+      now: () => now().toISOString(),
+    });
     const target = new AutomationExecutionTarget({
       transformations,
       execution,
@@ -261,6 +362,10 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       scope_source: views.search,
       descriptors: views.search,
       keyword: views.search,
+      ...(options.semantic_search ? {
+        semantic: views.semantic_search,
+        query_embedding: options.semantic_search.query_embedding,
+      } : {}),
       observer: {
         async record(event, cause) {
           console.info(JSON.stringify({
@@ -275,6 +380,24 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       },
       now: () => now().toISOString(),
     });
+    const connectorCatalog = new ConnectorPackageCatalog();
+    for (const descriptor of options.connector_packages?.descriptors ?? []) connectorCatalog.register(descriptor);
+    const connectorOnboarding = new SourceConnectionOnboardingService({
+      catalog: connectorCatalog,
+      loader: new TrustedConnectorPackageLoader({
+        catalog: connectorCatalog,
+        artifacts: options.connector_packages?.artifacts ?? {
+          async inspect() { return undefined; },
+          async instantiate() { throw new Error("No Connector Packages are installed"); },
+        },
+        publisher_keys: options.connector_packages?.publisher_keys ?? { async publicKey() { return undefined; } },
+        allowed_permissions: options.connector_packages?.allowed_permissions ?? [],
+        supported_abi_version: options.connector_packages?.supported_abi_version ?? 1,
+      }),
+      runtime: connectorRuntime,
+      repository: views,
+      now: () => now().toISOString(),
+    });
     const operationService = new OperationService({
       views,
       graph: views.search,
@@ -286,7 +409,9 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       feedback,
       privacy,
       capture: connectorRuntime,
+      connector_onboarding: connectorOnboarding,
       capture_traces: views,
+      authoring,
       authorization: new GrantOperationAuthorizer(),
       observer: new JsonConsoleOperationObserver(),
       now: () => now().toISOString(),
@@ -301,8 +426,10 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       mac_automation: macAutomation,
       inbox_automation: inboxAutomation,
       operations: operationHttp,
+      operation_access: operationAccess,
+      direct_assist: options.direct_assist,
     });
-    const mcpHandler = createAmbientMcpHttpHandler(operationService);
+    const mcpHandler = createAmbientMcpHttpHandler(operationService, operationAccess);
 
     return {
       handler,
@@ -314,6 +441,8 @@ export async function createAmbientDaemonComposition(options: AmbientDaemonCompo
       ledger,
       traces,
       execution,
+      authoring,
+      viewPackages,
       operationService,
       delivery,
       scheduler,
@@ -355,6 +484,7 @@ async function configureExternalCaptureSources(
   sources: AmbientDaemonCompositionOptions["capture_sources"],
 ) {
   const configured = new Set<string>();
+  const explicitParametersRequired = new Set<string>();
   if (sources?.codex_history) {
     const result = await configureCodexHistoryCapture({
       runtime,
@@ -376,16 +506,46 @@ async function configureExternalCaptureSources(
       configured.add(connection.id);
     }
   }
+  if (sources?.screenpipe) {
+    const result = await configureScreenpipeCapture({
+      runtime,
+      ...(sources.screenpipe.connector ? { connector: sources.screenpipe.connector } : {}),
+      ...(sources.screenpipe.connection ? { connection: sources.screenpipe.connection } : {}),
+    });
+    configured.add(result.connection.id);
+    explicitParametersRequired.add(result.connection.id);
+  }
   const connectionIds = Object.freeze([...configured].sort());
   return Object.freeze({
     connection_ids: connectionIds,
-    async pull(connectionId: string) {
+    async pull(connectionId: string, parameters?: Record<string, unknown>) {
       if (!configured.has(connectionId)) {
         throw new Error(`Capture Source Connection is not configured in this composition: ${connectionId}`);
       }
-      return runtime.run(connectionId, "pull", {});
+      const boundedParameters = explicitParametersRequired.has(connectionId)
+        ? boundedScreenpipePullParameters(connectionId, parameters)
+        : parameters ?? {};
+      return runtime.run(connectionId, "pull", boundedParameters);
     },
   });
+}
+
+function boundedScreenpipePullParameters(
+  connectionId: string,
+  parameters: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const parsed = ScreenpipeOpenParametersSchema.safeParse(parameters);
+  if (!parsed.success) {
+    throw new Error(`Screenpipe Capture Source Connection requires strict explicit pull parameters: ${connectionId}`);
+  }
+  const { start_time: start, end_time: end } = parsed.data.query;
+  if (!start || !end) {
+    throw new Error(`Screenpipe Capture Source Connection requires an explicit bounded period: ${connectionId}`);
+  }
+  if (Date.parse(end) - Date.parse(start) > 86_400_000) {
+    throw new Error(`Screenpipe Capture Source Connection period exceeds one day: ${connectionId}`);
+  }
+  return parsed.data;
 }
 
 async function seedTransformation(

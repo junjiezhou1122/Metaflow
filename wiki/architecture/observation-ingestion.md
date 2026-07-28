@@ -14,6 +14,8 @@ updated: 2026-07-24T16:44:48Z
 > Status: partially superseded by [[architecture/view-model|View Model and View
 > Algebra]]. Connector and ingress evidence remains useful, but the separate
 > Observation/View type model and `Processor` terminology below are historical.
+> The current executable Connector Package and Source Connection lifecycle is
+> [[architecture/connector-package-onboarding|Connector Package and Source Connection Onboarding]].
 
 ## Goal
 

@@ -72,7 +72,7 @@ async function setup(input: {
     endpoint: "http://screenpipe.test",
     privacy: privatePolicy(),
     required_capabilities: input.required_capabilities,
-    secret_refs: [{ provider: "keychain", key: "screenpipe.local-api-key" }],
+    secret_refs: { screenpipe_api_key: { provider: "keychain", key: "screenpipe.local-api-key" } },
   });
   await configureScreenpipeCapture({ runtime, connector, connection });
   return { repository, runtime, connector, connection };
@@ -731,7 +731,7 @@ test("connection-scoped idempotency isolates identical rows and Input enrichment
       return jsonResponse(response);
     }) as typeof fetch,
   });
-  const secret_refs = [{ provider: "keychain" as const, key: "screenpipe.local-api-key" }];
+  const secret_refs = { screenpipe_api_key: { provider: "keychain" as const, key: "screenpipe.local-api-key" } };
   const first = screenpipeSourceConnection({ id: "screenpipe:first", required_capabilities: ["input"], secret_refs });
   const second = screenpipeSourceConnection({ id: "screenpipe:second", required_capabilities: ["input"], secret_refs });
   try {
@@ -811,7 +811,7 @@ test("live local Screenpipe smoke", { skip: process.env.SCREENPIPE_LIVE_TEST !==
   });
   const connection = screenpipeSourceConnection({
     required_capabilities: ["frame_ocr"],
-    secret_refs: [{ provider: "env", key: "SCREENPIPE_API_KEY" }],
+    secret_refs: { screenpipe_api_key: { provider: "env", key: "SCREENPIPE_API_KEY" } },
   });
   try {
     await configureScreenpipeCapture({ runtime, connector, connection });

@@ -7,7 +7,7 @@ import {
   type ViewGraphProjectionNode,
   type ViewGraphProjectionResult,
 } from "@info/view/graph";
-import { ViewRevisionSchema, type ExactViewRef, type View } from "@info/view/schema";
+import { ViewRevisionSchema, type ExactViewRef, type JsonValue, type View } from "@info/view/schema";
 import {
   SearchRequestV1Schema,
   SearchResponseV1Schema,
@@ -50,7 +50,7 @@ export const OperationEnvelopeSchema = z.union([
 
 export type OperationEnvelope = z.infer<typeof OperationEnvelopeSchema>;
 export type ExplorerOperation = "view.graph.project" | "view.get" | "view.search";
-export type { ExactViewRef, SearchRequestV1, SearchResponseV1, View, ViewGraphProjectionEdge, ViewGraphProjectionNode, ViewGraphProjectionRequest, ViewGraphProjectionResult };
+export type { ExactViewRef, JsonValue, SearchRequestV1, SearchResponseV1, View, ViewGraphProjectionEdge, ViewGraphProjectionNode, ViewGraphProjectionRequest, ViewGraphProjectionResult };
 export { SearchRequestV1Schema, SearchResponseV1Schema, ViewGraphProjectionRequestSchema, ViewGraphProjectionResultSchema, ViewRevisionSchema };
 
 export function refKey(ref: ExactViewRef): string {

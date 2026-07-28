@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@info/capture": "workspace:*",
+    "@info/screenpipe-contracts": "workspace:*",
     "@info/view": "workspace:*",
     "zod": "^3.24.4"
   }

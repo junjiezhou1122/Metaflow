@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import { refKey, type ViewGraphProjectionResult } from "./contracts.js";
-import { assertGraphNodeLoaded, EDGE_COLORS, reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
+import { assertGraphNodeLoaded, reduceEdgeAppearance, reduceNodeAppearance } from "./graph-appearance.js";
 import { deterministicPosition, type CameraState } from "./graph-projection.js";
 import {
   LAYOUT_PROTOCOL_VERSION,
@@ -10,7 +10,8 @@ import {
   type LayoutRequest,
 } from "./layout-protocol.js";
 
-const SCHEMA_COLORS = ["#137a65", "#4263a9", "#a54835", "#9b6a17", "#7a4f91", "#39767d"];
+const NEIGHBOR_COLOR = "#505553";
+const DEFAULT_EDGE_COLOR = "#cfd2d0";
 type LayoutFailureCode = "graph_layout_worker_start_failed" | "graph_layout_worker_failed" | "graph_layout_protocol_failed";
 
 type SigmaSurfaceProps = {
@@ -87,9 +88,9 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
       renderer = new Sigma(graph, container, {
         allowInvalidContainer: false,
         renderEdgeLabels: false,
-        labelRenderedSizeThreshold: 9,
-        defaultNodeColor: "#4263a9",
-        defaultEdgeColor: "#a7aaa5",
+        labelRenderedSizeThreshold: 6,
+        defaultNodeColor: NEIGHBOR_COLOR,
+        defaultEdgeColor: DEFAULT_EDGE_COLOR,
         nodeReducer: (key, attributes) => reduceNodeAppearance(graph, key, attributes, { selectedKey: selectedRef.current, hoveredKey: hoveredRef.current }),
         edgeReducer: (key, attributes) => reduceEdgeAppearance(graph, key, attributes, { selectedKey: selectedRef.current, hoveredKey: hoveredRef.current }),
       });
@@ -102,6 +103,14 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     rendererRef.current = renderer;
     debug().sigmaCreated += 1;
     const camera = renderer.getCamera();
+    let hoverProbeTimer: number | undefined;
+    const scheduleHoverProbe = () => {
+      if (hoverProbeTimer !== undefined) window.clearTimeout(hoverProbeTimer);
+      hoverProbeTimer = window.setTimeout(() => {
+        hoverProbeTimer = undefined;
+        updateHoverProbe(renderer, graph, selectedRef.current);
+      }, 50);
+    };
     const click = ({ node }: { node: string }) => onSelectRef.current(node, camera.getState());
     const enterNode = ({ node }: { node: string }) => {
       assertGraphNodeLoaded(graph, node);
@@ -130,6 +139,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     const cameraUpdated = () => {
       const state = camera.getState();
       debug().camera = state;
+      scheduleHoverProbe();
       if (validCamera(state)) onCameraRef.current(state);
     };
     renderer.on("clickNode", click);
@@ -138,6 +148,7 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
     camera.on("updated", cameraUpdated);
     return () => {
       disposeWorker(workerRef);
+      if (hoverProbeTimer !== undefined) window.clearTimeout(hoverProbeTimer);
       camera.off("updated", cameraUpdated);
       renderer.off("clickNode", click);
       renderer.off("enterNode", enterNode);
@@ -166,10 +177,11 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         ...position,
         type: "circle",
         label: node.name,
-        color: schemaColor(node.schema.name),
-        size: node.role === "raw" ? 4.2 : 5.4,
-        borderColor: node.role === "raw" ? "#1c2521" : "transparent",
+        color: node.role === "raw" ? "#777c79" : "#444947",
+        size: node.role === "raw" ? 3.8 : 4.8,
+        borderColor: "transparent",
         schema: node.schema.name,
+        role: node.role,
       });
     });
     for (const edge of props.projection.edges) {
@@ -179,10 +191,15 @@ export default function SigmaSurface(props: SigmaSurfaceProps) {
         graph.addDirectedEdgeWithKey(edge.id, source, target, {
           type: "line",
           relationType: edge.type,
-          color: EDGE_COLORS[edge.type] ?? "#8c8f89",
-          size: 0.7,
+          color: DEFAULT_EDGE_COLOR,
+          size: 0.55,
         });
       }
+    }
+    for (const key of graph.nodes()) {
+      const degree = graph.degree(key);
+      const roleBase = graph.getNodeAttribute(key, "role") === "derived" ? 4.2 : 3.4;
+      graph.setNodeAttribute(key, "size", Math.min(12, roleBase + Math.sqrt(degree + 1) * 1.35));
     }
     const restoredCamera = cameraTargetRef.current;
     if (restoredCamera) {
@@ -321,10 +338,12 @@ function applyAuthoritativeCamera(renderer: Sigma, target: CameraState): void {
 
 function updateHoverProbe(renderer: Sigma, graph: Graph, selectedKey?: string): void {
   const dimensions = renderer.getDimensions();
-  let inspected = 0;
+  const container = renderer.getContainer();
+  const containerBounds = container.getBoundingClientRect();
+  const blockers = [...document.querySelectorAll<HTMLElement>(".topbar, .left-panel.mobile-open, .companion.drawer-open, .failure-banner")]
+    .map(element => element.getBoundingClientRect());
   let probe: DebugState["hoverProbe"];
   graph.someNode(key => {
-    if (inspected++ >= 32) return true;
     const neighborCount = graph.neighbors(key).length;
     const incidentEdgeCount = graph.edges(key).length;
     if (key === selectedKey || neighborCount === 0 || neighborCount >= graph.order - 1 || incidentEdgeCount >= graph.size) return false;
@@ -333,16 +352,13 @@ function updateHoverProbe(renderer: Sigma, graph: Graph, selectedKey?: string): 
     const viewport = renderer.framedGraphToViewport(display, { cameraState: renderer.getCamera().getState() });
     if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y)) return false;
     if (viewport.x < 0 || viewport.x > dimensions.width || viewport.y < 0 || viewport.y > dimensions.height) return false;
+    const pageX = containerBounds.left + viewport.x;
+    const pageY = containerBounds.top + viewport.y;
+    if (blockers.some(bounds => pageX >= bounds.left && pageX <= bounds.right && pageY >= bounds.top && pageY <= bounds.bottom)) return false;
     probe = { key, x: viewport.x, y: viewport.y };
     return true;
   });
   debug().hoverProbe = probe;
-}
-
-function schemaColor(schema: string): string {
-  let hash = 0;
-  for (const character of schema) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) | 0;
-  return SCHEMA_COLORS[Math.abs(hash) % SCHEMA_COLORS.length]!;
 }
 
 function debug(): DebugState {

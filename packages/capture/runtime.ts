@@ -229,6 +229,14 @@ export class ConnectorRuntime {
     return health;
   }
 
+  async check(connectionId: string, signal?: AbortSignal): Promise<ConnectorHealth> {
+    const connection = await this.repository.getCaptureConnection(connectionId);
+    if (!connection) throw new CaptureRuntimeError(`Capture connection ${connectionId} does not exist`, "connection_not_found", "runtime", false);
+    const connector = this.requireConnector(connection.connector_id, connection.connector_version);
+    await this.checkHealth(connection, connector, signal);
+    return (await this.repository.getCaptureHealth(connectionId))!;
+  }
+
   async replayDeadLetter(id: string): Promise<CommitCaptureBatchResult> {
     const deadLetter = await this.repository.getCaptureDeadLetter(id);
     if (!deadLetter) throw new CaptureRuntimeError(`Dead letter ${id} does not exist`, "dead_letter_not_found", "runtime", false);

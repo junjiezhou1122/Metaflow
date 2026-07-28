@@ -21,6 +21,12 @@ human, or service. A Worker is a runtime implementation or host of that
 Operator contract. Its definition and configuration may be stored as Views,
 but there is no separate canonical Worker domain layer.
 
+Current product scope keeps Connector Marketplace/onboarding UX and a
+natural-language authoring UI deferred. New sources use the code-first
+Connector Kit, and users or Agents may edit View Package, Transformation,
+Operator, and Automation definitions directly. Existing authoring contracts
+remain backend capability; neither product surface is a release blocker.
+
 ## v1 package boundaries
 
 - `packages/view`: View, Schema, Representation, Materialization, policy,
@@ -29,14 +35,31 @@ but there is no separate canonical Worker domain layer.
   `ViewCommitted` event/outbox ports and post-commit dispatcher.
 - `packages/view-package`: the fail-fast authoring and discovery module for a
   coherent Schema family. It validates Representation and Materialization
-  profiles, human Renderer descriptors, Agent Methods that reference existing
-  Operations or exact Transformations, evolution edges, catalog registration,
-  and conformance fixtures. It never executes a Renderer or Operator, reads a
-  database, or creates another transport/runtime.
+  profiles, exact Processor and Parser descriptors, human Renderer descriptors,
+  Agent Methods that reference existing Operations or exact Transformations,
+  evolution edges, catalog registration, and conformance fixtures. Processor
+  descriptors expose `View[] -> View` formation; Parser descriptors expose the
+  narrower one-source committed search-projection profile. They contain no
+  executable code or runtime connection. The package never executes a Renderer
+  or Operator, reads a database, or creates another transport/runtime.
+- `packages/authoring`: the transport-neutral approval-gated natural-language
+  authoring coordinator. It owns strict Request, Proposal, Decision, and
+  Receipt View contracts, exact proposal digests, idempotent lifecycle
+  transitions, an untrusted schema-value Agent port, and observable authoring
+  events. It delegates concrete View, Transformation CAS/Execution, and exact
+  registered View Package application to their existing owners and never owns
+  storage, model SDKs, transports, executable code, or implementation
+  registration.
 - `view-packages/*`: declarative installable View Package bundles. A bundle may
   depend only on `view`, `transformation`, and `view-package`; concrete hosts
   resolve its Renderer descriptors and existing Operation/Transformation
   references.
+- `view-packages/personal-activity`: the first product-View bundle. It owns the
+  strict semantic Audio, Activity Timeline, and Daily Summary Schema families,
+  exact Timeline/Summary Transformations, Processor descriptors, Renderer
+  descriptors, and conformance fixtures. Its executable acceptance begins
+  from already admitted Audio Views; it does not claim that semantic Audio
+  formation from Screenpipe Raw Views is implemented.
 - `view-packages/application-space`: the strict ordinary View definition for an
   immutable Application Space graph root. It freezes exact entry refs and
   explicit membership/composition semantics. Its Schema relation projection
@@ -55,8 +78,11 @@ but there is no separate canonical Worker domain layer.
   a direct Runtime result or a durable queued receipt without changing Trigger
   semantics.
 - `packages/capture`: Connector and Source Connection contracts, Connector
-  Runtime, candidate admission, Raw View normalization, checkpointing, and
-  capture traces. Its Connector Kit is the small deterministic authoring layer
+  Package descriptors/catalog/trusted exact-artifact loading, CAS-generation
+  onboarding, Connector Runtime, candidate admission, Raw View normalization,
+  checkpointing, and capture traces. Connector Packages freeze Runtime ABI,
+  publisher signature, permissions, named credential slots, configuration
+  schema, and conformance v2 evidence. Its Connector Kit is the small deterministic authoring layer
   for manifest, configuration, source payload, Adapt, candidate, batch, and
   conformance contracts; it never owns provider API or SDK access.
 - `packages/operations`: the transport-neutral v1 operation catalog,
@@ -78,6 +104,13 @@ but there is no separate canonical Worker domain layer.
 - `packages/adapters/*`: independent workspace packages implementing storage,
   Browser, Screenpipe, III, Agent Operator, Trigger, Delivery, and
   Materialization ports.
+- `packages/adapters/personal-activity-operator`: the independent Function
+  Worker implementation for `Audio View[] -> Activity Timeline View -> Daily
+  Summary View`. It returns untrusted candidates only, emits formation events,
+  rejects cross-day or unchanged inputs explicitly, and uses optional exact
+  base Views to form immutable successor revisions. Execution retains
+  authorization, validation, provenance, atomic commit, Run, trace, and
+  Failure View ownership.
 - `packages/adapters/storage-sqlite`: durable View and Run state plus the
   transactional View-commit outbox, local FTS projection, and the accepted
   pinned `sqlite-vec@0.1.9` semantic projection. It persists a
@@ -141,6 +174,12 @@ but there is no separate canonical Worker domain layer.
   protected endpoints; and leaves checkpoint, retry, atomic admission, trace,
   and DLQ to the shared Connector Runtime. Do not vendor, bundle, auto-install,
   or read Screenpipe's internal SQLite.
+- `packages/adapters/screenpipe-derived-views`: owns the deterministic Function
+  Operator implementations and strict Schemas for evidence-level Screenpipe
+  Timeline and Audio Views. It consumes exact admitted Screenpipe Raw Views and
+  emits untrusted candidates through Execution; it never reads Screenpipe's
+  database, invents semantic summaries, commits Views, or substitutes the later
+  `personal.*` product View families.
 - `packages/adapters/clipboard-capture`: the minimum Connector Kit reference.
   It preserves accepted native clipboard fields in one occurrence Raw View,
   emits file values as external-reference Raw Views, and delegates admission,
@@ -155,10 +194,27 @@ but there is no separate canonical Worker domain layer.
   deterministic Markdown/frontmatter/link parsing, and a pre-batch secret gate.
   It never resolves links, fetches attachments, mutates the vault, or copies an
   absolute vault path into Views, checkpoints, traces, or failures.
+- `packages/adapters/notion-capture`: integrates Notion only through the pinned
+  official `@notionhq/client`. Discovery returns bounded previews without
+  admitting Views or advancing checkpoints; pull/reference runs preserve full
+  source objects as Raw Views and retain large media only as provider external
+  references. The named `notion_token` SecretReference is resolved only at the
+  SDK boundary and never enters configuration, Views, traces, or DLQ evidence.
 - `packages/adapters/operation-surfaces`: thin CLI, HTTP, and official MCP SDK
   projections of `OperationService.execute`. Authenticated principals come
   from the composition root and are never accepted from request bodies. This
   adapter does not import View Store, Execution, Capture, or SQLite directly.
+  The installable `mf` executable and retained stdio MCP proxy are strict
+  loopback resident-daemon clients: both negotiate exact doctor, protocol,
+  server, version, endpoint, required Bearer scheme and nonce-bound credential
+  proof, frozen Operation allowlist/fingerprint, timeout, response status, and
+  Operation-envelope evidence before use. The generated installable CLI wire
+  module and `DaemonOperationClient` come from one canonical contract and share
+  the full discriminated-envelope validator plus status/exit mappings. The `mf`
+  executable works from any cwd, rejects unknown Operations before network
+  access, inline/file JSON never falls back to a string, and stdout contains one
+  envelope. MCP v1 tools advertise and validate the canonical discriminated
+  envelope schema and derive effect hints from the Operation catalog.
 - `packages/adapters/web-view-renderers`: the fail-fast Web Renderer ABI and
   trusted lazy implementation registry. It resolves exact
   `id@version@abi_version` descriptors, projects only authorized assets and
@@ -174,6 +230,13 @@ but there is no separate canonical Worker domain layer.
   Thread so Execution timeout and cancellation remain enforceable. It never
   commits Views, writes an index, computes embeddings, fetches references, or
   runs on the Search query path.
+- `packages/adapters/structured-parser`: the exact-versioned JSON, table,
+  property-graph, and external-reference Parser Worker suite. It projects one
+  exact committed View through terminable Function Operators into an untrusted
+  strict `metaflow.view.fragment-set@2` candidate with JSON Pointer,
+  row/column, graph element/property, or reference coordinates. The graph
+  Parser creates no second graph store, and the external-reference Parser
+  requires a matching committed URI Materialization and never fetches it.
 - `packages/adapters/browser-automation`: validates Browser events, performs
   cheap declarative matching, requests exact page/selection evidence through
   the Browser Capture port, and projects Delivery and interaction transport.
@@ -194,12 +257,21 @@ but there is no separate canonical Worker domain layer.
   persistence, Browser/macOS/Scheduler triggers, Browser/macOS/Inbox delivery,
   durable Transformation revisions, shared Operations, a pure v1 HTTP handler,
   Feedback, and trace ports without a mock fallback. It keeps one ACP stdio
-  process resident and waits for ACP shutdown before closing persistence. Its
+  process resident, binds HTTP and MCP explicitly to IPv4 loopback, and waits
+  for ACP shutdown before closing persistence. Its
   temporary `/ambient/v1/assist` surface passes only prompt plus immediate
   voice/screen/app context and a bounded current-screen image into one ACP
   conversation session per `conversation_id`; it injects no MCP servers, does
   not use AgentTask/AgentTaskOutput, and does not create Views. It must never
-  import `@info/core` or `@info/server`.
+  import `@info/core` or `@info/server`. Shared Operations separately compose
+  approval-gated authoring with the resident Agent runtime and the exact
+  registered built-in View Package catalog; this does not route Direct Assist
+  through Views or Automation. Deployments may inject an explicit
+  signed Connector Package catalog, artifact port, publisher trust store, and
+  host permission allowlist; omitting it is a valid no-package deployment and
+  never enables an implicit marketplace. Semantic Search is enabled only when
+  the composition receives both an exact SQLite semantic profile set and a
+  query embedding port; providing only one side fails before persistence opens.
 - `apps/view-explorer`: canonical v1 graph work surface. It calls only bounded
   shared Operations, validates graph/search/exact-View responses, and keeps a
   disposable Graphology projection plus Sigma camera/layout state in the
@@ -209,6 +281,11 @@ but there is no separate canonical Worker domain layer.
   drawers remain synchronized with the visual graph.
 - `apps/*`: CLI, HTTP, MCP, Web, browser extension, and native composition
   roots. Apps do not own domain behavior.
+- `plugins/metaflow-view-access`: one skill-only Codex plugin containing the
+  canonical repo-installable `metaflow-view-access` skill. It teaches bounded
+  discovery, exact read, graph context, and exact citations; it contains no
+  View data, daemon credential, MCP runtime, or duplicate Operation logic and
+  is never injected into Agent prompts.
 
 Legacy `core`, `views`, `view-system`, `processor-runtime`, `runtime`,
 `sensors`, `ambient-layer`, `iii-runtime`, and `scheduled-batch` now live under
@@ -243,6 +320,12 @@ Operations.
 - Credentials exist only as `SourceConnection.secret_refs`. Configuration,
   endpoint userinfo, candidate Representation/metadata, errors, traces, and
   dead letters cannot contain inline secret material.
+- Connector Package loading is exact on `id@version+sha256`. Unsigned,
+  unknown, ambiguous, ABI-incompatible, digest-mismatched, untrusted-publisher,
+  or host-permission-exceeding artifacts fail before executable Connector code
+  is returned. Source Connections bind that exact package and use named secret
+  slots plus compare-and-swap generations; create/check/discover/activate/
+  update/pause/run are explicit idempotent lifecycle actions.
 - A stable source object may accumulate immutable Raw View revisions. Source
   occurrences such as watch sessions or copy events have independent View ids.
 - Cross-Connector semantic duplicates remain separate evidence and are linked
@@ -285,6 +368,48 @@ Operations.
   schemas, authorization decision, result/error envelope, and observer path.
   A transport never reconstructs View, Transformation, Run, policy, Failure,
   or trace behavior.
+- Installed Agent access reaches only the explicitly loopback-bound resident
+  daemon. Doctor is credential-free, declares required Bearer authentication,
+  and proves credential possession for a client nonce while freezing the exact
+  catalog identity before a client may send its token. Every privileged
+  Operations, compatibility exact-read, and
+  HTTP MCP request authenticates before a `user:local` principal exists. The
+  same boundary covers every resident capture, Automation signal, Delivery
+  poll/interaction, macOS Browser-context bridge, Inbox, and Direct Assist
+  route before request content, request ids, or ACP invocation are reached;
+  only static health and nonce-bound doctor remain public. The executable
+  route classification lives in `apps/ambient-daemon/http-route-security.ts`;
+  missing or wrong credentials fail closed, untrusted browser origins are
+  rejected, exact trusted browser origins still require Bearer authentication,
+  and privileged responses carry no wildcard CORS grant. `mf` and the retained
+  stdio MCP proxy fail on protocol, server, authentication, catalog, version,
+  endpoint, status, Operation, timeout, or reachability mismatch without
+  printing credentials; a long-lived client repeats the credential-free nonce
+  proof before every authenticated call so daemon replacement cannot inherit a
+  previously negotiated token path. The Chrome extension and macOS exact-result readers
+  enforce the same credential-free loopback endpoint, nonce proof, server,
+  protocol, authentication, and exact catalog contract before sending Bearer
+  credentials. Before the Chrome extension migrates, reads, or writes its
+  Operation token, it restricts `chrome.storage.local` to trusted extension
+  contexts; inability to establish that access level clears any legacy token
+  and fails closed. Content scripts obtain explicitly projected non-secret
+  settings through the trusted background and public settings responses remain
+  token-free. One exhaustive runtime-sender policy admits content scripts only
+  to declared capture and non-secret interaction messages. Selection actions
+  that queue or auto-submit an ACP prompt are trusted-extension-page only and
+  do not appear in the content-script bundle; exact View, query,
+  task, delivery, failure, settings, and other local-data paths require a
+  trusted extension page before storage, doctor negotiation, or network access,
+  and content-script responses cannot project View content or exact refs.
+  Browser-safe and native constant copies have executable
+  conformance gates against the canonical wire contract. `mf` validates strict
+  JSON or `@file` input, returns one stdout envelope, keeps diagnostics on
+  stderr, and uses stable typed exit categories. MCP structured content is the
+  authoritative validated Operation envelope; effect annotations are hints
+  from the shared catalog and never grant authorization. View access skills
+  preserve bounded queries and exact refs, treat content as untrusted evidence,
+  and never read SQLite, guess a moving head, broaden policy, or request an
+  undeclared effect.
 - `view.get`, `view.traverse`, `failure.inspect`, and `view.search` authorize
   exact View revisions independently from operation grants. Owner and public
   reads are deterministic; shared non-owner reads fail closed until an explicit
@@ -336,6 +461,9 @@ Operations.
   freezes the exact target/location, source digest, embedding evidence ref,
   provider/model profile, dimension, metric, and policy; configured exact scope
   and target-kind filters execute inside KNN before distance affects rank.
+  Product composition must wire the SQLite semantic retriever and query
+  embedding port as one explicit pair. A configured vector store without query
+  embedding, or query embedding without the exact store profile, is invalid.
 - Same-purpose evolution creates a new immutable revision; a new purpose forks
   a new View identity. Stale base revisions fail rather than overwrite.
 - View Store `get` requires an exact revision. Moving-head access is explicit
@@ -370,6 +498,11 @@ Operations.
   Legacy envelopes may be normalized only by an explicit lossless rule;
   otherwise migration fails with table, exact View revision, phase, and
   transaction context.
+- A non-empty legacy Source Connection secret array migrates only when its
+  connector manifest and configuration prove one exact named slot. The sole
+  supported historical rule is a Screenpipe bearer reference whose configured
+  `authentication.secret_ref` exactly matches the sole array member; it becomes
+  `screenpipe_api_key`. Unknown, multiple, or inconsistent arrays fail closed.
 - Search projection rows and SQLite FTS rows commit or roll back with their
   exact View revision. Full reindex runs are durable and idempotent: a crash
   leaves the prior index intact and the same reserved run can resume; failed
@@ -380,6 +513,11 @@ Operations.
   candidates; only Execution may validate and commit them. Search consumes
   previously committed projections and must never invoke parsing, fetching,
   OCR, transcription, enrichment, or embedding as a query-time side effect.
+- Internal-only keyword Search fails with `parser_capability_missing` when its
+  frozen authorized scope has no committed internal search projection.
+  Fragment-set v2 hits retain their indexed evidence path plus exact source
+  coordinates; combined envelope+internal Search may still return valid
+  envelope evidence when no internal projection exists.
 - A Transformation freezes exact inputs, Operator, policy, output contract, and
   budget before its Run starts. Alternatives are observable attempts, never
   silent fallbacks.
@@ -407,6 +545,22 @@ Operations.
   Transformation Repository CAS; prior Transformation and View revisions are
   never mutated. Every requested instruction, Operator configuration, output
   Schema, or selection change must be explicitly resolved.
+- Natural-language authoring is Request View -> Proposal View -> exact
+  Approval/Reject View -> Apply -> terminal Receipt View. The Agent returns
+  untrusted strict `schema_value` JSON and never commits a target. Approval
+  binds the exact Proposal revision and canonical artifact digest. Concrete
+  Views use View Repository validation, Transformations use repository CAS and
+  ordinary Execution, and View Packages may reference only an exact registered
+  catalog implementation whose manifest digest still matches. Generated
+  executable code, manifests, commands, entrypoints, and source blobs are
+  rejected until a separate sandbox and signing design exists.
+- Authoring candidates are bounded to 1 MB. A Request policy must equal or
+  strengthen the strictest exact source policy and its external-model decision
+  is passed to the Agent runtime. The canonical Agent bridge treats a runtime
+  as external-model capable unless its id is explicitly registered as local;
+  a prohibited Request fails before runtime submission. Concrete View relations
+  and revision bases must already be frozen exact Request sources; the applied
+  View retains the Request plus those sources in provenance.
 - `packages/adapters/transformation-sqlite` owns durable Transformation
   revision heads, exact historical reads, replay idempotency, and atomic
   compare-and-swap. `packages/execution` owns Feedback target/Run validation and
@@ -635,3 +789,37 @@ corepack pnpm test:v1-vertical
 release gate. The Chrome extension remains a separately built temporary
 surface; do not claim its full typecheck passes until its documented migration
 work and unrelated errors are resolved.
+
+`pnpm test:personalized-view-workflow` is the deterministic Codex JSONL and
+Obsidian Markdown acceptance boundary for Parser formation, natural-language
+Transformation authoring, strict Agent output, Application Space composition,
+keyword/internal/relation/semantic Search, Feedback evolution, restart/replay,
+and Privacy Forget.
+
+`pnpm smoke:personalized-sources --config <absolute-path>` is the opt-in real
+personal-source acceptance boundary. With `workflow.enabled`, the same exact
+pre-Forget Views must pass both an independent Claude Code ACP process plus a
+staged project-level Metaflow skill gate and the real
+Vite/React/Graphology/Sigma View Explorer gate.
+The temporary Agent host rejects every undeclared Search request, exact View
+read, or graph root/bound before `OperationService.execute`; the shared ACP
+runtime closes and, when necessary, hard-kills a non-cooperative independent
+Claude process within a bounded termination window. The browser
+gate validates the exact Application Space root and working-state `view.get`
+response before mounting and disposing the trusted Web Renderer Registry for
+that same authorized View revision.
+Neither gate may be replaced by synthetic evidence in the CLI smoke. A missing
+or invalid Claude credential is an external failed gate, not permission to skip
+Agent access or close its acceptance issue. Connector Marketplace/onboarding
+UX and a natural-language authoring UI are explicitly deferred and are not
+acceptance blockers; the code-first extension contracts remain canonical.
+The Claude gate receives exact Search input templates but never the expected
+View refs; those remain host-side validation evidence so the Agent must prove
+discovery before exact reads. It must emit no assistant prose before its one
+strict final JSON value; mixed prose/JSON remains an explicit failure.
+
+ACP structured output is reconstructed by complete agent message identity:
+chunks with the same `messageId` append across interleaved tool, plan, thought,
+and usage updates; a fully unidentified v1 stream is one legacy message. Mixed
+identified/unidentified chunks, non-text structured output, an invalid final
+message, or any attempt to accept one parseable fragment fails explicitly.

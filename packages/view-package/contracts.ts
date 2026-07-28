@@ -17,19 +17,28 @@ export const ViewPackageSchemaKeySchema = z.object({
   version: z.number().int().positive(),
 }).strict();
 
+const MediaTypeEssenceSchema = z.string().trim().regex(
+  /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u,
+  "Media type declarations must be a type/subtype essence without parameters",
+);
+
 export const ViewPackageRepresentationProfileSchema = z.object({
   id: IdentifierSchema,
   schema: ViewPackageSchemaKeySchema,
   forms: z.array(z.enum(["inline", "external_reference"])).min(1),
   kinds: z.array(IdentifierSchema).min(1),
-  media_types: z.array(z.string().trim().min(1)).default([]),
-}).strict();
+  media_types: z.array(MediaTypeEssenceSchema).default([]),
+}).strict().superRefine((profile, context) => {
+  assertUnique(profile.forms, "Representation form", ["forms"], context);
+  assertUnique(profile.kinds, "Representation kind", ["kinds"], context);
+  assertUnique(profile.media_types.map(value => value.toLowerCase()), "Representation media type", ["media_types"], context);
+});
 
 export const ViewPackageMaterializationProfileSchema = z.object({
   id: IdentifierSchema,
   schema: ViewPackageSchemaKeySchema,
   formats: z.array(IdentifierSchema).min(1),
-  media_types: z.array(z.string().trim().min(1)).min(1),
+  media_types: z.array(MediaTypeEssenceSchema).min(1),
   locations: z.array(z.enum(["inline", "uri", "content_addressed"])).min(1),
 }).strict();
 
@@ -40,7 +49,7 @@ export const ViewPackageRendererSchema = z.object({
   schema: ViewPackageSchemaKeySchema,
   surfaces: z.array(z.enum(["web", "native", "generic"])).min(1),
   representation_kinds: z.array(IdentifierSchema).min(1),
-  media_types: z.array(z.string().trim().min(1)).min(1).optional(),
+  media_types: z.array(MediaTypeEssenceSchema).min(1).optional(),
   priority: z.number().int().default(0),
 }).strict();
 
@@ -77,6 +86,46 @@ export const ViewPackageEvolutionSchema = z.object({
   transformation: ExactTransformationRefSchema,
 }).strict();
 
+const ViewPackageAcceptedRepresentationSchema = z.object({
+  forms: z.array(z.enum(["inline", "external_reference"])).min(1),
+  representation_kinds: z.array(IdentifierSchema).min(1),
+  media_types: z.array(MediaTypeEssenceSchema).default([]),
+}).strict().superRefine((profile, context) => {
+  assertUnique(profile.forms, "Accepted Representation form", ["forms"], context);
+  assertUnique(profile.representation_kinds, "Accepted Representation kind", ["representation_kinds"], context);
+  assertUnique(profile.media_types.map(value => value.toLowerCase()), "Accepted media type", ["media_types"], context);
+});
+
+export const ViewPackageParserSchema = z.object({
+  id: IdentifierSchema,
+  version: z.number().int().positive(),
+  abi_version: z.literal(1),
+  input_schema: ViewPackageSchemaKeySchema,
+  accepts: ViewPackageAcceptedRepresentationSchema,
+  transformation: ExactTransformationRefSchema,
+  output_schema: ViewPackageSchemaKeySchema,
+  priority: z.number().int().default(0),
+}).strict();
+
+export const ViewPackageProcessorInputSchema = z.object({
+  role: IdentifierSchema,
+  schemas: z.array(ViewPackageSchemaKeySchema).min(1),
+  required: z.boolean().default(true),
+}).strict().superRefine((input, context) => {
+  assertUnique(input.schemas.map(schemaKey), "Processor input Schema", ["schemas"], context);
+});
+
+export const ViewPackageProcessorSchema = z.object({
+  id: IdentifierSchema,
+  version: z.number().int().positive(),
+  inputs: z.array(ViewPackageProcessorInputSchema).min(1),
+  output_schema: ViewPackageSchemaKeySchema,
+  transformation: ExactTransformationRefSchema,
+  priority: z.number().int().default(0),
+}).strict().superRefine((processor, context) => {
+  assertUnique(processor.inputs.map(input => input.role), "Processor input role", ["inputs"], context);
+});
+
 export const ViewPackageManifestSchema = z.object({
   manifest_version: z.literal(1),
   id: IdentifierSchema,
@@ -87,6 +136,8 @@ export const ViewPackageManifestSchema = z.object({
   representations: z.array(ViewPackageRepresentationProfileSchema).min(1),
   materializations: z.array(ViewPackageMaterializationProfileSchema).min(1),
   renderers: z.array(ViewPackageRendererSchema).default([]),
+  parsers: z.array(ViewPackageParserSchema).default([]),
+  processors: z.array(ViewPackageProcessorSchema).default([]),
   methods: z.array(ViewPackageMethodSchema).default([]),
   evolutions: z.array(ViewPackageEvolutionSchema).default([]),
 }).strict().superRefine((manifest, context) => {
@@ -94,6 +145,8 @@ export const ViewPackageManifestSchema = z.object({
   assertUnique(manifest.representations.map(item => item.id), "Representation profile", ["representations"], context);
   assertUnique(manifest.materializations.map(item => item.id), "Materialization profile", ["materializations"], context);
   assertUnique(manifest.renderers.map(rendererKey), "Renderer", ["renderers"], context);
+  assertUnique(manifest.parsers.map(parserKey), "Parser", ["parsers"], context);
+  assertUnique(manifest.processors.map(processorKey), "Processor", ["processors"], context);
   assertUnique(manifest.methods.map(item => item.id), "Method", ["methods"], context);
   assertUnique(manifest.evolutions.map(item => item.id), "Evolution", ["evolutions"], context);
 
@@ -106,6 +159,20 @@ export const ViewPackageManifestSchema = z.object({
   ] as const) {
     items.forEach((item, index) => assertDeclaredSchema(item.schema, declaredSchemas, [collection, index, "schema"], context));
   }
+  manifest.parsers.forEach((parser, index) => {
+    assertDeclaredSchema(parser.input_schema, declaredSchemas, ["parsers", index, "input_schema"], context);
+    const profiles = manifest.representations.filter(profile => schemaKey(profile.schema) === schemaKey(parser.input_schema));
+    if (!parserAcceptanceIsCovered(parser, profiles)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["parsers", index, "accepts"],
+        message: `Parser ${parserKey(parser)} accepts a Representation tuple not declared by this View Package`,
+      });
+    }
+  });
+  manifest.processors.forEach((processor, index) => {
+    assertDeclaredSchema(processor.output_schema, declaredSchemas, ["processors", index, "output_schema"], context);
+  });
   manifest.evolutions.forEach((evolution, index) => {
     assertDeclaredSchema(evolution.from, declaredSchemas, ["evolutions", index, "from"], context);
     assertDeclaredSchema(evolution.to, declaredSchemas, ["evolutions", index, "to"], context);
@@ -123,6 +190,9 @@ export type ViewPackageSchemaKey = z.infer<typeof ViewPackageSchemaKeySchema>;
 export type ViewPackageRepresentationProfile = z.infer<typeof ViewPackageRepresentationProfileSchema>;
 export type ViewPackageMaterializationProfile = z.infer<typeof ViewPackageMaterializationProfileSchema>;
 export type ViewPackageRenderer = z.infer<typeof ViewPackageRendererSchema>;
+export type ViewPackageParser = z.infer<typeof ViewPackageParserSchema>;
+export type ViewPackageProcessorInput = z.infer<typeof ViewPackageProcessorInputSchema>;
+export type ViewPackageProcessor = z.infer<typeof ViewPackageProcessorSchema>;
 export type ViewPackageMethodEffect = z.infer<typeof ViewPackageMethodEffectSchema>;
 export type ViewPackageMethod = z.infer<typeof ViewPackageMethodSchema>;
 export type ViewPackageEvolution = z.infer<typeof ViewPackageEvolutionSchema>;
@@ -134,7 +204,19 @@ export type ViewPackage = {
   schema(key: ViewPackageSchemaKey): ViewSchemaRef;
   supports(key: ViewPackageSchemaKey): boolean;
   renderers(key: ViewPackageSchemaKey, surface?: ViewPackageRenderer["surfaces"][number]): ViewPackageRenderer[];
+  parsers(key: ViewPackageSchemaKey, representation?: ViewRepresentation): ViewPackageParser[];
+  processors(key: ViewPackageSchemaKey): ViewPackageProcessor[];
   method(id: string): ViewPackageMethod | undefined;
+};
+
+export type ViewPackageTransformationConformance = {
+  ref: ExactTransformationRef;
+  output_schema: ViewPackageSchemaKey;
+  input_roles?: ReadonlyArray<{
+    role: string;
+    required: boolean;
+    schemas: ReadonlyArray<ViewPackageSchemaKey>;
+  }>;
 };
 
 export type ViewPackageConformanceInput = {
@@ -142,10 +224,7 @@ export type ViewPackageConformanceInput = {
   fixtures: readonly unknown[];
   operations: ReadonlySet<string>;
   renderers: ReadonlySet<string>;
-  transformations: ReadonlyMap<string, {
-    ref: ExactTransformationRef;
-    output_schema: ViewPackageSchemaKey;
-  }>;
+  transformations: ReadonlyMap<string, ViewPackageTransformationConformance>;
 };
 
 export type ViewPackageConformanceReport = {
@@ -155,6 +234,8 @@ export type ViewPackageConformanceReport = {
   fixtures: number;
   methods: number;
   renderers: number;
+  parsers: number;
+  processors: number;
   evolutions: number;
 };
 
@@ -166,8 +247,24 @@ export function rendererKey(renderer: Pick<ViewPackageRenderer, "id" | "version"
   return `${renderer.id}@${renderer.version}@${renderer.abi_version}`;
 }
 
+export function parserKey(parser: Pick<ViewPackageParser, "id" | "version" | "abi_version">): string {
+  return `${parser.id}@${parser.version}@${parser.abi_version}`;
+}
+
+export function processorKey(processor: Pick<ViewPackageProcessor, "id" | "version">): string {
+  return `${processor.id}@${processor.version}`;
+}
+
 export function transformationKey(ref: ExactTransformationRef): string {
   return `${ref.transformation_id}@${ref.revision}`;
+}
+
+export function normalizeMediaType(value: string): string {
+  const essence = value.split(";", 1)[0]!.trim().toLowerCase();
+  if (!MediaTypeEssenceSchema.safeParse(essence).success) {
+    throw new TypeError(`Invalid media type essence: ${value}`);
+  }
+  return essence;
 }
 
 function assertUnique(values: readonly string[], label: string, path: Array<string | number>, context: z.RefinementCtx): void {
@@ -191,6 +288,22 @@ function assertDeclaredSchema(
     path,
     message: `Schema ${schemaKey(schema)} is not declared by this View Package`,
   });
+}
+
+function parserAcceptanceIsCovered(
+  parser: ViewPackageParser,
+  profiles: readonly ViewPackageRepresentationProfile[],
+): boolean {
+  return parser.accepts.forms.every(form =>
+    parser.accepts.representation_kinds.every(kind => {
+      const matchingProfiles = profiles.filter(profile => profile.forms.includes(form) && profile.kinds.includes(kind));
+      if (parser.accepts.media_types.length === 0) {
+        return matchingProfiles.some(profile => profile.media_types.length === 0);
+      }
+      return parser.accepts.media_types.every(mediaType =>
+        matchingProfiles.some(profile => profile.media_types.length === 0
+          || profile.media_types.map(value => value.toLowerCase()).includes(mediaType.toLowerCase())));
+    }));
 }
 
 export type { ViewRepresentation };

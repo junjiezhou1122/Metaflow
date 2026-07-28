@@ -212,6 +212,13 @@ semantic restructuring, and embedding are explicit Transformations. They
 produce Derived Views with exact provenance. Those results may then expose
 their own searchable projections.
 
+The accepted structured path uses `metaflow.view.fragment-set@2`. JSON, table,
+property-graph, and external-reference Parsers preserve their source coordinates
+inside each fragment. SQLite FTS indexes only the committed fragment text;
+Search evidence keeps the FTS unit path and additionally returns the exact JSON
+Pointer, row/column, graph element/property, or external-reference coordinate.
+The graph projection is not a second graph database.
+
 ## Indexes are materializations, not truth
 
 The canonical truth remains the exact View revision. Search infrastructure may
@@ -261,6 +268,11 @@ model, or creates a Derived View. If a requested mode lacks a compatible and
 already available projection, the result must explicitly report the skipped
 mode and reason or fail according to the operation contract. It must not
 pretend that the View contained no matching information.
+
+For an internal-only keyword request, a frozen scope with no committed
+Representation search units fails as `parser_capability_missing`. A combined
+envelope+internal request may still return valid envelope evidence; missing
+internal content does not erase an exact name or metadata match.
 
 ## Result shape
 

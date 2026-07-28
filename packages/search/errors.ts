@@ -13,6 +13,7 @@ export const SearchErrorCodeSchema = z.enum([
   "scope_resolution_failed",
   "scope_stale",
   "mode_unavailable",
+  "parser_capability_missing",
   "mode_forbidden",
   "semantic_not_configured",
   "relation_scope_unsupported",

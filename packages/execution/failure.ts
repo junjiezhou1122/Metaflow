@@ -289,13 +289,13 @@ export function strictSchemaRef(name: string, schema: z.ZodTypeAny, version = 1)
   };
 }
 
-function normalizeGeneratedSchema(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map(normalizeGeneratedSchema);
+function normalizeGeneratedSchema(value: JsonValue, parentKey?: string): JsonValue {
+  if (Array.isArray(value)) return value.map(item => normalizeGeneratedSchema(item, parentKey));
   if (typeof value !== "object" || value === null) return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => key !== "format")
-      .map(([key, item]) => [key, normalizeGeneratedSchema(item)]),
+      .filter(([key]) => key !== "format" || parentKey === "properties")
+      .map(([key, item]) => [key, normalizeGeneratedSchema(item, key)]),
   );
 }
 

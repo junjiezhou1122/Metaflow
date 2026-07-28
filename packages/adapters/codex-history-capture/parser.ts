@@ -11,16 +11,27 @@ import {
 } from "./contracts.js";
 import { assertCodexContentSafe, type CodexContentGate } from "./secret-gate.js";
 
-const OUTER_KEYS = new Set(["type", "timestamp", "payload"]);
+const OUTER_KEYS = new Set(["type", "timestamp", "ordinal", "payload"]);
 const SESSION_META_KEYS = new Set([
   "session_id", "id", "timestamp", "cwd", "originator", "cli_version", "source", "thread_source",
-  "model_provider", "base_instructions", "dynamic_tools", "forked_from_id", "multi_agent_version",
+  "model_provider", "base_instructions", "dynamic_tools", "forked_from_id", "parent_thread_id",
+  "agent_nickname", "agent_role", "agent_type", "agent_path", "selected_capability_roots", "memory_mode",
+  "history_mode", "history_base", "subagent_history_start_ordinal", "multi_agent_version", "context_window", "git",
+]);
+const GIT_INFO_KEYS = new Set(["commit_hash", "branch", "repository_url"]);
+const HISTORY_POSITION_KEYS = new Set(["thread_id", "end_ordinal_exclusive", "end_byte_offset"]);
+const SESSION_CONTEXT_WINDOW_KEYS = new Set(["window_id"]);
+const SESSION_SOURCE_KEYS = new Set(["custom", "internal", "subagent"]);
+const SUBAGENT_SOURCE_KEYS = new Set(["thread_spawn", "other"]);
+const SUBAGENT_THREAD_SPAWN_KEYS = new Set([
+  "parent_thread_id", "depth", "agent_path", "agent_nickname", "agent_role", "agent_type",
 ]);
 const TURN_CONTEXT_KEYS = new Set([
   "turn_id", "cwd", "workspace_roots", "current_date", "timezone", "approval_policy", "sandbox_policy",
   "permission_profile", "model", "personality", "collaboration_mode", "multi_agent_version", "realtime_active",
-  "effort", "summary",
+  "approvals_reviewer", "network", "file_system_sandbox_policy", "comp_hash", "multi_agent_mode", "effort", "summary",
 ]);
+const TURN_CONTEXT_NETWORK_KEYS = new Set(["allowed_domains", "denied_domains"]);
 const MESSAGE_KEYS = new Set(["type", "id", "role", "content", "phase", "internal_chat_message_metadata_passthrough"]);
 const TEXT_PART_KEYS = new Set(["type", "text"]);
 const IMAGE_PART_KEYS = new Set(["type", "image_url", "detail"]);
@@ -47,8 +58,11 @@ const EVENT_EXCLUSIONS: Readonly<Record<string, CodexExclusionCategory>> = {
   task_complete: "instruction_or_context",
   turn_aborted: "instruction_or_context",
   thread_settings_applied: "instruction_or_context",
+  thread_goal_updated: "instruction_or_context",
   sub_agent_activity: "instruction_or_context",
   context_compacted: "compaction",
+  entered_review_mode: "instruction_or_context",
+  exited_review_mode: "instruction_or_context",
   mcp_tool_call_end: "tool_result",
   patch_apply_end: "tool_result",
   web_search_end: "tool_result",
@@ -59,7 +73,7 @@ export type ParsedLineOutcome = {
   exclusions: Partial<Record<CodexExclusionCategory, number>>;
   turn_id?: string;
   session_id?: string;
-  forked_from_id?: string;
+  history_parent_id?: string;
 };
 
 export type RolloutLine = {
@@ -162,11 +176,11 @@ export async function verifyCommittedPrefix(input: {
   expected_sha256: string;
   expected_session_id: string;
   configuration: CodexHistoryConfiguration;
-}): Promise<{ hash: Hash; turn_id?: string; forked_from_id?: string }> {
+}): Promise<{ hash: Hash; turn_id?: string; history_thread_ids: string[] }> {
   const hash = createHash("sha256");
   let throughOffset = 0;
   let turnId: string | undefined;
-  let forkedFromId: string | undefined;
+  const historyThreadIds = new Set<string>();
   let sawSession = false;
   for await (const line of readCompleteRolloutLines({
     handle: input.handle,
@@ -180,11 +194,11 @@ export async function verifyCommittedPrefix(input: {
       line,
       expected_session_id: input.expected_session_id,
       current_turn_id: turnId,
-      ...(forkedFromId ? { forked_from_id: forkedFromId } : {}),
+      allowed_history_thread_ids: historyThreadIds,
     });
     if (outcome.session_id) sawSession = true;
     if (outcome.turn_id !== undefined) turnId = outcome.turn_id;
-    if (outcome.forked_from_id !== undefined) forkedFromId = outcome.forked_from_id;
+    if (outcome.history_parent_id !== undefined) historyThreadIds.add(outcome.history_parent_id);
   }
   if (throughOffset !== input.committed_offset || (input.committed_offset > 0 && !sawSession)) {
     throw sourceContractError("Codex checkpoint does not end on a complete record", input.committed_offset);
@@ -207,7 +221,7 @@ export async function verifyCommittedPrefix(input: {
   return {
     hash,
     ...(turnId ? { turn_id: turnId } : {}),
-    ...(forkedFromId ? { forked_from_id: forkedFromId } : {}),
+    history_thread_ids: [...historyThreadIds].sort(),
   };
 }
 
@@ -215,7 +229,7 @@ export async function parseAndGateCodexRolloutLine(input: {
   line: RolloutLine;
   expected_session_id: string;
   current_turn_id?: string;
-  forked_from_id?: string;
+  allowed_history_thread_ids?: ReadonlySet<string>;
   gate: CodexContentGate;
 }): Promise<ParsedLineOutcome> {
   const outcome = parseCodexRolloutLine(input);
@@ -227,7 +241,7 @@ export async function parseAndGateCodexRolloutLine(input: {
         outcome.record.source,
         outcome.record.originator,
         outcome.record.cli_version,
-        outcome.record.model_provider,
+        ...(outcome.record.model_provider ? [outcome.record.model_provider] : []),
         outcome.record.workspace_path,
       ]
     : [
@@ -254,7 +268,7 @@ export function parseCodexRolloutLine(input: {
   line: RolloutLine;
   expected_session_id?: string;
   current_turn_id?: string;
-  forked_from_id?: string;
+  allowed_history_thread_ids?: ReadonlySet<string>;
 }): ParsedLineOutcome {
   let value: unknown;
   try {
@@ -266,32 +280,37 @@ export function parseCodexRolloutLine(input: {
   assertKnownKeys(envelope, OUTER_KEYS, input.line.byte_offset, "rollout envelope");
   const outerType = requireString(envelope.type, input.line.byte_offset, "envelope type");
   const timestamp = requireTimestamp(envelope.timestamp, input.line.byte_offset);
+  if (envelope.ordinal !== undefined) requireNonnegativeInteger(envelope.ordinal, input.line.byte_offset, "rollout ordinal");
   const payload = requireObject(envelope.payload, input.line.byte_offset, `${outerType} payload`);
   const recordSha256 = createHash("sha256").update(input.line.bytes).digest("hex");
 
   if (outerType === "session_meta") {
     assertKnownKeys(payload, SESSION_META_KEYS, input.line.byte_offset, "session metadata");
-    for (const key of ["base_instructions", "dynamic_tools", "thread_source"] as const) {
-      if (!(key in payload)) throw sourceContractError(`Codex session metadata omitted ${key}`, input.line.byte_offset);
-    }
-    const sessionId = requireString(payload.session_id, input.line.byte_offset, "session id");
-    if (requireString(payload.id, input.line.byte_offset, "session metadata id") !== sessionId) {
-      throw sourceContractError("Codex session metadata id does not match session_id", input.line.byte_offset);
-    }
-    const payloadTimestamp = requireTimestamp(payload.timestamp, input.line.byte_offset);
-    if (payloadTimestamp !== timestamp) throw sourceContractError("Codex session timestamps disagree", input.line.byte_offset);
-    requireObject(payload.base_instructions, input.line.byte_offset, "base instructions");
-    if (!Array.isArray(payload.dynamic_tools)) throw sourceContractError("Codex dynamic_tools must be an array", input.line.byte_offset);
-    requireString(payload.thread_source, input.line.byte_offset, "thread source");
+    const threadId = requireString(payload.id, input.line.byte_offset, "session metadata id");
+    if (payload.session_id !== undefined) requireString(payload.session_id, input.line.byte_offset, "session id");
+    requireTimestamp(payload.timestamp, input.line.byte_offset);
+    validateOptionalSessionContext(payload, input.line.byte_offset);
+    const source = normalizeSessionSource(payload.source, input.line.byte_offset);
     const declaredForkedFromId = payload.forked_from_id === undefined
       ? undefined
       : requireString(payload.forked_from_id, input.line.byte_offset, "forked session id");
     if (payload.multi_agent_version !== undefined) requireString(payload.multi_agent_version, input.line.byte_offset, "multi-agent version");
-    if (input.expected_session_id && input.expected_session_id !== sessionId) {
-      if (input.forked_from_id === sessionId) return { exclusions: { instruction_or_context: 1 } };
+    if (input.expected_session_id && input.expected_session_id !== threadId) {
+      if (input.allowed_history_thread_ids?.has(threadId)) {
+        return {
+          exclusions: { instruction_or_context: 1 },
+          ...(declaredForkedFromId ? { history_parent_id: declaredForkedFromId } : {}),
+        };
+      }
       throw sourceContractError("Codex rollout changed session identity", input.line.byte_offset, {
         expected_session_id: input.expected_session_id,
       });
+    }
+    if (input.expected_session_id && input.line.byte_offset > 0) {
+      return {
+        exclusions: { instruction_or_context: 1 },
+        ...(declaredForkedFromId ? { history_parent_id: declaredForkedFromId } : {}),
+      };
     }
     const record = parseSafeRecord({
       kind: "session_meta",
@@ -299,25 +318,30 @@ export function parseCodexRolloutLine(input: {
       byte_length: input.line.byte_length,
       record_sha256: recordSha256,
       timestamp,
-      session_id: sessionId,
-      source: requireString(payload.source, input.line.byte_offset, "session source"),
+      session_id: threadId,
+      source,
       originator: requireString(payload.originator, input.line.byte_offset, "session originator"),
       cli_version: requireString(payload.cli_version, input.line.byte_offset, "CLI version"),
-      model_provider: requireString(payload.model_provider, input.line.byte_offset, "model provider"),
+      ...(payload.model_provider === undefined || payload.model_provider === null
+        ? {}
+        : { model_provider: requireString(payload.model_provider, input.line.byte_offset, "model provider") }),
       workspace_path: requireString(payload.cwd, input.line.byte_offset, "workspace path"),
     }, input.line.byte_offset);
     return {
       record,
       exclusions: { instruction_or_context: 1 },
-      session_id: sessionId,
-      ...(declaredForkedFromId ? { forked_from_id: declaredForkedFromId } : {}),
+      session_id: threadId,
+      ...(declaredForkedFromId ? { history_parent_id: declaredForkedFromId } : {}),
     };
   }
 
   if (outerType === "turn_context") {
     assertKnownKeys(payload, TURN_CONTEXT_KEYS, input.line.byte_offset, "turn context");
-    const turnId = requireString(payload.turn_id, input.line.byte_offset, "turn id");
-    return { exclusions: { instruction_or_context: 1 }, turn_id: turnId };
+    validateOptionalTurnContext(payload, input.line.byte_offset);
+    const turnId = payload.turn_id === undefined || payload.turn_id === null
+      ? undefined
+      : requireString(payload.turn_id, input.line.byte_offset, "turn id");
+    return { exclusions: { instruction_or_context: 1 }, ...(turnId ? { turn_id: turnId } : {}) };
   }
 
   if (outerType === "response_item") {
@@ -386,6 +410,204 @@ export function parseCodexRolloutLine(input: {
   throw sourceContractError("Codex rollout envelope type is not in the parser contract", input.line.byte_offset);
 }
 
+function normalizeSessionSource(value: unknown, byteOffset: number): string {
+  if (value === undefined) return "vscode";
+  if (typeof value === "string") {
+    const source = requireString(value, byteOffset, "session source");
+    return source.length <= 120 ? source : "unknown";
+  }
+  const source = requireObject(value, byteOffset, "session source");
+  assertExactlyOneKnownKey(source, SESSION_SOURCE_KEYS, byteOffset, "session source");
+  if ("custom" in source) {
+    const custom = requireString(source.custom, byteOffset, "custom session source");
+    return custom.length <= 120 ? custom : "custom";
+  }
+  if ("internal" in source) {
+    if (source.internal !== "memory_consolidation") {
+      throw sourceContractError("Codex internal session source is not in the parser contract", byteOffset);
+    }
+    return "internal_memory_consolidation";
+  }
+  return normalizeSubagentSource(source.subagent, byteOffset);
+}
+
+function normalizeSubagentSource(value: unknown, byteOffset: number): string {
+  if (typeof value === "string") {
+    if (!["review", "compact", "memory_consolidation"].includes(value)) {
+      throw sourceContractError("Codex subagent session source is not in the parser contract", byteOffset);
+    }
+    return `subagent_${value}`;
+  }
+  const source = requireObject(value, byteOffset, "subagent session source");
+  assertExactlyOneKnownKey(source, SUBAGENT_SOURCE_KEYS, byteOffset, "subagent session source");
+  if ("other" in source) {
+    requireString(source.other, byteOffset, "other subagent source");
+    return "subagent_other";
+  }
+  const threadSpawn = requireObject(source.thread_spawn, byteOffset, "thread-spawn session source");
+  assertKnownKeys(threadSpawn, SUBAGENT_THREAD_SPAWN_KEYS, byteOffset, "thread-spawn session source");
+  requireString(threadSpawn.parent_thread_id, byteOffset, "thread-spawn parent thread id");
+  requireIntegerInRange(threadSpawn.depth, -(2 ** 31), 2 ** 31 - 1, byteOffset, "thread-spawn depth");
+  for (const [key, label] of [
+    ["agent_path", "thread-spawn agent path"],
+    ["agent_nickname", "thread-spawn agent nickname"],
+    ["agent_role", "thread-spawn agent role"],
+    ["agent_type", "thread-spawn legacy agent type"],
+  ] as const) {
+    if (threadSpawn[key] !== undefined && threadSpawn[key] !== null) {
+      requireString(threadSpawn[key], byteOffset, label);
+    }
+  }
+  if (threadSpawn.agent_role !== undefined && threadSpawn.agent_type !== undefined) {
+    throw sourceContractError("Codex thread-spawn source cannot contain both agent_role and agent_type", byteOffset);
+  }
+  return "subagent_thread_spawn";
+}
+
+function assertExactlyOneKnownKey(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  byteOffset: number,
+  label: string,
+): void {
+  assertKnownKeys(value, allowed, byteOffset, label);
+  if (Object.keys(value).length !== 1) {
+    throw sourceContractError(`Codex ${label} must contain exactly one variant`, byteOffset);
+  }
+}
+
+function validateOptionalSessionContext(payload: Record<string, unknown>, byteOffset: number): void {
+  for (const [key, label] of [
+    ["thread_source", "thread source"],
+    ["parent_thread_id", "parent thread id"],
+    ["agent_nickname", "agent nickname"],
+    ["agent_role", "agent role"],
+    ["agent_type", "agent type"],
+    ["agent_path", "agent path"],
+    ["memory_mode", "memory mode"],
+    ["multi_agent_version", "multi-agent version"],
+  ] as const) {
+    if (payload[key] !== undefined && payload[key] !== null) requireString(payload[key], byteOffset, label);
+  }
+  if (payload.agent_role !== undefined && payload.agent_type !== undefined) {
+    throw sourceContractError("Codex session metadata cannot contain both agent_role and agent_type", byteOffset);
+  }
+  if (payload.base_instructions !== undefined && payload.base_instructions !== null) {
+    requireObject(payload.base_instructions, byteOffset, "base instructions");
+  }
+  if (payload.dynamic_tools !== undefined && payload.dynamic_tools !== null && !Array.isArray(payload.dynamic_tools)) {
+    throw sourceContractError("Codex dynamic_tools must be an array", byteOffset);
+  }
+  if (payload.selected_capability_roots !== undefined && !Array.isArray(payload.selected_capability_roots)) {
+    throw sourceContractError("Codex selected_capability_roots must be an array", byteOffset);
+  }
+  if (payload.history_mode !== undefined && !["legacy", "paginated"].includes(requireString(payload.history_mode, byteOffset, "history mode"))) {
+    throw sourceContractError("Codex history_mode is not in the parser contract", byteOffset);
+  }
+  if (payload.subagent_history_start_ordinal !== undefined) {
+    requireNonnegativeInteger(payload.subagent_history_start_ordinal, byteOffset, "subagent history start ordinal");
+  }
+  validateExactOptionalObject(payload.history_base, HISTORY_POSITION_KEYS, byteOffset, "history base", value => {
+    requireString(value.thread_id, byteOffset, "history base thread id");
+    requireNonnegativeInteger(value.end_ordinal_exclusive, byteOffset, "history base end ordinal");
+    requireNonnegativeInteger(value.end_byte_offset, byteOffset, "history base end byte offset");
+  });
+  validateExactOptionalObject(payload.context_window, SESSION_CONTEXT_WINDOW_KEYS, byteOffset, "context window", value => {
+    requireString(value.window_id, byteOffset, "context window id");
+  });
+  validateExactOptionalObject(payload.git, GIT_INFO_KEYS, byteOffset, "git metadata", value => {
+    for (const [key, label] of [
+      ["commit_hash", "git commit hash"],
+      ["branch", "git branch"],
+      ["repository_url", "git repository URL"],
+    ] as const) {
+      if (value[key] !== undefined && value[key] !== null) requireString(value[key], byteOffset, label);
+    }
+  });
+}
+
+function validateOptionalTurnContext(payload: Record<string, unknown>, byteOffset: number): void {
+  for (const [key, label] of [
+    ["cwd", "turn context cwd"],
+    ["current_date", "turn context current date"],
+    ["timezone", "turn context timezone"],
+    ["approval_policy", "turn context approval policy"],
+    ["approvals_reviewer", "turn context approvals reviewer"],
+    ["model", "turn context model"],
+    ["comp_hash", "turn context comp hash"],
+    ["personality", "turn context personality"],
+    ["multi_agent_mode", "turn context multi-agent mode"],
+    ["effort", "turn context effort"],
+    ["summary", "turn context summary"],
+  ] as const) {
+    if (payload[key] !== undefined && payload[key] !== null) requireString(payload[key], byteOffset, label);
+  }
+  if (payload.workspace_roots !== undefined && payload.workspace_roots !== null) {
+    requireStringArray(payload.workspace_roots, byteOffset, "turn context workspace roots");
+  }
+  for (const [key, label] of [
+    ["sandbox_policy", "turn context sandbox policy"],
+    ["permission_profile", "turn context permission profile"],
+    ["file_system_sandbox_policy", "turn context file-system sandbox policy"],
+    ["collaboration_mode", "turn context collaboration mode"],
+  ] as const) {
+    if (payload[key] !== undefined && payload[key] !== null) requireObject(payload[key], byteOffset, label);
+  }
+  if (payload.multi_agent_version !== undefined && payload.multi_agent_version !== null) {
+    const version = requireString(payload.multi_agent_version, byteOffset, "turn context multi-agent version");
+    if (!["disabled", "v1", "v2"].includes(version)) {
+      throw sourceContractError("Codex turn context multi-agent version is not in the parser contract", byteOffset);
+    }
+  }
+  if (payload.realtime_active !== undefined && payload.realtime_active !== null && typeof payload.realtime_active !== "boolean") {
+    throw sourceContractError("Codex turn context realtime_active must be boolean", byteOffset);
+  }
+  if (payload.network !== undefined && payload.network !== null) {
+    const network = requireObject(payload.network, byteOffset, "turn context network");
+    assertKnownKeys(network, TURN_CONTEXT_NETWORK_KEYS, byteOffset, "turn context network");
+    requireStringArray(network.allowed_domains, byteOffset, "turn context allowed domains");
+    requireStringArray(network.denied_domains, byteOffset, "turn context denied domains");
+  }
+}
+
+function requireStringArray(value: unknown, byteOffset: number, label: string): string[] {
+  if (!Array.isArray(value)) throw sourceContractError(`Codex ${label} must be an array`, byteOffset);
+  return value.map(item => requireString(item, byteOffset, label));
+}
+
+function validateExactOptionalObject(
+  value: unknown,
+  keys: ReadonlySet<string>,
+  byteOffset: number,
+  label: string,
+  validate: (value: Record<string, unknown>) => void,
+): void {
+  if (value === undefined || value === null) return;
+  const object = requireObject(value, byteOffset, label);
+  assertKnownKeys(object, keys, byteOffset, label);
+  validate(object);
+}
+
+function requireNonnegativeInteger(value: unknown, byteOffset: number, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw sourceContractError(`Codex ${label} must be a nonnegative safe integer`, byteOffset);
+  }
+  return value as number;
+}
+
+function requireIntegerInRange(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  byteOffset: number,
+  label: string,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+    throw sourceContractError(`Codex ${label} must be an integer between ${minimum} and ${maximum}`, byteOffset);
+  }
+  return value as number;
+}
+
 export function applyExclusions(
   target: ReturnType<typeof emptyCodexExcludedRecordCounts>,
   additions: Partial<Record<CodexExclusionCategory, number>>,
@@ -418,7 +640,7 @@ function requireTimestamp(value: unknown, byteOffset: number): string {
   return timestamp;
 }
 
-function assertKnownKeys(value: Record<string, unknown>, allowed: Set<string>, byteOffset: number, label: string): void {
+function assertKnownKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, byteOffset: number, label: string): void {
   const unknown = Object.keys(value).filter(key => !allowed.has(key));
   if (unknown.length > 0) {
     throw sourceContractError(`Codex ${label} contains fields outside the parser contract`, byteOffset, {

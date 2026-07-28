@@ -1,4 +1,9 @@
 import { parseAutomationDefinition } from "@info/automation";
+import {
+  MARKDOWN_FRAGMENT_SET_SCHEMA,
+  MARKDOWN_PARSER_FUNCTION,
+  MARKDOWN_PARSER_REF,
+} from "@info/markdown-parser-adapter";
 import { parseTransformation } from "@info/transformation";
 import { parseViewDraft } from "@info/view";
 
@@ -93,6 +98,75 @@ export const githubSummaryTransformation = parseTransformation({
   },
   created_at: createdAt,
   metadata: { application: "ambient.browser.github_summary" },
+});
+
+export const obsidianMarkdownParserTransformation = parseTransformation({
+  id: "transformation.parser.markdown",
+  revision: 1,
+  name: "Parse Obsidian Markdown into search fragments",
+  instruction: {
+    format: "natural_language",
+    language: "en",
+    text: "Project one exact captured Obsidian Markdown View into deterministic bounded search fragments.",
+    parameters: {},
+  },
+  operator: {
+    id: "operator.parser.markdown",
+    revision: 1,
+    reference: MARKDOWN_PARSER_FUNCTION,
+    configuration: {
+      parser: MARKDOWN_PARSER_REF,
+      limits: {
+        max_input_bytes: 8_000_000,
+        max_fragments: 4_096,
+        max_fragment_bytes: 1_000_000,
+      },
+    },
+    required_capabilities: [],
+  },
+  inputs: [{
+    role: "source",
+    required: true,
+    sources: [{
+      kind: "selector",
+      selector: {
+        id: "selector.obsidian.markdown_document",
+        revision: 1,
+        query: {
+          scope: "matching",
+          schema_names: ["capture.obsidian.document"],
+          roles: ["raw"],
+          revision_scope: "latest",
+          order: "newest",
+          limit: 1,
+          where: {},
+        },
+      },
+    }],
+  }],
+  output: {
+    schema: MARKDOWN_FRAGMENT_SET_SCHEMA,
+    schema_origin: "declared",
+    cardinality: { min: 1, max: 1 },
+  },
+  policy: {
+    id: "policy.parser.markdown.view_access",
+    revision: 1,
+    configuration: { kind: "view_access", profile: "approve_all", rules: [] },
+  },
+  budget: {
+    id: "budget.parser.markdown",
+    revision: 1,
+    limits: { timeout_ms: 10_000, max_attempts: 1 },
+    extensions: {},
+  },
+  created_at: createdAt,
+  metadata: {
+    processor_kind: "parser",
+    parser_id: MARKDOWN_PARSER_REF.parser_id,
+    parser_version: MARKDOWN_PARSER_REF.version,
+    parser_abi_version: MARKDOWN_PARSER_REF.abi_version,
+  },
 });
 
 export const githubSummaryAutomationDefinition = parseAutomationDefinition({

@@ -1,11 +1,117 @@
 import AVFoundation
 import Carbon.HIToolbox
+import CryptoKit
 import MarkdownUI
 import SwiftUI
 import XCTest
 @testable import MetaflowMac
 
 final class AccessibilitySmokeTests: XCTestCase {
+    func testResidentOperationWireConstantsMatchCanonicalContract() {
+        XCTAssertEqual(ResidentOperationWireContract.protocolName, "metaflow-operations-http")
+        XCTAssertEqual(ResidentOperationWireContract.protocolVersion, 1)
+        XCTAssertEqual(ResidentOperationWireContract.serverName, "ambient-daemon")
+        XCTAssertEqual(ResidentOperationWireContract.serverVersion, "0.1.0")
+        XCTAssertEqual(ResidentOperationWireContract.catalogVersion, 1)
+        XCTAssertEqual(ResidentOperationWireContract.catalogFingerprint, "sha256:848d837bc51def904f31e2c546ecce93d286b8140f70ead30d863f37d276d51a")
+        XCTAssertEqual(ResidentOperationWireContract.authenticationSource, "METAFLOW_AUTH_TOKEN")
+        XCTAssertEqual(ResidentOperationWireContract.authenticationRequired, true)
+        XCTAssertEqual(ResidentOperationWireContract.authenticationScheme, "Bearer")
+        XCTAssertEqual(ResidentOperationWireContract.challengeScheme, "HMAC-SHA256")
+        XCTAssertEqual(ResidentOperationWireContract.operations.count, 39)
+        XCTAssertEqual(ResidentOperationWireContract.operationsEndpoint, "/metaflow/v1/operations/")
+        XCTAssertEqual(ResidentOperationWireContract.mcpEndpoint, "/mcp")
+    }
+
+    func testResidentOperationAccessRejectsRemoteAndCredentialBearingEndpoints() {
+        let token = "test-operation-auth-token-32-bytes"
+        XCTAssertThrowsError(try ResidentOperationAccessClient(endpoint: URL(string: "http://192.0.2.10:3111")!, token: token))
+        XCTAssertThrowsError(try ResidentOperationAccessClient(endpoint: URL(string: "http://user:secret@127.0.0.1:3111")!, token: token))
+        XCTAssertThrowsError(try ResidentOperationAccessClient(endpoint: URL(string: "http://127.0.0.1:3111/path")!, token: token))
+    }
+
+    func testResidentOperationDoctorIsCredentialFreeAndRejectsAnExactMimic() throws {
+        let token = "test-operation-auth-token-32-bytes"
+        let challenge = String(repeating: "a", count: 64)
+        let client = try ResidentOperationAccessClient(endpoint: URL(string: "http://localhost:3111")!, token: token)
+        let request = try client.makeDoctorRequest(challenge: challenge)
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.url?.host, "127.0.0.1")
+        XCTAssertEqual(request.url?.path, "/metaflow/v1/doctor")
+
+        let body: [String: Any] = [
+            "ok": true,
+            "protocol": ["name": ResidentOperationWireContract.protocolName, "version": ResidentOperationWireContract.protocolVersion],
+            "server": ["name": ResidentOperationWireContract.serverName, "version": ResidentOperationWireContract.serverVersion, "origin": "http://127.0.0.1:3111"],
+            "authentication": [
+                "source": "METAFLOW_AUTH_TOKEN",
+                "required": true,
+                "scheme": "Bearer",
+                "challenge_scheme": "HMAC-SHA256",
+                "challenge": challenge,
+                "proof": String(repeating: "0", count: 64)
+            ],
+            "catalog": [
+                "version": ResidentOperationWireContract.catalogVersion,
+                "fingerprint": ResidentOperationWireContract.catalogFingerprint,
+                "operations": ResidentOperationWireContract.operations
+            ],
+            "endpoints": ["operations": ResidentOperationWireContract.operationsEndpoint, "mcp": ResidentOperationWireContract.mcpEndpoint]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: try XCTUnwrap(request.url),
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["x-metaflow-protocol-version": "1"]
+        ))
+        XCTAssertThrowsError(try client.validateDoctor(data: data, response: response, challenge: challenge)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("credential proof mismatch"))
+        }
+    }
+
+    func testResidentClientFreshlyAuthorizesEveryMacAndAssistRoute() async throws {
+        let token = "test-operation-auth-token-32-bytes"
+        let endpoint = URL(string: "http://127.0.0.1:3111")!
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ResidentAccessURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        var doctorRequests: [URLRequest] = []
+        ResidentAccessURLProtocol.handler = { request in
+            doctorRequests.append(request)
+            let url = try XCTUnwrap(request.url)
+            let challenge = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "challenge" })?.value)
+            let body = residentDoctorBody(token: token, challenge: challenge, origin: "http://127.0.0.1:3111")
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["x-metaflow-protocol-version": "1"]
+            ))
+            return (response, try JSONSerialization.data(withJSONObject: body))
+        }
+        defer { ResidentAccessURLProtocol.handler = nil }
+
+        let client = try ResidentOperationAccessClient(endpoint: endpoint, token: token, session: session)
+        let paths = [
+            "/automation/v1/macos/voice-signals",
+            "/automation/v1/macos/deliveries",
+            "/automation/v1/macos/interactions",
+            "/ambient/v1/assist",
+            "/context/v1/views/view%3Aprivate?revision=1"
+        ]
+        for path in paths {
+            let request = URLRequest(url: URL(string: path, relativeTo: endpoint)!)
+            let authorized = try await client.authorize(request)
+            XCTAssertEqual(authorized.value(forHTTPHeaderField: "Authorization"), "Bearer \(token)")
+            XCTAssertEqual(authorized.url?.host, "127.0.0.1")
+        }
+        XCTAssertEqual(doctorRequests.count, paths.count)
+        XCTAssertTrue(doctorRequests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
+        XCTAssertTrue(doctorRequests.allSatisfy { $0.url?.path == "/metaflow/v1/doctor" })
+    }
+
     func testPermissionDeniedFailsExplicitly() {
         let result = evaluateAccessibilitySmoke(trusted: false, snapshot: nil, requireSelectedText: false)
         XCTAssertEqual(result.exitCode, 2)
@@ -498,6 +604,58 @@ final class AccessibilitySmokeTests: XCTestCase {
             placeholder: nil
         )
     }
+}
+
+private final class ResidentAccessURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else { throw URLError(.badServerResponse) }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private func residentDoctorBody(token: String, challenge: String, origin: String) -> [String: Any] {
+    let message = "metaflow-doctor-v1:\(challenge):\(origin):\(ResidentOperationWireContract.catalogFingerprint)"
+    let signature = HMAC<SHA256>.authenticationCode(
+        for: Data(message.utf8),
+        using: SymmetricKey(data: Data(token.utf8))
+    )
+    let proof = Data(signature).map { String(format: "%02x", $0) }.joined()
+    return [
+        "ok": true,
+        "protocol": ["name": ResidentOperationWireContract.protocolName, "version": ResidentOperationWireContract.protocolVersion],
+        "server": ["name": ResidentOperationWireContract.serverName, "version": ResidentOperationWireContract.serverVersion, "origin": origin],
+        "authentication": [
+            "source": ResidentOperationWireContract.authenticationSource,
+            "required": true,
+            "scheme": ResidentOperationWireContract.authenticationScheme,
+            "challenge_scheme": ResidentOperationWireContract.challengeScheme,
+            "challenge": challenge,
+            "proof": proof
+        ],
+        "catalog": [
+            "version": ResidentOperationWireContract.catalogVersion,
+            "fingerprint": ResidentOperationWireContract.catalogFingerprint,
+            "operations": ResidentOperationWireContract.operations
+        ],
+        "endpoints": [
+            "operations": ResidentOperationWireContract.operationsEndpoint,
+            "mcp": ResidentOperationWireContract.mcpEndpoint
+        ]
+    ]
 }
 
 @MainActor

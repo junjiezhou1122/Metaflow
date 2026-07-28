@@ -6,13 +6,23 @@
     "graph_engine": 42000,
     "sigma_surface": 5000,
     "layout_worker": 25000,
-    "total_javascript": 160000
+    "view_content_dialog": 55000,
+    "total_javascript": 215000
   },
   "recorded_2026_07_27": {
     "initial_shell": 87433,
     "graph_engine": 36628,
     "sigma_surface": 3538,
     "layout_worker": 17501,
+    "view_content_dialog": 0,
     "total_javascript": 145100
+  },
+  "recorded_2026_07_28": {
+    "initial_shell": 88710,
+    "graph_engine": 36633,
+    "sigma_surface": 3430,
+    "layout_worker": 17501,
+    "view_content_dialog": 53371,
+    "total_javascript": 210965
   }
 }

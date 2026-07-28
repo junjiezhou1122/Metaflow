@@ -1,7 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PNG } from "pngjs";
-import { createFixtureTransport, type FixtureTransport } from "../src/fixtures.js";
-import type { ExplorerOperation } from "../src/contracts.js";
+import {
+  createFixtureTransport,
+  PERSONALIZED_FIXTURE_ID,
+  PERSONALIZED_VIEW_REFS,
+  PRODUCT_VIEWS_FIXTURE_ID,
+  type FixtureTransport,
+} from "../src/fixtures.js";
+import { refKey, type ExplorerOperation } from "../src/contracts.js";
 
 const viewports = [
   { name: "desktop", width: 1_440, height: 900 },
@@ -19,26 +25,137 @@ for (const viewport of viewports) {
     const errors = watchErrors(page);
     await page.goto("/?fixture=10");
     await ready(page, 10);
-    await expect(page.getByRole("checkbox", { name: "application_composition" })).toBeChecked();
-    await expect(page.getByLabel("Relations in projection")).toContainText("application_composition:");
+    await openSettings(page);
+    await expect(page.getByRole("checkbox", { name: "Application composition" })).toBeChecked();
+    await openBrowse(page);
+    await expect(page.getByLabel("Relations in projection")).toContainText("Application composition:");
     const histogram = await canvasHistogram(page);
     expect(histogram).toMatchObject({ nonBackgroundPixels: expect.any(Number) });
     expect(histogram.nonBackgroundPixels).toBeGreaterThan(20);
     await expect(page.locator(".topbar")).toBeInViewport();
     await expect(page.locator(".companion")).toBeInViewport();
-    await assertSeparatedLayout(page);
+    await assertGraphCanvasLayout(page);
     await page.screenshot({ path: testInfo.outputPath(`${viewport.name}-fixture-10.png`), animations: "disabled" });
-    if (viewport.name === "mobile") {
-      await page.getByRole("button", { name: "Toggle graph filters" }).click();
-      await expect(page.locator(".left-panel")).toHaveClass(/mobile-open/);
-      await page.getByRole("button", { name: "Toggle exact View details" }).click();
-      await expect(page.locator(".left-panel")).not.toHaveClass(/mobile-open/);
-      await expect(page.locator(".right-panel")).toHaveClass(/mobile-open/);
-      await assertSeparatedLayout(page);
-    }
+    await expect(page.locator(".companion")).toHaveClass(/drawer-open/);
     expect(errors).toEqual([]);
   });
 }
+
+for (const viewport of [viewports[0], viewports[2]]) {
+  test(`${viewport.name} personalized Application Space focuses exact working-state evidence`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const transport = createFixtureTransport(PERSONALIZED_FIXTURE_ID);
+    await installOperationRoute(page, transport);
+    const operationRequests: string[] = [];
+    const errors = watchErrors(page);
+    page.on("request", request => { if (request.url().includes("/metaflow/v1/operations/")) operationRequests.push(request.url()); });
+    await page.goto(`/?root=${encodeURIComponent(refKey(PERSONALIZED_VIEW_REFS.application_space))}`);
+    await ready(page, 6);
+
+    expect(new URL(page.url()).searchParams.get("root")).toBe(refKey(PERSONALIZED_VIEW_REFS.application_space));
+    await openBrowse(page);
+    await expect(page.getByRole("option", { name: /Personal Knowledge Workspace/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /Synthetic Codex Architecture Session/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /View Model Decisions/ })).toBeVisible();
+    await expect(page.getByLabel("Relations in projection")).toContainText("Derived from: 4");
+
+    await page.getByRole("search").getByRole("textbox").fill("Metaflow Implementation Working State");
+    await page.getByRole("button", { name: "Focus search result" }).click();
+    const workingStateKey = refKey(PERSONALIZED_VIEW_REFS.working_state);
+    await expect(page.locator(".view-dialog-identity code")).toHaveText(workingStateKey);
+    await assertFocusedNodeVisible(page, workingStateKey);
+    expect(new URL(page.url()).searchParams.get("selected")).toBe(workingStateKey);
+
+    await expect(page.locator(".view-dialog-identity h1")).toHaveText("Metaflow Implementation Working State");
+    await expect(page.locator(".view-information")).toContainText("personal.working_state@1");
+    await expect(page.locator(".view-json")).toContainText("code_reflected_decisions");
+    const provenance = page.locator("section.provenance");
+    await expect(provenance).toContainText("operator:personalized-working-state");
+    for (const ref of [
+      PERSONALIZED_VIEW_REFS.codex_history,
+      PERSONALIZED_VIEW_REFS.obsidian_view_model,
+      PERSONALIZED_VIEW_REFS.obsidian_search_graph,
+      PERSONALIZED_VIEW_REFS.obsidian_connector_design,
+    ]) {
+      await expect(provenance).toContainText(`${ref.view_id}@${ref.revision}`);
+    }
+
+    const histogram = await canvasHistogram(page);
+    expect(histogram.nonBackgroundPixels).toBeGreaterThan(20);
+    expect(histogram.uniqueColors).toBeGreaterThan(4);
+    await assertGraphCanvasLayout(page);
+    await assertViewportContainment(page, viewport.width, viewport.height);
+    await testInfo.attach(`${viewport.name}-personalized-application-space`, {
+      body: await page.screenshot({ animations: "disabled" }),
+      contentType: "image/png",
+    });
+    expect(operationRequests.length).toBeGreaterThan(0);
+    expect(transport.calls.some(call => call.operation === "view.graph.project")).toBe(true);
+    expect(transport.calls.some(call => call.operation === "view.get")).toBe(true);
+    expect(transport.calls.some(call => call.operation === "view.search")).toBe(false);
+    expect(errors).toEqual([]);
+  });
+}
+
+test("clicking a Markdown View opens its rendered content while the graph remains the navigation surface", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  const errors = watchErrors(page);
+  await page.goto("/?fixture=personalized");
+  await ready(page, 6);
+  await browseAndSelect(page, /View Model Decisions/);
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.locator(".view-dialog-identity h1")).toHaveText("View Model Decisions");
+  await expect(page.locator(".view-markdown h1")).toHaveText("View Model Decisions");
+  await expect(page.locator(".view-markdown")).toContainText("Views retain exact revisions and source provenance");
+  await expect(page.locator(".view-information")).toContainText("obsidian.markdown.note@1");
+  await testInfo.attach("markdown-view-content-dialog", {
+    body: await page.screenshot({ animations: "disabled" }),
+    contentType: "image/png",
+  });
+  expect(errors).toEqual([]);
+});
+
+test("product View graph opens dedicated Daily Summary, Timeline, and Audio content", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  const errors = watchErrors(page);
+  await page.goto(`/?fixture=${PRODUCT_VIEWS_FIXTURE_ID}`);
+  await ready(page, 4);
+
+  await browseAndSelect(page, /Daily Summary · Jul 27/);
+  await expect(page.locator('[data-renderer="renderer.personal.daily-summary@1@1"]')).toBeVisible();
+  await expect(page.locator(".daily-summary-lead h2")).toHaveText("The View became an information product");
+  await expect(page.locator(".product-daily-summary")).toContainText("Audio, Timeline, and Daily Summary now form one recursive chain");
+  await expect(page.locator(".view-json")).toHaveCount(0);
+
+  await browseAndSelect(page, /Activity Timeline · Jul 27/);
+  await expect(page.locator('[data-renderer="renderer.personal.timeline@1@1"]')).toBeVisible();
+  await expect(page.locator(".timeline-blocks")).toContainText("View architecture conversation");
+  await expect(page.locator(".timeline-entries code").filter({ hasText: "view:personal:audio:design-conversation@1" })).toHaveCount(1);
+
+  await browseAndSelect(page, /Audio · View architecture/);
+  await expect(page.locator('[data-renderer="renderer.personal.audio@1@1"]')).toBeVisible();
+  await expect(page.locator(".audio-transcript")).toContainText("Graph 只是 View 的导航");
+  await expect(page.locator(".product-view-columns")).toContainText("Implement dedicated Audio, Timeline, and Daily Summary renderers");
+  const readyRenderers = await page.evaluate(() => (window as typeof window & {
+    __METAFLOW_RENDERER_EVENTS__?: Array<{ event: string }>;
+  }).__METAFLOW_RENDERER_EVENTS__?.filter(event => event.event === "renderer.ready").length ?? 0);
+  expect(readyRenderers).toBeGreaterThanOrEqual(3);
+  await testInfo.attach("product-view-audio", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
+  expect(errors).toEqual([]);
+});
+
+test("Daily Summary remains a continuous reading surface on mobile", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const errors = watchErrors(page);
+  await page.goto(`/?fixture=${PRODUCT_VIEWS_FIXTURE_ID}`);
+  await ready(page, 4);
+  await browseAndSelect(page, /Daily Summary · Jul 27/);
+  await expect(page.locator('[data-renderer="renderer.personal.daily-summary@1@1"]')).toBeVisible();
+  await expect(page.locator(".daily-theme")).toHaveCount(1);
+  await assertViewportContainment(page, 390, 844);
+  await testInfo.attach("mobile-product-daily-summary", { body: await page.screenshot({ animations: "disabled", fullPage: false }), contentType: "image/png" });
+  expect(errors).toEqual([]);
+});
 
 for (const size of [1, 10, 500, 2_000]) {
   test(`${size}-node fixture preserves counts and virtual-list bounds`, async ({ page }) => {
@@ -49,10 +166,13 @@ for (const size of [1, 10, 500, 2_000]) {
     await page.goto(`/?fixture=${size}`);
     await ready(page, size);
     await expect(page.locator(".explorer-shell")).toHaveAttribute("data-node-count", String(size));
+    await openBrowse(page);
     await expect(page.locator('[role="listbox"]')).toHaveAttribute("aria-rowcount", String(size));
     const rendered = await page.locator('[role="option"]').count();
     expect(rendered).toBeLessThanOrEqual(Math.min(size, 30));
     if (size === 2_000) {
+      await openSettings(page);
+      await page.getByText("Advanced diagnostics").click();
       await expect(page.getByText("Truncated: node_limit")).toBeVisible();
       await expect(page.getByText("Redacted boundary present")).toBeVisible();
     }
@@ -68,32 +188,38 @@ test("search focus, pointer and keyboard selection, expansion, filters, history,
   const errors = watchErrors(page);
   await page.goto("/?fixture=10");
   await ready(page, 10);
-  await page.getByRole("option", { name: /Research View 0001/ }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0001@2");
+  await browseAndSelect(page, /Research View 0001/);
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0001@2");
+  await closeDialog(page);
+  await openBrowse(page);
   await page.getByRole("option", { name: /Research View 0002/ }).focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0002@3");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0002@3");
+  await closeDialog(page);
   await page.getByRole("search").getByRole("textbox").fill("Research View 0003");
   await page.getByRole("button", { name: "Focus search result" }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0003@1");
   await assertFocusedNodeVisible(page, "view:fixture:0003@1");
   expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
   await page.getByRole("button", { name: "Next neighbor" }).click();
-  await expect(page.locator(".detail-heading code")).not.toHaveText("view:fixture:0003@1");
+  await expect(page.locator(".view-dialog-identity code")).not.toHaveText("view:fixture:0003@1");
+  await closeDialog(page);
   await page.getByRole("search").getByRole("textbox").fill("Research View 0003");
   await page.getByRole("button", { name: "Focus search result" }).click();
-  await page.getByRole("button", { name: "Expand one hop" }).click();
+  await page.getByRole("button", { name: "Reveal connected Views" }).click();
   await expect(page.locator(".explorer-shell")).toHaveAttribute("data-node-count", "11");
   const beforeEdges = Number((await page.locator(".canvas-stats span").nth(1).textContent())?.split(" ")[0]);
-  await page.getByRole("checkbox", { name: "references" }).uncheck();
-  await page.getByRole("button", { name: "Apply projection" }).click();
+  const selectedBeforeReload = await page.locator(".view-dialog-identity code").textContent();
+  await closeDialog(page);
+  await openSettings(page);
+  await page.getByRole("checkbox", { name: "References" }).uncheck();
+  await page.getByRole("button", { name: "Update graph" }).click();
   await expect.poll(async () => Number((await page.locator(".canvas-stats span").nth(1).textContent())?.split(" ")[0])).toBeLessThan(beforeEdges);
   const filteredCount = Number(await page.locator(".explorer-shell").getAttribute("data-node-count"));
-  const selectedBeforeReload = await page.locator(".detail-heading code").textContent();
   await page.reload();
   await ready(page, filteredCount);
   expect(new URL(page.url()).searchParams.get("edges")).not.toContain("references");
-  await expect(page.locator(".detail-heading code")).toHaveText(selectedBeforeReload ?? "");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText(selectedBeforeReload ?? "");
   await page.goBack();
   await expect.poll(() => new URL(page.url()).searchParams.get("selected")).not.toBe(selectedBeforeReload);
   await expect.poll(async () => {
@@ -110,6 +236,9 @@ test("pointer hover reveals only the loaded neighborhood and restores selection 
   await page.goto("/?fixture=10&selected=view:fixture:0003@1&cx=0.5&cy=0.5&ratio=1&angle=0");
   await ready(page, 10);
   await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await closeDialog(page);
+  const selectedOption = page.getByRole("option", { name: /Research View 0003/ });
+  await expect(selectedOption).toHaveAttribute("aria-selected", "true");
   await expect.poll(async () => cameraDistance(await currentCamera(page), cameraFromUrl(page.url()))).toBeLessThanOrEqual(0.0002);
 
   const baselineUrl = page.url();
@@ -132,7 +261,7 @@ test("pointer hover reveals only the loaded neighborhood and restores selection 
   expect(hovered!.unrelatedNodeCount).toBeGreaterThan(0);
   expect(hovered!.unrelatedEdgeCount).toBeGreaterThan(0);
   expect((await explorerDebug(page)).hoverEnterCount).toBeGreaterThanOrEqual(1);
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(selectedOption).toHaveAttribute("aria-selected", "true");
   expect(page.url()).toBe(baselineUrl);
   expect(await fixtureCallCount(page)).toBe(baselineCalls);
   expect(cameraDistance(await currentCamera(page), baselineCamera)).toBeLessThanOrEqual(0.0002);
@@ -140,7 +269,7 @@ test("pointer hover reveals only the loaded neighborhood and restores selection 
   await page.mouse.move(20, 20);
   await expect.poll(async () => (await explorerDebug(page)).hoveredNeighborhood).toBeUndefined();
   expect((await explorerDebug(page)).hoverLeaveCount).toBeGreaterThanOrEqual(1);
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(selectedOption).toHaveAttribute("aria-selected", "true");
   expect(page.url()).toBe(baselineUrl);
   expect(await fixtureCallCount(page)).toBe(baselineCalls);
   expect(cameraDistance(await currentCamera(page), baselineCamera)).toBeLessThanOrEqual(0.0002);
@@ -152,9 +281,10 @@ test("URL reload and Visited cameras remain authoritative after layout and exact
   const errors = watchErrors(page);
   await page.goto("/?fixture=10");
   await ready(page, 10);
-  await page.getByRole("option", { name: /Research View 0003/ }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await browseAndSelect(page, /Research View 0003/);
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0003@1");
   await assertFocusedNodeVisible(page, "view:fixture:0003@1");
+  await closeDialog(page);
 
   const beforePan = await currentCamera(page);
   const bounds = await page.locator(".sigma-container").boundingBox();
@@ -179,19 +309,22 @@ test("URL reload and Visited cameras remain authoritative after layout and exact
 
   await page.reload();
   await ready(page, 10);
+  await closeDialog(page);
   await assertCameraEquals(page, savedCamera);
   await page.waitForTimeout(400);
   await assertCameraEquals(page, savedCamera);
   expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
   await page.screenshot({ path: testInfo.outputPath("camera-restored-reload.png"), animations: "disabled" });
 
-  await page.getByRole("option", { name: /Research View 0004/ }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0004@2");
+  await browseAndSelect(page, /Research View 0004/);
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0004@2");
   await assertFocusedNodeVisible(page, "view:fixture:0004@2");
   await page.waitForTimeout(400);
   const secondCamera = cameraFromUrl(page.url());
+  await closeDialog(page);
+  await openBrowse(page);
   await page.locator(".history-strip").getByRole("button", { name: "Research View 0003", exact: true }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0003@1");
   await assertCameraEquals(page, savedCamera);
   await page.waitForTimeout(400);
   await assertCameraEquals(page, savedCamera);
@@ -199,7 +332,7 @@ test("URL reload and Visited cameras remain authoritative after layout and exact
   expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
   await page.screenshot({ path: testInfo.outputPath("camera-restored-visited.png"), animations: "disabled" });
   await page.goBack();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0004@2");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0004@2");
   await assertCameraEquals(page, secondCamera);
   await page.waitForTimeout(400);
   await assertCameraEquals(page, secondCamera);
@@ -289,20 +422,18 @@ test("daemon-shaped Search atomically loads, focuses, persists, and reloads one 
   await page.goto("/");
   await page.getByLabel("Authorized Search").fill("Research View 0003");
   await page.getByRole("button", { name: "Search", exact: true }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0003@1");
   await ready(page, 2);
   expect(new URL(page.url()).searchParams.get("root")).toBe("view:fixture:0003@1");
   expect(new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0003@1");
-  await expect(page.locator(".history-strip").getByRole("button", { name: "Research View 0003" })).toBeVisible();
   await assertFocusedNodeVisible(page, "view:fixture:0003@1");
   expect((await canvasHistogram(page)).nonBackgroundPixels).toBeGreaterThan(20);
   const focusedCamera = cameraFromUrl(page.url());
   await page.screenshot({ path: testInfo.outputPath("real-operation-search.png"), animations: "disabled" });
   await page.reload();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0003@1");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0003@1");
   await ready(page, 2);
   expect(new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0003@1");
-  await expect(page.locator(".history-strip").getByRole("button", { name: "Research View 0003" })).toBeVisible();
   await assertCameraEquals(page, focusedCamera);
   await page.waitForTimeout(400);
   await assertCameraEquals(page, focusedCamera);
@@ -348,25 +479,28 @@ test("new Search supersedes stale Search, expansion, and projection responses", 
   await slowSearchStarted.promise;
   await page.getByLabel("Authorized Search").fill("Research View 0002");
   await page.getByRole("button", { name: "Search", exact: true }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0002@3");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0002@3");
   slowSearch.resolve();
   await expect.poll(() => new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0002@3");
 
-  await page.getByRole("button", { name: "Expand one hop" }).click();
+  await page.getByRole("button", { name: "Reveal connected Views" }).click();
   await slowExpandStarted.promise;
+  await closeDialog(page);
   await page.getByRole("search").getByRole("textbox").fill("Research View 0004");
   await page.getByRole("button", { name: "Focus search result" }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0004@2");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0004@2");
   slowExpand.resolve();
   await expect.poll(() => new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0004@2");
 
   holdNextLoad = true;
-  await page.getByRole("checkbox", { name: "references" }).uncheck();
-  await page.getByRole("button", { name: "Apply projection" }).click();
+  await closeDialog(page);
+  await openSettings(page);
+  await page.getByRole("checkbox", { name: "References" }).uncheck();
+  await page.getByRole("button", { name: "Update graph" }).click();
   await slowLoadStarted.promise;
   await page.getByRole("search").getByRole("textbox").fill("Research View 0006");
   await page.getByRole("button", { name: "Focus search result" }).click();
-  await expect(page.locator(".detail-heading code")).toHaveText("view:fixture:0006@1");
+  await expect(page.locator(".view-dialog-identity code")).toHaveText("view:fixture:0006@1");
   slowLoad.resolve();
   await expect.poll(() => new URL(page.url()).searchParams.get("selected")).toBe("view:fixture:0006@1");
   await assertFocusedNodeVisible(page, "view:fixture:0006@1");
@@ -470,14 +604,75 @@ async function canvasHistogram(page: Page): Promise<{ uniqueColors: number; nonB
   return { uniqueColors: colors.size, nonBackgroundPixels };
 }
 
-async function assertSeparatedLayout(page: Page): Promise<void> {
-  const boxes = await page.evaluate(() => Object.fromEntries([".topbar", ".graph-stage", ".companion", ".left-panel", ".right-panel"].map(selector => {
+async function assertGraphCanvasLayout(page: Page): Promise<void> {
+  const boxes = await page.evaluate(() => Object.fromEntries([".topbar", ".graph-stage"].map(selector => {
     const rect = document.querySelector(selector)?.getBoundingClientRect();
     if (!rect) throw new Error(`Missing layout surface ${selector}`);
     return [selector, { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left }];
   })));
-  expect(boxes[".topbar"]!.bottom).toBeLessThanOrEqual(boxes[".graph-stage"]!.top + 1);
-  expect(boxes[".graph-stage"]!.bottom).toBeLessThanOrEqual(boxes[".companion"]!.top + 1);
-  expect(boxes[".left-panel"]!.bottom).toBeLessThanOrEqual(boxes[".companion"]!.top + 1);
-  expect(boxes[".right-panel"]!.bottom).toBeLessThanOrEqual(boxes[".companion"]!.top + 1);
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  expect(boxes[".graph-stage"]!.top).toBeLessThanOrEqual(1);
+  expect(boxes[".graph-stage"]!.left).toBeLessThanOrEqual(1);
+  expect(boxes[".graph-stage"]!.right).toBeGreaterThanOrEqual(viewport!.width - 1);
+  expect(boxes[".graph-stage"]!.bottom).toBeGreaterThanOrEqual(viewport!.height - 1);
+  expect(boxes[".topbar"]!.top).toBeGreaterThanOrEqual(0);
+  expect(boxes[".topbar"]!.left).toBeGreaterThanOrEqual(0);
+  expect(boxes[".topbar"]!.right).toBeLessThanOrEqual(viewport!.width);
+}
+
+async function assertViewportContainment(page: Page, width: number, height: number): Promise<void> {
+  const boxes = await page.evaluate(() => Object.fromEntries([
+    ".topbar",
+    ".graph-stage",
+    ".view-dialog",
+    ".view-dialog-header",
+  ].map(selector => {
+    const element = document.querySelector(selector);
+    const rect = element?.getBoundingClientRect();
+    if (!element || !rect) throw new Error(`Missing personalized workflow surface ${selector}`);
+    return [selector, {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }];
+  })));
+  for (const [selector, box] of Object.entries(boxes)) {
+    expect(box.top, `${selector} top`).toBeGreaterThanOrEqual(-1);
+    expect(box.right, `${selector} right`).toBeLessThanOrEqual(width + 1);
+    expect(box.bottom, `${selector} bottom`).toBeLessThanOrEqual(height + 1);
+    expect(box.left, `${selector} left`).toBeGreaterThanOrEqual(-1);
+    expect(box.scrollWidth, `${selector} horizontal overflow`).toBeLessThanOrEqual(box.clientWidth + 1);
+  }
+}
+
+async function openSettings(page: Page): Promise<void> {
+  const drawer = page.locator(".left-panel");
+  if (!await drawer.evaluate(element => element.classList.contains("mobile-open"))) {
+    await page.getByRole("button", { name: "Graph settings", exact: true }).click();
+  }
+  await expect(drawer).toHaveClass(/mobile-open/);
+}
+
+async function openBrowse(page: Page): Promise<void> {
+  const drawer = page.locator(".companion");
+  if (!await drawer.evaluate(element => element.classList.contains("drawer-open"))) {
+    await page.getByRole("button", { name: "Browse Views", exact: true }).click();
+  }
+  await expect(drawer).toHaveClass(/drawer-open/);
+}
+
+async function browseAndSelect(page: Page, name: RegExp): Promise<void> {
+  await closeDialog(page);
+  await openBrowse(page);
+  await page.getByRole("option", { name }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+}
+
+async function closeDialog(page: Page): Promise<void> {
+  const dialog = page.getByRole("dialog");
+  if (await dialog.isVisible()) await page.getByRole("button", { name: "Close View", exact: true }).click();
 }

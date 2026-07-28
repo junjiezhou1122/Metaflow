@@ -41,16 +41,19 @@ test("canonical workspace exposes only v1 capability owners", () => {
   assert.deepEqual(packages, [
     "packages/view",
     "packages/view-package",
+    "packages/authoring",
     "packages/transformation",
     "packages/execution",
     "packages/automation",
     "packages/capture",
     "packages/search",
     "packages/operations",
+    "packages/screenpipe-contracts",
     "packages/adapters/*",
     "view-packages/*",
     "apps/ambient-daemon",
     "apps/view-explorer",
+    "apps/mf-cli",
     "apps/website",
   ]);
   for (const name of legacyPackages) {

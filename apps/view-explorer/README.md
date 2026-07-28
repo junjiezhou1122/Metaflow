@@ -15,8 +15,16 @@ engine, and worker positions/camera state never become View relations.
 - Browser decoding imports only `@info/view/schema`, `@info/view/graph`, and
   `@info/search/contracts`; server services and Node crypto stay out of the
   browser bundle.
-- Fixture-only entry: `?fixture=1|10|500|2000`; it injects an in-memory
-  Operation transport and performs no Operation network requests.
+- Fixture-only entry: `?fixture=1|10|500|2000|personalized|product-views`; it injects an
+  in-memory Operation transport and performs no Operation network requests.
+  The deterministic `personalized` fixture contains synthetic Codex and
+  Obsidian Raw Views, one working-state bridge, and one Application Space. Its
+  `view:fixture:view-explorer:personalized:*` refs are sanitized UI-only
+  identities and never claim to be the backend acceptance Views or personal
+  data. The personalized Playwright scenario drives this same fixture through
+  the production-shaped HTTP Operation boundary.
+  `product-views` is likewise a deterministic Renderer/UI fixture. It is never
+  evidence that captured personal Views exist in SQLite.
 - Exact entry: `?root=<encoded-view-id>@<revision>`. Query state stores exact
   refs, filters, selection, and camera only; no View content is placed in URLs.
 - The ambient daemon must serve the built static app or proxy its Vite server
@@ -29,6 +37,18 @@ engine, and worker positions/camera state never become View relations.
 pnpm view-explorer:test
 pnpm view-explorer:build
 pnpm view-explorer:test:e2e
+```
+
+Real Screenpipe acceptance requires one existing SQLite database and two exact
+refs. It makes a consistent SQLite backup, migrates only losslessly supported
+legacy contracts, and then crosses the real Repository, read authorization,
+`OperationService`, Graph Explorer, and exact Screenpipe Renderers:
+
+```bash
+METAFLOW_SCREENPIPE_ACCEPTANCE_DB=/absolute/path/to/metaflow.sqlite \
+METAFLOW_SCREENPIPE_TIMELINE_REF='view:screenpipe:timeline:<id>@1' \
+METAFLOW_SCREENPIPE_AUDIO_REF='view:screenpipe:audio-view:<id>@1' \
+pnpm test:screenpipe-explorer-live
 ```
 
 The production build enforces [bundle-baseline.json](./bundle-baseline.json).

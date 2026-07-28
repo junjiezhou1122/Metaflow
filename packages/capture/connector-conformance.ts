@@ -33,6 +33,18 @@ export type ConnectorConformanceReport = {
   malformed_payloads_rejected: number;
 };
 
+export type ConnectorConformanceV2Capability = "push" | "pull" | "stream" | "reference" | "incremental";
+
+export type ConnectorConformanceV2Input<Configuration, Payload, Submission> =
+  ConnectorConformanceInput<Configuration, Payload, Submission> & {
+    probes: Partial<Record<ConnectorConformanceV2Capability, () => Promise<JsonValue>>>;
+  };
+
+export type ConnectorConformanceV2Report = ConnectorConformanceReport & {
+  version: 2;
+  capabilities: Record<ConnectorConformanceV2Capability, { declared: boolean; evidence?: JsonValue }>;
+};
+
 export class ConnectorConformanceError extends Error {
   constructor(
     message: string,
@@ -43,12 +55,37 @@ export class ConnectorConformanceError extends Error {
       | "schema_mismatch"
       | "nondeterministic_adapt"
       | "malformed_payload_accepted"
-      | "replay_identity_mismatch",
+      | "replay_identity_mismatch"
+      | "declared_capability_unproved",
     readonly case_name?: string,
   ) {
     super(message);
     this.name = "ConnectorConformanceError";
   }
+}
+
+export async function runConnectorConformanceV2<Configuration, Payload, Submission>(
+  input: ConnectorConformanceV2Input<Configuration, Payload, Submission>,
+): Promise<ConnectorConformanceV2Report> {
+  const base = await runConnectorConformance(input);
+  const capabilities = {} as ConnectorConformanceV2Report["capabilities"];
+  for (const capability of ["push", "pull", "stream", "reference", "incremental"] as const) {
+    const declared = capability === "incremental"
+      ? input.kit.manifest.capabilities.includes("incremental")
+      : input.kit.manifest.delivery_kinds.includes(capability);
+    const probe = input.probes[capability];
+    if (declared && !probe) {
+      throw new ConnectorConformanceError(
+        `Connector declares ${capability} without a conformance v2 probe`,
+        "declared_capability_unproved",
+        capability,
+      );
+    }
+    capabilities[capability] = declared
+      ? { declared, evidence: await probe!() }
+      : { declared };
+  }
+  return { version: 2, ...base, capabilities };
 }
 
 export async function runConnectorConformance<Configuration, Payload, Submission>(

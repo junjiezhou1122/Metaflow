@@ -13,6 +13,8 @@
   "dependencies": {
     "@info/search": "workspace:*",
     "@info/view": "workspace:*",
+    "@info/view-package-personal-activity": "workspace:*",
+    "@info/web-view-renderers": "workspace:*",
     "@vitejs/plugin-react": "6.0.4",
     "graphology": "0.26.0",
     "graphology-layout-forceatlas2": "0.10.1",
@@ -20,18 +22,22 @@
     "lucide-react": "1.27.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
     "sigma": "3.0.3",
     "vite": "8.1.5",
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@info/operations": "workspace:*",
+    "@info/storage-sqlite": "workspace:*",
     "@playwright/test": "1.62.0",
     "@types/node": "22.19.15",
     "@types/pngjs": "6.0.5",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "pngjs": "7.0.0",
-    "tsx": "4.21.0",
+    "tsx": "4.22.3",
     "typescript": "5.9.3"
   }
 }

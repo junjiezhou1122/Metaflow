@@ -36,6 +36,11 @@ export const SecretReferenceSchema = z.object({
   version: z.string().trim().min(1).max(240).optional(),
 }).strict();
 
+export const NamedSecretReferencesSchema = z.record(
+  CaptureIdentifierSchema,
+  SecretReferenceSchema,
+).default({});
+
 export const ConnectorManifestSchema = z.object({
   id: CaptureIdentifierSchema,
   version: z.string().trim().min(1),
@@ -50,11 +55,16 @@ export const SourceConnectionSchema = z.object({
   id: CaptureIdentifierSchema,
   connector_id: CaptureIdentifierSchema,
   connector_version: z.string().trim().min(1),
+  connector_package: z.object({
+    id: CaptureIdentifierSchema,
+    version: z.string().trim().min(1),
+    digest: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).strict().optional(),
   display_name: z.string().trim().min(1),
   endpoint: z.string().trim().min(1).optional(),
   enabled: z.boolean().default(true),
   delivery_kinds: z.array(CaptureDeliveryKindSchema).min(1),
-  secret_refs: z.array(SecretReferenceSchema).default([]),
+  secret_refs: NamedSecretReferencesSchema,
   configuration: CaptureJsonObjectSchema.default({}),
   privacy: ViewPolicySchema.default({
     owner: "user:local",
@@ -190,6 +200,10 @@ export const CaptureTraceEventSchema = z.object({
   type: z.enum([
     "connection.registered",
     "connection.recovered",
+    "connection.checked",
+    "connection.discovered",
+    "connection.activated",
+    "connection.updated",
     "connection.paused",
     "connection.resumed",
     "connector.health_checked",
@@ -219,6 +233,7 @@ export const CaptureDeadLetterSchema = z.object({
 
 export type ConnectorManifest = z.infer<typeof ConnectorManifestSchema>;
 export type SourceConnection = z.infer<typeof SourceConnectionSchema>;
+export type NamedSecretReferences = z.infer<typeof NamedSecretReferencesSchema>;
 export type RawViewCandidate = z.infer<typeof RawViewCandidateSchema>;
 export type ObservationCandidate = RawViewCandidate;
 export type CaptureDeliveryKind = z.infer<typeof CaptureDeliveryKindSchema>;

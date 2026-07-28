@@ -5,6 +5,7 @@ export const DEFAULT_INFO_CAPTURE_ENDPOINT = `http://localhost:${DEFAULT_BROWSER
 
 export type InfoCaptureSettings = {
   endpoint: string;
+  operationAuthToken: string;
   captureStream: boolean;
   heartbeatSeconds: number;
   snapshotOnVisit: boolean;
@@ -15,6 +16,7 @@ export type InfoCaptureSettings = {
 
 export const DEFAULT_INFO_CAPTURE_SETTINGS: InfoCaptureSettings = {
   endpoint: DEFAULT_INFO_CAPTURE_ENDPOINT,
+  operationAuthToken: "",
   captureStream: true,
   heartbeatSeconds: 15,
   snapshotOnVisit: true,
@@ -46,6 +48,7 @@ const ExcludedDomainSchema = z.string().trim().toLowerCase().max(253).refine(val
 
 const PersistedInfoCaptureSettingsSchema = z.object({
   endpoint: HttpEndpointSchema.optional(),
+  operationAuthToken: z.string().optional(),
   captureStream: z.boolean().optional(),
   heartbeatSeconds: z.number().int().positive().max(86_400).optional(),
   snapshotOnVisit: z.boolean().optional(),

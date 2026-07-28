@@ -13,6 +13,10 @@ import type {
   SourceConnection,
   StoredCaptureTraceEvent,
 } from "./contracts.js";
+import type {
+  SourceConnectionLifecycle,
+  SourceConnectionLifecycleReceipt,
+} from "./onboarding.js";
 
 export type ConnectorOpenRequest = {
   delivery: Extract<CaptureDeliveryKind, "pull" | "stream" | "reference">;
@@ -91,6 +95,22 @@ export interface CaptureRuntimeRepository {
   listCaptureDeadLetters(connectionId: string, status?: CaptureDeadLetter["status"]): Promise<CaptureDeadLetter[]>;
   getCaptureDeadLetter(id: string): Promise<CaptureDeadLetter | undefined>;
   resolveCaptureDeadLetter(input: { id: string; resolved_at: string }): Promise<CaptureDeadLetter>;
+  listCaptureConnectionLifecycles(): Promise<SourceConnectionLifecycle[]>;
+  getCaptureConnectionLifecycle(connectionId: string): Promise<SourceConnectionLifecycle | undefined>;
+  updateCaptureConnectionLifecycle(input: {
+    connection: SourceConnection;
+    manifest: ConnectorManifest;
+    expected_generation: number;
+    status: SourceConnectionLifecycle["status"];
+    occurred_at: string;
+    event: CaptureTraceEvent;
+    receipt?: SourceConnectionLifecycleReceipt;
+  }): Promise<SourceConnectionLifecycle>;
+  getCaptureConnectionLifecycleReceipt(idempotencyKey: string): Promise<SourceConnectionLifecycleReceipt | undefined>;
+  commitCaptureConnectionLifecycleReceipt(input: {
+    receipt: SourceConnectionLifecycleReceipt;
+    event?: CaptureTraceEvent;
+  }): Promise<SourceConnectionLifecycleReceipt>;
 }
 
 export type CaptureRuntimeOptions = {

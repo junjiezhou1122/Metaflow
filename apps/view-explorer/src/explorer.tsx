@@ -1,17 +1,15 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
-  CircleDot,
+  BookOpen,
   Filter,
   Focus,
   GitBranch,
   History,
+  ListTree,
   Network,
-  PanelRight,
-  Plus,
   Search,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 import {
@@ -22,19 +20,21 @@ import {
   refKey,
   type ExactViewRef,
   type View,
-  type ViewGraphProjectionNode,
   type ViewGraphProjectionRequest,
   type ViewGraphProjectionResult,
 } from "./contracts.js";
-import { createFixtureTransport, parseFixtureSize } from "./fixtures.js";
+import { createFixtureTransport, fixtureRoot, parseFixtureId } from "./fixtures.js";
 import { type CameraState, mergeProjection } from "./graph-projection.js";
 import { ExplorerClientError, ViewExplorerOperationClient } from "./operation-client.js";
 import { ExplorerRequestCoordinator } from "./request-coordinator.js";
 import { VirtualNodeList } from "./node-list.js";
 
 const SigmaSurface = lazy(() => import("./sigma-surface.js"));
+const ViewContentDialog = lazy(async () => ({
+  default: (await import("./view-content-dialog.js")).ViewContentDialog,
+}));
 type Direction = ViewGraphProjectionRequest["direction"];
-type Drawer = "filters" | "details" | undefined;
+type Drawer = "filters" | "list" | undefined;
 type VisitedItem = { key: string; name: string; camera: CameraState };
 type RestoredCamera = CameraState & { nonce: number };
 type UiFailure = { code: string; message: string; operation?: string };
@@ -53,7 +53,7 @@ export function ViewExplorer() {
   const initial = useMemo(readUrlState, []);
   const fixtureTransport = useMemo(() => initial.fixture ? createFixtureTransport(initial.fixture) : undefined, [initial.fixture]);
   const client = useMemo(() => new ViewExplorerOperationClient(fixtureTransport), [fixtureTransport]);
-  const [root, setRoot] = useState<ExactViewRef | undefined>(initial.root ?? (initial.fixture ? { view_id: "view:fixture:0000", revision: 1 } : undefined));
+  const [root, setRoot] = useState<ExactViewRef | undefined>(initial.root ?? (initial.fixture ? fixtureRoot(initial.fixture) : undefined));
   const [projection, setProjection] = useState<ViewGraphProjectionResult>();
   const [selectedKey, setSelectedKey] = useState(initial.selected);
   const [view, setView] = useState<View>();
@@ -65,6 +65,7 @@ export function ViewExplorer() {
   const [focusKey, setFocusKey] = useState<string>();
   const [focusNonce, setFocusNonce] = useState(0);
   const [drawer, setDrawer] = useState<Drawer>();
+  const [contentOpen, setContentOpen] = useState(Boolean(initial.selected));
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<UiFailure>();
   const [layout, setLayout] = useState<"idle" | "running" | "ready" | "failed">("idle");
@@ -142,6 +143,7 @@ export function ViewExplorer() {
     setEdgeTypes(options.edgeTypes);
     setPendingEdgeTypes(options.edgeTypes);
     setSelectedKey(nextSelected);
+    setContentOpen(Boolean(nextSelected));
     if (nextSelected) {
       if (cameraTargetRef.current) {
         setFocusKey(undefined);
@@ -183,7 +185,7 @@ export function ViewExplorer() {
   }, [client, commitProjection]);
 
   useEffect(() => {
-    const initialRoot = initial.root ?? (initial.fixture ? { view_id: "view:fixture:0000", revision: 1 } : undefined);
+    const initialRoot = initial.root ?? (initial.fixture ? fixtureRoot(initial.fixture) : undefined);
     if (initialRoot) void loadProjection(initialRoot, {
       direction: initial.direction,
       depth: initial.depth,
@@ -215,6 +217,7 @@ export function ViewExplorer() {
         || state.depth !== depth
         || !sameStrings(state.edgeTypes, edgeTypes);
       setSelectedKey(state.selected);
+      setContentOpen(Boolean(state.selected));
       setDirection(state.direction);
       setDepth(state.depth);
       setEdgeTypes(state.edgeTypes);
@@ -256,9 +259,9 @@ export function ViewExplorer() {
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === "/" && document.activeElement?.tagName !== "INPUT") { event.preventDefault(); searchRef.current?.focus(); }
-      if (event.key === "Escape") setDrawer(undefined);
+      if (event.key === "Escape") { setContentOpen(false); setDrawer(undefined); }
       if (event.key === "[") setDrawer(current => current === "filters" ? undefined : "filters");
-      if (event.key === "]") setDrawer(current => current === "details" ? undefined : "details");
+      if (event.key === "]") setDrawer(current => current === "list" ? undefined : "list");
     };
     addEventListener("keydown", keyboard);
     return () => removeEventListener("keydown", keyboard);
@@ -272,6 +275,7 @@ export function ViewExplorer() {
     recordVisit(key, node.name, camera);
     if (cameraMode === "restore") restoreCamera(camera); else releaseRestoredCamera();
     setSelectedKey(key);
+    setContentOpen(true);
     selectedKeyRef.current = key;
     if (cameraMode === "restore") {
       setFocusKey(undefined);
@@ -382,27 +386,27 @@ export function ViewExplorer() {
   return (
     <main className="explorer-shell" data-layout-state={layout} data-node-count={projection?.nodes.length ?? 0}>
       <header className="topbar">
-        <div className="brand"><Network size={19} strokeWidth={2.2} /><span>Metaflow</span><strong>View Explorer</strong></div>
+        <div className="brand"><Network size={19} strokeWidth={2.2} /><span>Metaflow</span><strong>Views</strong></div>
         <form className="search-box" role="search" onSubmit={searchNodes}>
           <Search size={16} aria-hidden="true" />
-          <input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="Search exact Views" placeholder="Search name, Schema, or exact id" />
+          <input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="Search exact Views" placeholder="Search Views" />
           <button type="submit" className="icon-button" title="Focus search result" aria-label="Focus search result"><Focus size={16} /></button>
         </form>
         <div className="topbar-actions">
-          <button type="button" className={`icon-button mobile-control ${drawer === "filters" ? "active" : ""}`} onClick={() => setDrawer(current => current === "filters" ? undefined : "filters")} aria-label="Toggle graph filters" title="Graph filters"><Filter size={18} /></button>
-          <button type="button" className={`icon-button mobile-control ${drawer === "details" ? "active" : ""}`} onClick={() => setDrawer(current => current === "details" ? undefined : "details")} aria-label="Toggle exact View details" title="Exact View details"><PanelRight size={18} /></button>
+          {selectedNode && <button type="button" className="icon-button" onClick={() => setContentOpen(true)} aria-label="Open selected View" title="Open selected View"><BookOpen size={18} /></button>}
+          <button type="button" className={`icon-button ${drawer === "list" ? "active" : ""}`} onClick={() => setDrawer(current => current === "list" ? undefined : "list")} aria-label="Browse Views" title="Browse Views"><ListTree size={18} /></button>
+          <button type="button" className={`icon-button ${drawer === "filters" ? "active" : ""}`} onClick={() => setDrawer(current => current === "filters" ? undefined : "filters")} aria-label="Graph settings" title="Graph settings"><SlidersHorizontal size={18} /></button>
         </div>
       </header>
 
       <aside className={`left-panel panel ${drawer === "filters" ? "mobile-open" : ""}`} aria-label="Graph filters">
-        <PanelHeader icon={<Filter size={16} />} title="Projection" close={() => setDrawer(undefined)} />
+        <PanelHeader icon={<SlidersHorizontal size={16} />} title="Graph settings" close={() => setDrawer(undefined)} />
         <div className="panel-scroll">
-          <Field label="Direction"><div className="segmented" role="group" aria-label="Graph direction">{(["incoming", "both", "outgoing"] as Direction[]).map(value => <button type="button" key={value} aria-pressed={direction === value} onClick={() => setDirection(value)}>{value}</button>)}</div></Field>
-          <Field label="Depth"><div className="stepper"><button type="button" className="icon-button" onClick={() => setDepth(value => Math.max(0, value - 1))} aria-label="Decrease graph depth"><ChevronLeft size={15} /></button><output aria-label="Graph depth">{depth}</output><button type="button" className="icon-button" onClick={() => setDepth(value => Math.min(5, value + 1))} aria-label="Increase graph depth"><ChevronRight size={15} /></button></div></Field>
-          <fieldset className="filter-group"><legend>Relation types</legend>{availableEdgeTypes.map(type => <label key={type} className="check-row"><input type="checkbox" checked={pendingEdgeTypes.includes(type)} onChange={() => setPendingEdgeTypes(current => current.includes(type) ? current.filter(value => value !== type) : [...current, type])} /><span className={`edge-swatch edge-${edgeFamily(type)}`} /><span title={type}>{type}</span></label>)}</fieldset>
-          <button type="button" className="command primary" disabled={pendingEdgeTypes.length === 0 || loading} onClick={applyFilters}><Filter size={15} />Apply projection</button>
-          <section className="diagnostics" aria-label="Projection diagnostics"><h2>Boundaries</h2><Diagnostic active={Boolean(projection?.truncation.truncated)} label={projection?.truncation.truncated ? `Truncated: ${projection.truncation.reasons.join(", ")}` : "Within requested limits"} /><Diagnostic active={Boolean(projection?.frontier.length)} label={`${projection?.frontier.length ?? 0} frontier Views`} /><Diagnostic active={Boolean(projection?.redacted_boundary)} label={projection?.redacted_boundary ? "Redacted boundary present" : "No redacted boundary"} /></section>
-          <section className="legend" aria-label="Graph legend"><h2>Visual grammar</h2><span><i className="edge-line provenance" />Provenance</span><span><i className="edge-line composition" />Composition</span><span><i className="edge-line reference" />Reference</span><span><i className="edge-line application" />Application member / composition</span></section>
+          <Field label="Connections"><div className="segmented" role="group" aria-label="Graph direction">{(["incoming", "both", "outgoing"] as Direction[]).map(value => <button type="button" key={value} aria-pressed={direction === value} onClick={() => setDirection(value)}>{value === "both" ? "all" : value}</button>)}</div></Field>
+          <Field label="Visible neighborhood"><div className="segmented range-control" role="group" aria-label="Visible neighborhood">{([{ label: "near", value: 1 }, { label: "local", value: 2 }, { label: "broad", value: 3 }] as const).map(option => <button type="button" key={option.value} aria-pressed={depth === option.value} onClick={() => setDepth(option.value)}>{option.label}</button>)}</div></Field>
+          <fieldset className="filter-group"><legend>Connection types</legend>{availableEdgeTypes.map(type => <label key={type} className="check-row"><input type="checkbox" checked={pendingEdgeTypes.includes(type)} onChange={() => setPendingEdgeTypes(current => current.includes(type) ? current.filter(value => value !== type) : [...current, type])} /><span className={`edge-swatch edge-${edgeFamily(type)}`} /><span title={type}>{humanizeRelation(type)}</span></label>)}</fieldset>
+          <button type="button" className="command primary" disabled={pendingEdgeTypes.length === 0 || loading} onClick={applyFilters}><Filter size={15} />Update graph</button>
+          <details className="advanced-diagnostics"><summary>Advanced diagnostics</summary><section className="diagnostics" aria-label="Projection diagnostics"><Diagnostic active={Boolean(projection?.truncation.truncated)} label={projection?.truncation.truncated ? `Truncated: ${projection.truncation.reasons.join(", ")}` : "Within requested limits"} /><Diagnostic active={Boolean(projection?.frontier.length)} label={`${projection?.frontier.length ?? 0} frontier Views`} /><Diagnostic active={Boolean(projection?.redacted_boundary)} label={projection?.redacted_boundary ? "Redacted boundary present" : "No redacted boundary"} /></section></details>
         </div>
       </aside>
 
@@ -438,18 +442,32 @@ export function ViewExplorer() {
         {layout === "failed" && <FailureBanner failure={{ code: layoutFailureCode, message: layoutMessage ?? "Layout worker failed" }} dismiss={() => setLayout("idle")} />}
       </section>
 
-      <aside className={`right-panel panel ${drawer === "details" ? "mobile-open" : ""}`} aria-label="Exact View details">
-        <PanelHeader icon={<CircleDot size={16} />} title="Exact View" close={() => setDrawer(undefined)} />
-        <div className="panel-scroll">{selectedNode ? <NodeDetails node={selectedNode} view={view} expand={expandSelected} loading={loading} neighborCount={neighborKeys.length} selectNeighbor={selectNeighbor} /> : <div className="empty-panel"><CircleDot size={22} /><span>No View selected</span></div>}</div>
+      <aside className={`companion ${drawer === "list" ? "drawer-open" : ""}`} aria-label="Browse Views">
+        <PanelHeader icon={<ListTree size={16} />} title="Views" close={() => setDrawer(undefined)} />
+        <div className="history-strip"><History size={15} aria-hidden="true" /><span className="history-label">Visited</span>{visited.length === 0 ? <span className="muted">None</span> : visited.map(item => <button type="button" key={item.key} onClick={() => selectNode(item.key, item.camera, "push", "restore")} title={item.key}>{item.name}</button>)}</div>
+        {projection && <VirtualNodeList nodes={projection.nodes} selectedKey={selectedKey} onSelect={key => selectNode(key)} />}
+        <div className="relation-summary" aria-label="Relations in projection">{relationCounts.map(([type, count]) => <span key={type}>{humanizeRelation(type)}: {count}</span>)}</div>
       </aside>
 
-      <footer className="companion">
-        <div className="history-strip"><History size={15} aria-hidden="true" /><span className="history-label">Visited</span>{visited.length === 0 ? <span className="muted">None</span> : visited.map(item => <button type="button" key={item.key} onClick={() => selectNode(item.key, item.camera, "push", "restore")} title={item.key}>{item.name}</button>)}<div className="relation-summary" aria-label="Relations in projection">{relationCounts.map(([type, count]) => <span key={type}>{type}: {count}</span>)}</div></div>
-        {projection && <VirtualNodeList nodes={projection.nodes} selectedKey={selectedKey} onSelect={key => selectNode(key)} />}
-      </footer>
+      {contentOpen && selectedNode && (
+        <Suspense fallback={<ViewContentLoadingDialog close={() => setContentOpen(false)} />}>
+          <ViewContentDialog node={selectedNode} view={view} loading={loading} neighborCount={neighborKeys.length} close={() => setContentOpen(false)} expand={expandSelected} selectNeighbor={selectNeighbor} />
+        </Suspense>
+      )}
 
       <div className="sr-status" role="status" aria-live="polite">{projection ? `${projection.nodes.length} Views and ${projection.edges.length} relations. Relation types: ${relationCounts.map(([type, count]) => `${type}: ${count}`).join(", ") || "none"}. ${projection.truncation.truncated ? `Projection truncated by ${projection.truncation.reasons.join(", ")}.` : "Projection complete within requested limits."}` : "Loading projection."}</div>
     </main>
+  );
+}
+
+function ViewContentLoadingDialog({ close }: { close(): void }) {
+  return (
+    <div className="view-dialog-backdrop">
+      <section className="view-dialog view-dialog-loading" role="dialog" aria-modal="true" aria-label="Loading View content">
+        <div className="content-loading" role="status">Loading View content</div>
+        <button type="button" className="icon-button dialog-close" onClick={close} aria-label="Close View"><X size={20} /></button>
+      </section>
+    </div>
   );
 }
 
@@ -465,11 +483,6 @@ function EntrySurface(props: { query: string; setQuery(value: string): void; sea
     location.assign(url);
   }
   return <main className="entry-surface"><div className="entry-brand"><Network size={22} /><span>Metaflow</span><strong>View Explorer</strong></div><section className="entry-workspace"><h1>Open an exact View graph</h1><form onSubmit={openExact}><label>Exact View reference<input value={rootText} onChange={event => { setRootText(event.target.value); setEntryFailure(undefined); }} placeholder="view:id@revision" /></label><button className="command primary" type="submit"><GitBranch size={16} />Open graph</button></form><div className="entry-divider"><span>or</span></div><form onSubmit={props.search}><label>Authorized Search<input ref={props.inputRef} value={props.query} onChange={event => props.setQuery(event.target.value)} placeholder="Search visible Views" /></label><button className="command" type="submit"><Search size={16} />Search</button></form>{(entryFailure ?? props.failure) && <FailureBanner failure={(entryFailure ?? props.failure)!} dismiss={() => setEntryFailure(undefined)} />}</section></main>;
-}
-
-function NodeDetails(props: { node: ViewGraphProjectionNode; view?: View; expand(): void; loading: boolean; neighborCount: number; selectNeighbor(position: "previous" | "next"): void }) {
-  const key = refKey(props.node.ref);
-  return <div className="details"><div className="detail-heading"><span className={`role-pill role-${props.node.role}`}>{props.node.role}</span><h2 title={props.node.name}>{props.node.name}</h2><code title={key}>{key}</code></div><dl><dt>Schema</dt><dd title={`${props.node.schema.name}@${props.node.schema.version}`}>{props.node.schema.name}@{props.node.schema.version}</dd><dt>Purpose</dt><dd>{props.node.purpose}</dd><dt>Representation</dt><dd>{props.node.representation.kind}{props.node.representation.media_type ? ` · ${props.node.representation.media_type}` : ""}</dd><dt>Created</dt><dd>{formatTime(props.node.time.created_at)}</dd><dt>Path</dt><dd>{props.node.path.length ? props.node.path.join(" → ") : "Projection root"}</dd></dl><button type="button" className="command primary" onClick={props.expand} disabled={props.loading}><Plus size={15} />Expand one hop</button><div className="neighbor-controls" role="group" aria-label="Neighbor navigation"><button type="button" className="icon-button" disabled={!props.neighborCount} onClick={() => props.selectNeighbor("previous")} aria-label="Previous neighbor" title="Previous neighbor"><ChevronLeft size={16} /></button><output>{props.neighborCount} neighbors</output><button type="button" className="icon-button" disabled={!props.neighborCount} onClick={() => props.selectNeighbor("next")} aria-label="Next neighbor" title="Next neighbor"><ChevronRight size={16} /></button></div><section className="provenance"><h3>Provenance</h3>{props.view ? <dl><dt>Actor</dt><dd>{props.view.provenance.actor}</dd><dt>Inputs</dt><dd>{props.view.provenance.inputs.length ? props.view.provenance.inputs.map(refKey).join(", ") : "None"}</dd>{props.view.provenance.operator_run_id && <><dt>Run</dt><dd>{props.view.provenance.operator_run_id}</dd></>}{props.view.provenance.capture && <><dt>Connector</dt><dd>{props.view.provenance.capture.connector}</dd></>}</dl> : <span className="muted">Loading exact provenance</span>}</section></div>;
 }
 
 function PanelHeader(props: { icon: React.ReactNode; title: string; close(): void }) { return <div className="panel-header">{props.icon}<strong>{props.title}</strong><button type="button" className="icon-button panel-close" onClick={props.close} aria-label={`Close ${props.title}`}><X size={17} /></button></div>; }
@@ -491,7 +504,9 @@ function edgeFamily(type: string): string {
   return "reference";
 }
 
-function formatTime(value: string): string { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)); }
+function humanizeRelation(value: string): string {
+  return value.replaceAll("_", " ").replace(/^./u, character => character.toUpperCase());
+}
 
 function sameStrings(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -513,7 +528,7 @@ function readUrlState() {
   const depthValue = Number(params.get("depth") ?? 2);
   const cameraValues = ["cx", "cy", "ratio", "angle"].map(key => Number(params.get(key)));
   const camera = cameraValues.every(Number.isFinite) && cameraValues[2]! > 0 ? { x: cameraValues[0]!, y: cameraValues[1]!, ratio: cameraValues[2]!, angle: cameraValues[3]! } : undefined;
-  return { fixture: parseFixtureSize(params.get("fixture")), root: parseExactRef(params.get("root") ?? ""), selected: parseExactRef(params.get("selected") ?? "") ? params.get("selected")! : undefined, direction, depth: Number.isInteger(depthValue) ? Math.max(0, Math.min(5, depthValue)) : 2, edgeTypes: edgeTypes.length ? edgeTypes : [...EXPLORER_DEFAULT_EDGE_TYPES], camera, forceWebglFailure: params.get("webgl") === "off" };
+  return { fixture: parseFixtureId(params.get("fixture")), root: parseExactRef(params.get("root") ?? ""), selected: parseExactRef(params.get("selected") ?? "") ? params.get("selected")! : undefined, direction, depth: Number.isInteger(depthValue) ? Math.max(0, Math.min(5, depthValue)) : 2, edgeTypes: edgeTypes.length ? edgeTypes : [...EXPLORER_DEFAULT_EDGE_TYPES], camera, forceWebglFailure: params.get("webgl") === "off" };
 }
 
 class ExplorerNavigationError extends Error {

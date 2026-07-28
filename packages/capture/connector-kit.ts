@@ -17,6 +17,7 @@ import {
   ConnectorManifestSchema,
   ConnectorProtocolError,
   RawViewCandidateSchema,
+  NamedSecretReferencesSchema,
   SecretReferenceSchema,
   SourceConnectionSchema,
   type CaptureBatch,
@@ -82,9 +83,10 @@ export type ConnectorConnectionInput = {
   endpoint?: string;
   enabled?: boolean;
   delivery_kinds?: CaptureDeliveryKind[];
-  secret_refs?: Array<z.input<typeof SecretReferenceSchema>>;
+  secret_refs?: z.input<typeof NamedSecretReferencesSchema>;
   configuration?: unknown;
   privacy?: ViewPolicy;
+  connector_package?: SourceConnection["connector_package"];
 };
 
 export type ConnectorAdaptContext<Configuration> = {
@@ -216,11 +218,12 @@ export function defineConnectorKit<
         id: input.id,
         connector_id: manifest.id,
         connector_version: manifest.version,
+        ...(input.connector_package ? { connector_package: input.connector_package } : {}),
         display_name: input.display_name,
         ...(input.endpoint ? { endpoint: input.endpoint } : {}),
         enabled: input.enabled ?? true,
         delivery_kinds: input.delivery_kinds ?? manifest.delivery_kinds,
-        secret_refs: (input.secret_refs ?? []).map(item => SecretReferenceSchema.parse(item)),
+        secret_refs: NamedSecretReferencesSchema.parse(input.secret_refs ?? {}),
         configuration,
         ...(input.privacy ? { privacy: input.privacy } : {}),
       });

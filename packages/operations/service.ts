@@ -31,8 +31,11 @@ import {
   CaptureRuntimeError,
   CaptureValidationError,
   ConnectorProtocolError,
+  ConnectorPackageError,
+  SourceConnectionOnboardingError,
   type CaptureRuntimeRepository,
   type ConnectorRuntime,
+  type SourceConnectionOnboardingService,
 } from "@info/capture";
 import {
   SearchError,
@@ -41,8 +44,12 @@ import {
   type ViewReadAuthorizationPort,
 } from "@info/search";
 import {
-  OPERATION_DESCRIPTIONS,
-  OPERATION_NAMES,
+  AuthoringDecisionValueSchema,
+  AuthoringError,
+  AuthoringProposalValueSchema,
+  type AuthoringService,
+} from "@info/authoring";
+import {
   OperationContextSchema,
   OperationEnvelopeSchema,
   OperationErrorSchema,
@@ -59,6 +66,7 @@ import {
   type OperationName,
   type OperationObserver,
 } from "./contracts.js";
+import { OPERATION_CATALOG } from "./catalog.js";
 import {
   ViewGraphProjectionOperationError,
   projectAuthorizedViewGraph,
@@ -72,10 +80,12 @@ export type OperationServiceDependencies = {
   transformations: TransformationRepository;
   execution: ExecutionRuntime;
   runs: Pick<ExecutionRepository, "getRun" | "getTrace">;
-  feedback: Pick<FeedbackEvolutionService, "record">;
+  feedback: Pick<FeedbackEvolutionService, "record" | "apply">;
   privacy: Pick<PrivacyForgetService, "request" | "execute" | "inspect">;
-  capture: Pick<ConnectorRuntime, "submitBatch">;
-  capture_traces: Pick<CaptureRuntimeRepository, "getCaptureTrace">;
+  capture: Pick<ConnectorRuntime, "submitBatch" | "replayDeadLetter">;
+  connector_onboarding: SourceConnectionOnboardingService;
+  capture_traces: Pick<CaptureRuntimeRepository, "getCaptureTrace" | "listCaptureDeadLetters" | "getCaptureDeadLetter">;
+  authoring: Pick<AuthoringService, "request" | "propose" | "inspect" | "approve" | "reject" | "apply">;
   authorization: OperationAuthorizationPort;
   observer: OperationObserver;
   now?: () => string;
@@ -183,9 +193,68 @@ export class OperationService {
   private async dispatch(operation: OperationName, input: any, context: OperationContext): Promise<unknown> {
     switch (operation) {
       case "catalog.list":
-        return OPERATION_NAMES.map(name => ({ name, description: OPERATION_DESCRIPTIONS[name] }));
+        return OPERATION_CATALOG;
+      case "connector.list":
+        return this.dependencies.connector_onboarding.listPackages();
+      case "connector.inspect":
+        return this.dependencies.connector_onboarding.inspectPackage(input.package);
       case "capture.ingest":
         return this.dependencies.capture.submitBatch(input.batch);
+      case "capture.connection.list":
+        return (await this.dependencies.connector_onboarding.listConnections())
+          .filter(item => item.connection.privacy.owner === context.principal.id);
+      case "capture.connection.create":
+        if (input.connection.privacy?.owner !== undefined && input.connection.privacy.owner !== context.principal.id) {
+          throw new OperationServiceError("Principal cannot create a Source Connection for another owner", "connection_owner_mismatch", "forbidden", {
+            owner: input.connection.privacy.owner,
+          });
+        }
+        return this.dependencies.connector_onboarding.create({
+          ...input,
+          connection: {
+            ...input.connection,
+            privacy: input.connection.privacy ?? {
+              owner: context.principal.id,
+              visibility: "private",
+              privacy: "private",
+              retention: "normal",
+              allow_external_model: false,
+              allow_embedding: false,
+              allow_local_search: true,
+              labels: [],
+            },
+          },
+        });
+      case "capture.connection.check":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.check(input);
+      case "capture.connection.discover":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.discover(input);
+      case "capture.connection.activate":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.activate(input);
+      case "capture.connection.update":
+        await this.requireConnectionOwner(context, input.connection_id);
+        if (input.privacy?.owner !== undefined && input.privacy.owner !== context.principal.id) {
+          throw new OperationServiceError("Principal cannot transfer Source Connection ownership", "connection_owner_mismatch", "forbidden");
+        }
+        return this.dependencies.connector_onboarding.update(input);
+      case "capture.connection.pause":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.pause(input);
+      case "capture.connection.run":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.connector_onboarding.run(input);
+      case "capture.dlq.list":
+        await this.requireConnectionOwner(context, input.connection_id);
+        return this.dependencies.capture_traces.listCaptureDeadLetters(input.connection_id, input.status);
+      case "capture.dlq.replay": {
+        const deadLetter = await this.dependencies.capture_traces.getCaptureDeadLetter(input.id);
+        if (!deadLetter) throw new OperationServiceError("Capture dead letter does not exist", "dead_letter_not_found", "not_found", { id: input.id });
+        await this.requireConnectionOwner(context, deadLetter.connection_id);
+        return this.dependencies.capture.replayDeadLetter(input.id);
+      }
       case "view.get": {
         await this.requireViewRead(context, [input.ref], "read");
         const view = await this.dependencies.views.get(input.ref);
@@ -237,6 +306,28 @@ export class OperationService {
           committed_at: draft.time.created_at,
           origin: { kind: "operation", id: context.request_id },
         });
+      }
+      case "view.authoring.request": {
+        await this.requireViewRead(context, input.source_views, "read");
+        return this.dependencies.authoring.request(input, context.principal.id);
+      }
+      case "view.authoring.propose":
+        await this.requireViewRead(context, [input.request], "read");
+        return this.dependencies.authoring.propose(input, context.principal.id);
+      case "view.authoring.inspect":
+        await this.requireViewRead(context, [input.ref], "read");
+        return this.dependencies.authoring.inspect(input);
+      case "view.authoring.approve":
+        await this.requireViewRead(context, [input.proposal], "read");
+        return this.dependencies.authoring.approve(input, context.principal.id);
+      case "view.authoring.reject":
+        await this.requireAuthoringProposalChain(context, input.proposal);
+        return this.dependencies.authoring.reject(input, context.principal.id);
+      case "view.authoring.apply": {
+        await this.requireViewRead(context, [input.decision], "read");
+        const decision = AuthoringDecisionValueSchema.parse((await this.dependencies.authoring.inspect({ ref: input.decision })).lifecycle);
+        await this.requireAuthoringProposalChain(context, decision.proposal);
+        return this.dependencies.authoring.apply(input, context.principal.id);
       }
       case "transformation.submit":
         return this.dependencies.transformations.commit(input);
@@ -293,6 +384,9 @@ export class OperationService {
       }
       case "feedback.submit":
         return this.dependencies.feedback.record(input.feedback);
+      case "feedback.apply":
+        await this.requireViewRead(context, [input.feedback], "read");
+        return this.dependencies.feedback.apply(input);
       case "failure.inspect": {
         await this.requireViewRead(context, [input.ref], "read");
         const view = await this.dependencies.views.get(input.ref);
@@ -318,6 +412,7 @@ export class OperationService {
           await this.requireRun(input.run_id);
           return this.dependencies.runs.getTrace(input.run_id);
         }
+        await this.requireConnectionOwner(context, input.connection_id);
         return this.dependencies.capture_traces.getCaptureTrace(input.connection_id);
     }
   }
@@ -349,6 +444,26 @@ export class OperationService {
     const run = await this.dependencies.runs.getRun(runId);
     if (!run) throw new OperationServiceError("Run does not exist", "run_not_found", "not_found", { run_id: runId });
     return run;
+  }
+
+  private async requireAuthoringProposalChain(
+    context: OperationContext,
+    proposalRef: { view_id: string; revision: number },
+  ) {
+    await this.requireViewRead(context, [proposalRef], "read");
+    const inspected = await this.dependencies.authoring.inspect({ ref: proposalRef });
+    const proposal = AuthoringProposalValueSchema.parse(inspected.lifecycle);
+    await this.requireViewRead(context, [proposal.request], "read");
+    return proposal;
+  }
+
+  private async requireConnectionOwner(context: OperationContext, connectionId: string): Promise<void> {
+    const lifecycle = await this.dependencies.connector_onboarding.inspectConnection(connectionId);
+    if (lifecycle.connection.privacy.owner !== context.principal.id) {
+      throw new OperationServiceError("Principal does not own the Source Connection", "connection_owner_mismatch", "forbidden", {
+        connection_id: connectionId,
+      });
+    }
   }
 
   private async fail(
@@ -404,6 +519,14 @@ function operationError(cause: unknown): OperationError {
       details: { stage: cause.stage, retryable: cause.retryable },
     });
   }
+  if (cause instanceof AuthoringError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: authoringCategory(cause.code),
+      details: cause.details,
+    });
+  }
   if (cause instanceof ViewGraphProjectionOperationError) {
     return OperationErrorSchema.parse({
       code: cause.code,
@@ -438,6 +561,14 @@ function operationError(cause: unknown): OperationError {
       message: cause.message,
       category: cause.retryable ? "failed_dependency" : genericCategory(cause.code),
       details: { stage: cause.stage, retryable: cause.retryable, ...cause.details },
+    });
+  }
+  if (cause instanceof ConnectorPackageError || cause instanceof SourceConnectionOnboardingError) {
+    return OperationErrorSchema.parse({
+      code: cause.code,
+      message: cause.message,
+      category: genericCategory(cause.code),
+      details: cause.details,
     });
   }
   if (
@@ -480,6 +611,14 @@ function operationError(cause: unknown): OperationError {
     category: "internal",
     details: {},
   });
+}
+
+function authoringCategory(code: string): OperationErrorCategory {
+  if (code.endsWith("_not_found") || code === "authoring_view_not_found") return "not_found";
+  if (code.includes("owner_mismatch") || code.includes("forbidden")) return "forbidden";
+  if (code.includes("conflict") || code.includes("digest_mismatch") || code === "authoring_not_approved") return "conflict";
+  if (code.includes("dependency") || code.includes("runtime_missing") || code.startsWith("authoring_package_")) return "failed_dependency";
+  return "invalid_request";
 }
 
 function validateReadDecisions(
